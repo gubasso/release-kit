@@ -78,6 +78,8 @@ pub struct TargetEvidence {
     /// Whether the receipt already records `.gitlab-ci.yml`: a root
     /// pipeline release-kit landed is its own and is never withheld.
     pub root_pipeline_recorded: bool,
+    /// The uv project facts the python release relies on.
+    pub python_shape: PythonShape,
 }
 
 impl TargetEvidence {
@@ -98,6 +100,96 @@ pub struct CrateShape {
     pub cargo_lock: bool,
     /// Whether `src/main.rs` is a file at the target.
     pub main_rs: bool,
+}
+
+/// The structural facts of the target's uv project that the python release
+/// relies on: a static version, a lock to write it into, and the uv the
+/// project requires.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PythonShape {
+    /// The text of the target's `pyproject.toml`, or `None` where none
+    /// reads.
+    pub pyproject_toml: Option<String>,
+    /// The text of the target's `uv.toml`, or `None` where none reads.
+    pub uv_toml: Option<String>,
+    /// Whether `uv.lock` is a file at the target.
+    pub uv_lock: bool,
+}
+
+impl PythonShape {
+    /// The exact uv version the project requires through
+    /// `required-version`, as uv itself reads it: a bare
+    /// `<major>.<minor>.<patch>` or one behind `==`. A range is no exact
+    /// requirement.
+    ///
+    /// Where `uv.toml` exists, uv reads it alone and ignores `[tool.uv]` of
+    /// `pyproject.toml` beside it, so `uv.toml` alone answers here too. Only
+    /// a target without `uv.toml` answers from `pyproject.toml`.
+    #[must_use]
+    pub fn uv_required(&self) -> Option<String> {
+        let from_uv = |text: &str| {
+            text.parse::<toml::Table>()
+                .ok()
+                .and_then(|table| table.get("required-version")?.as_str().map(str::to_owned))
+        };
+        let from_project = || {
+            self.pyproject_toml
+                .as_deref()
+                .and_then(|text| text.parse::<toml::Table>().ok())
+                .and_then(|table| {
+                    table
+                        .get("tool")?
+                        .get("uv")?
+                        .get("required-version")?
+                        .as_str()
+                        .map(str::to_owned)
+                })
+        };
+        let stated = self.uv_toml.as_deref().map_or_else(from_project, from_uv)?;
+        let exact = stated.trim();
+        let exact = exact.strip_prefix("==").map_or(exact, str::trim);
+        let parts: Vec<&str> = exact.split('.').collect();
+        (parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())))
+        .then(|| exact.to_owned())
+    }
+
+    /// Why the python release cannot run at this target, or `None` where
+    /// the project is a uv project with a static version and a lock.
+    #[must_use]
+    pub fn refusal(&self) -> Option<String> {
+        let Some(text) = self.pyproject_toml.as_deref() else {
+            return Some(
+                "the target carries no pyproject.toml; the python release writes [project] version through uv version; run uv init, then uv lock".to_owned(),
+            );
+        };
+        let Ok(table) = text.parse::<toml::Table>() else {
+            return Some(
+                "the target's pyproject.toml does not parse, so its version cannot be read; repair it, then uv lock".to_owned(),
+            );
+        };
+        let project = table.get("project");
+        let dynamic = project
+            .and_then(|project| project.get("dynamic"))
+            .and_then(toml::Value::as_array)
+            .is_some_and(|list| list.iter().any(|item| item.as_str() == Some("version")));
+        let literal = project
+            .and_then(|project| project.get("version"))
+            .is_some_and(toml::Value::is_str);
+        if dynamic || !literal {
+            return Some(
+                "the target's pyproject.toml carries no static [project] version, and the committed version must lead the tag; write a static version = \"<version>\" in [project] and drop version from dynamic, then uv lock".to_owned(),
+            );
+        }
+        if !self.uv_lock {
+            return Some(
+                "the target carries no uv.lock, which the python release keeps in step with every version write; run uv lock and commit uv.lock".to_owned(),
+            );
+        }
+        None
+    }
 }
 
 /// The complete candidate artifact tree for one target.
@@ -126,6 +218,11 @@ pub struct Projection {
     /// status` reports it as a warning and still exits 0, because the
     /// target is not broken and the operator owns the licensing decision.
     pub licence_refusal: Option<String>,
+    /// Why the selected release driver cannot release this target's own
+    /// project, such as a python project with a dynamic version or no
+    /// lock. A landing verb refuses on it before any write; a preview
+    /// reports it.
+    pub driver_refusal: Option<String>,
     /// Why a recorded capability cannot run at this target at all, which is a
     /// receipt nothing can honour rather than a decision anyone made. Empty on
     /// every target whose parameters came through resolution, because
@@ -269,7 +366,7 @@ impl Projection {
                 // A seed takes no token, but a rust seed carries the lines
                 // that differ by where the crate publishes.
                 let rendered = match kind {
-                    Kind::Rendered => render(bytes, params),
+                    Kind::Rendered => uv_lines(&render(bytes, params), &evidence.python_shape),
                     Kind::Seeded => registry_lines(bytes, params),
                     Kind::State => bytes.to_vec(),
                 };
@@ -414,12 +511,23 @@ impl Projection {
         {
             record_defects.push(reason.clone());
         }
+        // The python release writes the version through uv version and
+        // relocks, so a project without a static version or a lock cannot
+        // take it, whatever else lands.
+        let driver_refusal = (params.release_mode() == ReleaseMode::Automatic
+            && params.driver() == Some("python")
+            && capabilities.iter().any(|selection| {
+                selection.id == catalog::RELEASE_AUTOMATION && selection.status == Status::Selected
+            }))
+        .then(|| evidence.python_shape.refusal())
+        .flatten();
         Ok(Self {
             capabilities,
             candidates,
             omissions,
             collisions,
             licence_refusal,
+            driver_refusal,
             record_defects,
         })
     }
@@ -522,9 +630,8 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 22] = [
+const KINDS: [(&str, Kind); 19] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
-    (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
     (".github/workflows/pr-commits.yml", Kind::Rendered),
@@ -541,11 +648,9 @@ const KINDS: [(&str, Kind); 22] = [
     (".gitlab/ci/mr-commits.yml", Kind::Rendered),
     ("release-plz.toml", Kind::Seeded),
     ("dist-workspace.toml", Kind::Seeded),
-    ("release-please-config.json", Kind::Seeded),
     ("cliff.toml", Kind::Seeded),
     ("nix/package.nix", Kind::Seeded),
     ("flake.nix", Kind::Seeded),
-    (".release-please-manifest.json", Kind::State),
     ("VERSION", Kind::State),
     ("flake.lock", Kind::State),
 ];
@@ -1276,6 +1381,56 @@ pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 /// `profile.release.build.packages`; only the two bash pipelines carry it.
 pub const BUILD_PACKAGES_TOKEN: &[u8] = b"RK_BUILD_PACKAGES";
 
+/// Ends a line a python job carries only where the project names no exact uv.
+///
+/// The line is the pinned version a job installs, and on GitHub the version
+/// input of `astral-sh/setup-uv`, which with no input reads the project's
+/// own.
+pub const IF_UV_UNPINNED_TOKEN: &[u8] = b" # RK_IF_UV_UNPINNED";
+
+/// Opens the commented-out form of a line a python job carries only where
+/// the project names an exact uv through `required-version`.
+pub const IF_UV_REQUIRED_TOKEN: &[u8] = b"# RK_IF_UV_REQUIRED ";
+
+/// The exact uv the project requires, on a line [`IF_UV_REQUIRED_TOKEN`]
+/// keeps.
+pub const UV_REQUIRED_TOKEN: &[u8] = b"RK_UV_REQUIRED";
+
+/// Select the uv a python release job installs.
+///
+/// The project's exact `required-version` wins where it names one, read
+/// from `uv.toml` alone where that file exists, else the version the
+/// snippet pins, given explicitly, so the job and the project run one uv.
+/// A file that carries no marker passes through unchanged.
+#[must_use]
+pub fn uv_lines(baseline: &[u8], shape: &PythonShape) -> Vec<u8> {
+    if find(baseline, IF_UV_UNPINNED_TOKEN).is_none()
+        && find(baseline, IF_UV_REQUIRED_TOKEN).is_none()
+    {
+        return baseline.to_vec();
+    }
+    let required = shape.uv_required();
+    let mut out = Vec::with_capacity(baseline.len());
+    for line in baseline.split_inclusive(|byte| *byte == b'\n') {
+        let (token, wanted) = if find(line, IF_UV_REQUIRED_TOKEN).is_some() {
+            (IF_UV_REQUIRED_TOKEN, required.is_some())
+        } else if find(line, IF_UV_UNPINNED_TOKEN).is_some() {
+            (IF_UV_UNPINNED_TOKEN, required.is_none())
+        } else {
+            out.extend_from_slice(line);
+            continue;
+        };
+        if wanted {
+            out.extend(substitute(line, token, b""));
+        }
+    }
+    substitute(
+        &out,
+        UV_REQUIRED_TOKEN,
+        required.unwrap_or_default().as_bytes(),
+    )
+}
+
 /// The one permanent branch. A landed release trigger, ref guard, and
 /// branch guard each name it, so a target whose trunk is not `master`
 /// needs its own answer in its own bytes.
@@ -1334,14 +1489,7 @@ pub fn release_driver_shape(driver: Option<&str>) -> Option<(&'static str, &'sta
         // recognizes a bump by this prefix.
         Some("rust") => Some(("release-plz-", "release-plz-pr")),
         // The engine keeps one request per base on rk-release/<base>.
-        Some("bash") => Some((crate::release_engine::REQUEST_PREFIX, "release-request")),
-        // release-please's own branch module builds this prefix from the
-        // target branch, with an optional components or groups suffix, so
-        // the trunk token stands inside the shape and resolves with it.
-        Some("python") => Some((
-            "release-please--branches--RK_TRUNK_BRANCH",
-            "release-please-pr",
-        )),
+        Some("bash" | "python") => Some((crate::release_engine::REQUEST_PREFIX, "release-request")),
         _ => None,
     }
 }

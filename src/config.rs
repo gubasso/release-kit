@@ -195,8 +195,9 @@ pub struct Release {
     pub style: Option<Style>,
     /// P: release-line branch prefix; automatic alone.
     pub line_prefix: Option<String>,
-    /// P: where the crate publishes, `crates-io` or `none`; an automatic
-    /// rust release alone. Absent reads as crates.io.
+    /// P: where the release publishes, `crates-io` or `none` for an
+    /// automatic rust release, `pypi` or `none` for an automatic python
+    /// release. Absent reads as the driver's registry.
     pub registry: Option<crate::profile::RegistryAnswer>,
     /// P: how the distribution builds, `command` and `packages`; an
     /// automatic bash release alone. Absent reads as `make dist` and `make`.
@@ -690,9 +691,10 @@ fn release_vocabulary(raw: &toml::Value) -> Result<(), RkError> {
             .map_err(|error| invalid(format!("profile.release.mode: {error}")))?;
     }
     match release.and_then(|release| release.get("registry")) {
-        Some(registry) if !matches!(registry.as_str(), Some("crates-io" | "none")) => {
+        Some(registry) if !matches!(registry.as_str(), Some("crates-io" | "pypi" | "none")) => {
             Err(invalid(format!(
-                "profile.release.registry is {registry}; it takes crates-io or none, where the crate publishes, for an automatic rust release alone"
+                "profile.release.registry is {registry}; it takes {}, where the release publishes",
+                crate::profile::RegistryAnswer::SHAPE
             )))
         }
         _ => Ok(()),
@@ -767,7 +769,7 @@ fn build_fit(release: &Release) -> Result<(), RkError> {
 /// Refuse a registry answer under a mode or a driver the configuration
 /// names; a driver the resolution derives settles the fit there.
 fn registry_fit(release: &Release) -> Result<(), RkError> {
-    if release.registry.is_some()
+    if let Some(answer) = release.registry
         && (release.driver.is_some()
             || matches!(
                 release.mode,
@@ -777,6 +779,7 @@ fn registry_fit(release: &Release) -> Result<(), RkError> {
         crate::profile::catalog::registry_answer_fits(
             release.mode.unwrap_or(ReleaseMode::Automatic),
             release.driver.as_deref(),
+            answer,
         )
         .map_err(invalid)?;
     }

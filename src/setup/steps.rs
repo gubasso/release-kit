@@ -102,15 +102,19 @@ fn needs_driver(ctx: &Ctx) -> Option<String> {
     })
 }
 
-/// A crate that publishes to no registry packages nothing, so the
-/// packaging gate has nothing to prove there.
+/// A rust or python release that publishes to no registry uploads
+/// nothing, so the registry steps and the packaging gate have nothing to
+/// prove there.
 ///
 /// SATISFIES forge-setup:a-package-check-states-policy-reach
 pub(crate) fn no_registry(ctx: &Ctx) -> Option<String> {
     (ctx.automatic_release()
-        && ctx.driver() == Some(crate::profile::RegistryAnswer::DRIVER)
+        && ctx
+            .driver()
+            .and_then(crate::profile::RegistryAnswer::default_for)
+            .is_some()
         && ctx.profile.release.registry == Some(crate::profile::RegistryAnswer::None))
-    .then(|| "the crate publishes to no registry, so nothing is packaged".to_owned())
+    .then(|| "the release publishes to no registry, so nothing is packaged".to_owned())
 }
 
 /// The packaging gate reads the driver's own command, and applies only

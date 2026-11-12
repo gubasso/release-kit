@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use camino::Utf8Path;
 
-use super::{BLOCK_DESTINATIONS, CrateShape, TargetEvidence};
+use super::{BLOCK_DESTINATIONS, CrateShape, PythonShape, TargetEvidence};
 use crate::landing::manifest::Manifest;
 
 impl TargetEvidence {
@@ -26,8 +26,8 @@ impl TargetEvidence {
 }
 
 /// The evidence at `target`: every block destination's existing document,
-/// the crate shape, the flake pair's presence, and whether `recorded`
-/// names `flake.nix`.
+/// the crate shape, the uv project shape, the flake pair's presence, and
+/// whether `recorded` names `flake.nix`.
 ///
 /// # Errors
 ///
@@ -49,7 +49,19 @@ pub fn gather(target: &Utf8Path, recorded: Option<&Manifest>) -> std::io::Result
         root_pipeline_present: present(target, super::GITLAB_ROOT_PIPELINE)?,
         root_pipeline_recorded: recorded
             .is_some_and(|record| record.file(super::GITLAB_ROOT_PIPELINE).is_some()),
+        python_shape: python_shape(target),
     })
+}
+
+/// The uv project facts at `target` the python release relies on. An
+/// unreadable file is `None`, which the judgment names.
+#[must_use]
+pub fn python_shape(target: &Utf8Path) -> PythonShape {
+    PythonShape {
+        pyproject_toml: std::fs::read_to_string(target.join("pyproject.toml")).ok(),
+        uv_toml: std::fs::read_to_string(target.join("uv.toml")).ok(),
+        uv_lock: target.join("uv.lock").is_file(),
+    }
 }
 
 /// Whether the receipt names `flake.nix`: a pair release-kit landed is its

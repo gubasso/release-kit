@@ -191,6 +191,8 @@ pub struct Pair {
     pub repo: String,
     /// The trunk branch.
     pub trunk: String,
+    /// The prefix every release-line branch carries.
+    pub line_prefix: String,
     /// Whether the landing builds artifacts the release page carries.
     pub artifacts: bool,
     /// The package name the registry knows, where the pair has one.
@@ -230,9 +232,15 @@ impl Pair {
             return None;
         }
         match (self.forge, self.driver.as_str()) {
-            (Forge::Github, "rust" | "bash") => Some("release.yml"),
+            (Forge::Github, "rust" | "bash" | "python") => Some("release.yml"),
             _ => None,
         }
+    }
+
+    /// Whether `branch` is a release base: the trunk, or a release line.
+    #[must_use]
+    pub fn is_base(&self, branch: &str) -> bool {
+        branch == self.trunk || crate::release_engine::is_line(&self.line_prefix, branch)
     }
 
     /// The registry the driver publishes to, where it has one.
@@ -246,18 +254,18 @@ impl Pair {
 ///
 /// The one owner of the mapping from a driver and the recorded
 /// `profile.release.registry` answer, so the release status and the setup
-/// milestones read one registry. A rust release reads crates.io unless it
-/// answered `none`; a python release reads `PyPI`; every other driver
-/// publishes to no registry.
+/// milestones read one registry. A rust release reads crates.io and a
+/// python release reads `PyPI`, each unless it answered `none`; every
+/// other driver publishes to no registry.
 #[must_use]
 pub fn registry_for(
     driver: &str,
     answer: Option<crate::profile::RegistryAnswer>,
 ) -> Option<Registry> {
-    match (driver, answer) {
-        ("rust", Some(crate::profile::RegistryAnswer::None)) => None,
-        ("rust", _) => Some(Registry::CratesIo),
-        ("python", _) => Some(Registry::Pypi),
+    use crate::profile::RegistryAnswer;
+    match answer.or_else(|| RegistryAnswer::default_for(driver))? {
+        RegistryAnswer::CratesIo if driver == "rust" => Some(Registry::CratesIo),
+        RegistryAnswer::Pypi if driver == "python" => Some(Registry::Pypi),
         _ => None,
     }
 }
@@ -436,9 +444,31 @@ pub fn github_run_on(body: &Value, workflow: &str, sha: &str) -> Option<Run> {
 /// The pipeline on commit `sha` that ran on `reference`.
 #[must_use]
 pub fn gitlab_pipeline_on(body: &Value, reference: impl Fn(&str) -> bool) -> Option<Run> {
+    gitlab_pipeline_where(body, |pipeline| {
+        pipeline["ref"].as_str().is_some_and(&reference)
+    })
+}
+
+/// The branch-push pipeline on commit `sha` whose branch `base` accepts.
+///
+/// It is selected by the commit and the push source, never by recency. A
+/// merge-request, schedule, or child pipeline on the same commit runs no
+/// release, and neither does the pipeline of the tag the release pushed,
+/// whose ref `base` never accepts.
+#[must_use]
+pub fn gitlab_branch_push_on(body: &Value, sha: &str, base: impl Fn(&str) -> bool) -> Option<Run> {
+    gitlab_pipeline_where(body, |pipeline| {
+        pipeline["sha"].as_str() == Some(sha)
+            && pipeline["source"].as_str() == Some("push")
+            && pipeline["ref"].as_str().is_some_and(&base)
+    })
+}
+
+/// The oldest pipeline `keep` accepts.
+fn gitlab_pipeline_where(body: &Value, keep: impl Fn(&Value) -> bool) -> Option<Run> {
     body.as_array()?
         .iter()
-        .filter(|pipeline| pipeline["ref"].as_str().is_some_and(&reference))
+        .filter(|pipeline| keep(pipeline))
         .map(|pipeline| {
             let status = pipeline["status"].as_str().unwrap_or("unknown").to_owned();
             let conclusion = matches!(
@@ -456,12 +486,24 @@ pub fn gitlab_pipeline_on(body: &Value, reference: impl Fn(&str) -> bool) -> Opt
         .min_by_key(|run| run.id)
 }
 
+/// The suffix of the provenance bundle a release page carries beside a
+/// distribution it signs.
+pub const BUNDLE_SUFFIX: &str = ".sigstore.json";
+
+/// Whether a file on a release page is support material and no artifact:
+/// the engine's checksum file, or a provenance bundle. Neither counts
+/// toward a page's artifacts, and no attestation covers either.
+#[must_use]
+pub fn is_support(name: &str) -> bool {
+    name == crate::release_engine::CHECKSUMS || name.ends_with(BUNDLE_SUFFIX)
+}
+
 /// What a release page carries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Page {
     /// Whether the page exists.
     pub exists: bool,
-    /// Every artifact name on it.
+    /// Every artifact name on it, support files left out.
     pub assets: Vec<String>,
     /// The artifacts no attestation covers.
     pub unattested: Vec<String>,

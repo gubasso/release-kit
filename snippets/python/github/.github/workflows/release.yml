@@ -1,0 +1,183 @@
+# The whole release pipeline and the PyPI trusted publisher. This filename # RK_IF_REGISTRY
+# is registered at PyPI, together with the pypi environment the release job # RK_IF_REGISTRY
+# runs in. # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY # The whole release pipeline. The package publishes to no registry: the
+# RK_IF_NO_REGISTRY # tag and the release page with its attested distributions are the release.
+#
+# Both jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
+# project keeps older lines. Each job calls rk, which holds the release logic
+# and reads the driver, the style, the integration, and the registry answer
+# from the landing record. release-request runs rk release request, which
+# keeps the one release pull request, pyproject.toml and uv.lock through uv
+# version plus the changelog, against the pushed branch
+# (release-engine:one-request-per-base). Merging that request is the release:
+# the release job runs rk release build, which releases only the commit that
+# merges the request (release-engine:a-final-version-releases-at-its-request)
+# and builds the sdist and the wheel with uv build, then attests them, then
+# uploads them to PyPI over OIDC, then runs rk release publish, which creates # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY # then runs rk release publish, which creates
+# the release page and its tag last (release-engine:the-tag-is-created-last).
+#
+# The attestation and the upload stay in this workflow, because only the run
+# that built the distributions holds the identity that signs and publishes
+# them. rk cannot mint either.
+name: release
+
+permissions: {}
+
+on:
+  push:
+    branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
+# RK_GATE_TRIGGER_BEGIN
+# RK_GATE_TRIGGER_END
+
+jobs:
+  # The release request. rk opens it on rk-release/<base>, refreshes it in
+  # place on every push, and arms it where the landing arms it
+  # (release-engine:the-request-arms-where-the-projection-arms).
+  release-request:
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: release-request-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      # The mint is scoped, not blanket: without a permission-* input the token
+      # carries every permission the installation holds. This half pushes the
+      # request branch and opens, refreshes, and arms the request, so it takes
+      # contents and pull-requests.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        with:
+          # client-id takes the client ID or the numeric App ID; GitHub accepts either as the JWT issuer: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          # zizmor: ignore[artipacked] the persisted credential is the app
+          # token rk pushes the request branch with.
+          token: ${{ steps.app-token.outputs.token }}
+# RK_DEV_ENV_REQUEST_BEGIN
+      - name: install rk
+        env:
+          RK_VERSION: "RK_SELF_VERSION"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
+      # Where no version input stands, setup-uv installs the exact
+      # required-version the project's pyproject.toml or uv.toml names.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7" # RK_IF_UV_UNPINNED
+          enable-cache: false
+      - name: install git-cliff
+        run: pipx install git-cliff==2.14.2
+# RK_DEV_ENV_REQUEST_END
+      # The token is the release app's, never GITHUB_TOKEN: a push made with
+      # the default token starts no workflow, and rk refuses it
+      # (release-engine:the-request-pushes-as-the-bot).
+      - name: maintain the release request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: RK_DEV_RUN rk release request
+
+  # The release itself. rk release build decides from the commit and the
+  # forge whether this push releases, and skips every push that does not.
+  # Where it releases, it builds the sdist and the wheel into dist/, which
+  # holds nothing else, and reports them. The attestation follows, then the
+  # upload, and only then does rk release publish create the release and its
+  # tag, so nothing publicly reachable exists before its attestation does.
+  release:
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
+    runs-on: ubuntu-latest
+    environment: pypi # RK_IF_REGISTRY
+    permissions:
+      contents: read
+      # Minting the build-provenance attestation: the OIDC token identifies
+      # this run to Sigstore, and the other two write the attestation back.
+      # The same token is what PyPI's trusted publisher exchanges. # RK_IF_REGISTRY
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      # This half creates the release, whose publication creates the tag, and
+      # reads the pull request the pushed commit merges, because only that
+      # merge releases a final version. It opens no pull request, so it takes
+      # contents and a read of pull-requests. A target whose tag ruleset
+      # blocks creation needs administration here too. The convention's
+      # ruleset restricts deletion and update only.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: read
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+# RK_DEV_ENV_RELEASE_BEGIN
+      - name: install rk
+        env:
+          RK_VERSION: "RK_SELF_VERSION"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7" # RK_IF_UV_UNPINNED
+          enable-cache: false
+      - name: install git-cliff
+        run: pipx install git-cliff==2.14.2
+# RK_DEV_ENV_RELEASE_END
+      # The build writes its state, release, resume, or skip, and the
+      # artifacts it built to the step outputs. Where PyPI already serves a # RK_IF_REGISTRY
+      # file of the version, the build compares the rebuild with its digest # RK_IF_REGISTRY
+      # and stops on a difference before anything uploads. # RK_IF_REGISTRY
+      - name: build
+        id: build
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: RK_DEV_RUN rk release build
+
+      # Provenance, minted before anything is publishable. The run that built
+      # the distributions signs them, so a consumer can check which workflow
+      # and commit produced them instead of trusting the release page the
+      # checksum also sits on. A rerun at the same commit rebuilds the same
+      # files and attests them again before rk touches the page.
+      - name: attest
+        if: steps.build.outputs.state == 'release' || steps.build.outputs.state == 'resume'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.build.outputs.artifacts }}
+
+      # The upload over OIDC, which also generates and uploads the PEP 740 # RK_IF_REGISTRY
+      # attestations. It sends every file in dist/, which holds the sdist and # RK_IF_REGISTRY
+      # the wheel alone. A rerun skips the files PyPI already holds, which the # RK_IF_REGISTRY
+      # build compared byte for byte. # RK_IF_REGISTRY
+      - name: upload to PyPI # RK_IF_REGISTRY
+        if: steps.build.outputs.state == 'release' || steps.build.outputs.state == 'resume' # RK_IF_REGISTRY
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 # RK_IF_REGISTRY
+        with: # RK_IF_REGISTRY
+          packages-dir: dist/ # RK_IF_REGISTRY
+          skip-existing: true # RK_IF_REGISTRY
+
+      # The tag is created here and nowhere else: rk creates a draft release,
+      # uploads every asset, and publishes the draft, and the publication
+      # creates the tag. It skips where the build skipped, finishes a draft a
+      # failed run left, and stops on a tag at another commit
+      # (release-engine:every-step-converges).
+      - name: publish
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: RK_DEV_RUN rk release publish
+# RK_GATE_JOB_BEGIN
+# RK_GATE_JOB_END

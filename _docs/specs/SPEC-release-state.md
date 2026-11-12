@@ -52,7 +52,7 @@ When the observed state shows a merged release request whose version has no tag 
 - WHEN `rk release status --json` runs
 - THEN the report lists `local-tag-differs` with v0.1.0, both commits, and `git fetch origin '+refs/tags/v0.1.0:refs/tags/v0.1.0'`, and names "A clone holds a stale release tag"
 
-Verify: `cargo nextest run -E 'test(release_status_reports_each_detected_symptom) or test(every_tag_after_the_newest_complete_release_is_reported) or test(each_release_line_keeps_its_own_cutoff) or test(local_tag_drift_reports_a_moved_and_a_local_only_tag) or test(release_status_reports_a_local_tag_at_another_commit) or test(release_status_compares_a_prerelease_and_ignores_a_non_version_tag) or test(release_status_reports_a_local_tag_the_forge_lacks) or test(an_annotated_local_tag_compares_by_its_commit) or test(a_tag_only_the_forge_holds_is_no_symptom) or test(release_status_compares_no_tag_when_the_forge_list_is_unread) or test(the_recovery_chapter_names_the_stale_local_tag)'`
+Verify: `cargo nextest run -E 'test(release_status_reports_each_detected_symptom) or test(release_status_reads_the_python_page_on_each_forge) or test(a_page_of_support_files_alone_is_no_verified_release) or test(every_tag_after_the_newest_complete_release_is_reported) or test(each_release_line_keeps_its_own_cutoff) or test(local_tag_drift_reports_a_moved_and_a_local_only_tag) or test(release_status_reports_a_local_tag_at_another_commit) or test(release_status_compares_a_prerelease_and_ignores_a_non_version_tag) or test(release_status_reports_a_local_tag_the_forge_lacks) or test(an_annotated_local_tag_compares_by_its_commit) or test(a_tag_only_the_forge_holds_is_no_symptom) or test(release_status_compares_no_tag_when_the_forge_list_is_unread) or test(the_recovery_chapter_names_the_stale_local_tag)'`
 
 ### `release-state:a-wait-selects-runs-by-commit` — A wait selects runs by commit
 
@@ -64,4 +64,4 @@ When `rk release status --wait <sha>` runs, the verb MUST select the publish run
 - WHEN `rk release status --wait <sha> --json` runs
 - THEN it waits for the artifact run on that commit, ignores the newer run, and reports the tag, published, and artifacts verified once both concluded
 
-Verify: `cargo nextest run -E 'test(release_status_wait_selects_the_runs_on_the_commit)'`
+Verify: `cargo nextest run -E 'test(release_status_wait_selects_the_runs_on_the_commit) or test(release_status_waits_for_the_python_release_run) or test(an_engine_wait_on_gitlab_follows_the_release_line_pipeline)'`

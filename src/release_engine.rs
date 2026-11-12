@@ -49,6 +49,20 @@ pub const NOTES: &str = "notes.md";
 /// artifact.
 pub const CHECKSUMS: &str = "SHA256SUMS";
 
+/// Whether `branch` is a release line `<prefix><major>.<minor>` under
+/// `prefix`.
+#[must_use]
+pub fn is_line(prefix: &str, branch: &str) -> bool {
+    branch
+        .strip_prefix(prefix)
+        .and_then(|line| line.split_once('.'))
+        .is_some_and(|(major, minor)| {
+            <[&str; 2]>::from((major, minor))
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        })
+}
+
 /// The recovery section for a tag at another commit, or one nobody could
 /// read.
 pub const RECOVERY_TAG: &str = "The tag exists and the release does not";
@@ -214,14 +228,7 @@ impl Context {
     /// Whether `branch` is a release line.
     #[must_use]
     pub fn is_line(&self, branch: &str) -> bool {
-        branch
-            .strip_prefix(&self.line_prefix)
-            .and_then(|line| line.split_once('.'))
-            .is_some_and(|(major, minor)| {
-                <[&str; 2]>::from((major, minor))
-                    .iter()
-                    .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-            })
+        is_line(&self.line_prefix, branch)
     }
 
     /// The commit the checkout stands at.

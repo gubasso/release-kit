@@ -1,0 +1,301 @@
+# The whole release pipeline for GitLab CI and the PyPI trusted publisher. # RK_IF_REGISTRY
+# This pipeline file is registered at PyPI as the project's top-level # RK_IF_REGISTRY
+# pipeline. # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY # The whole release pipeline for GitLab CI. The package publishes to no
+# RK_IF_NO_REGISTRY # registry: the tag and the release page with its signed distributions are
+# RK_IF_NO_REGISTRY # the release.
+#
+# The release jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line
+# when a project keeps older lines. Each job calls rk, which holds the release
+# logic and reads the driver, the style, the integration, and the registry
+# answer from the landing record. release-request runs rk release request,
+# which keeps the one release merge request, pyproject.toml and uv.lock through
+# uv version plus the changelog, against the pushed branch
+# (release-engine:one-request-per-base). Merging that request is the release:
+# build runs rk release build, which releases only the commit that merges the
+# request (release-engine:a-final-version-releases-at-its-request) and builds
+# the sdist and the wheel with uv build, provenance signs the runner's SLSA
+# statement over each of them, pypi uploads them over OIDC, and publish runs # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY # statement over each of them, and publish runs
+# rk release publish, which creates the tag and the GitLab release last
+# (release-engine:the-tag-is-created-last).
+#
+# The provenance and the upload stay in this pipeline, because only a CI job
+# holds the OIDC identity that signs and publishes them. rk cannot mint
+# either.
+#
+# Every job authenticates with RELEASE_BOT_TOKEN, the bot identity's token
+# the setup stores as a masked CI variable: a project access token, or the
+# token of a group service account on a GitLab.com Free group. A push made
+# with the default CI job token starts no pipeline, which would silently
+# skip the release half, so rk refuses it
+# (release-engine:the-request-pushes-as-the-bot).
+
+include:
+  - local: RK_GITLAB_GATE_FRAGMENT
+
+stages:
+  - release
+  - provenance
+  - upload # RK_IF_REGISTRY
+  - publish
+  - test
+
+# Merge request pipelines run the title gate; branch pipelines on the trunk
+# and the release lines run the release jobs, whose own rules never match a
+# merge request event.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
+
+# The project's own jobs, in a pipeline of their own. This forge
+# reverse-deep-merges an include, so a file the project owns would
+# contribute every key the jobs above leave out, whatever the include order;
+# a child pipeline is the only shape that isolates. Declare jobs in
+# .gitlab/ci/project.yml and they run here, with their own stages and their
+# own nested includes, reaching nothing this file declares. strategy: mirror
+# carries the child's status into this pipeline, so a failing project job
+# blocks the merge; it needs GitLab 18.2 or newer, which is this
+# convention's minimum version. The exists: guard keeps this job out of the
+# pipeline altogether while the file is absent, so no empty downstream
+# pipeline appears. A job in that file needs no merge_request_event rule:
+# this rule already scopes it, and inside a child pipeline
+# CI_PIPELINE_SOURCE reads parent_pipeline; use CI_MERGE_REQUEST_ID where a
+# rule is wanted. The forge document carries the rest.
+project-jobs:
+  stage: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      exists:
+        - .gitlab/ci/project.yml
+  trigger:
+    include:
+      - local: .gitlab/ci/project.yml
+    strategy: mirror
+
+# The base of the rk jobs. The rk archive targets x86_64-unknown-linux-gnu,
+# so the image is a glibc one, pinned by digest, and it carries no uv. It
+# installs git-cliff and glab at their pins, each download checked against
+# the SHA-256 authored beside its version, uv through its installer at the
+# version the project requires, and rk at the version of the release that
+# landed this file.
+.tooling:
+  stage: release
+# RK_DEV_ENV_IMAGE_BEGIN
+  image: debian:13.7-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+# RK_DEV_ENV_IMAGE_END
+  variables:
+    GIT_DEPTH: "0"
+    # glab sends a token from its environment only to the host GITLAB_HOST
+    # names, so both name this instance and the bot.
+    GITLAB_HOST: $CI_SERVER_FQDN
+    GITLAB_TOKEN: $RELEASE_BOT_TOKEN
+    GIT_CLIFF_VERSION: "2.14.2"
+    GIT_CLIFF_SHA256: "fa21e2fc70046fcfd0e43e5e4613873ab799aff3d9dc8559c00d31b270e417d0"
+    GLAB_VERSION: "1.130.0"
+    GLAB_SHA256: "ce06313b2075af25180cd195ab3496d42bc5857c85a1c12ba996838dfe9d822c"
+    # The uv the project requires: its exact required-version, else the
+    # version release-kit pins. The installer of that release checks the
+    # archive it downloads against the digest it carries, and the job checks
+    # the installer itself against the digest authored beside the pin.
+    UV_PIN: "0.13.7"
+    UV_PIN_INSTALLER_SHA256: "d263ee68314cf5bea36b08e6bd9e2c4563240d7adb73756cf33af5c199b92db4"
+    UV_VERSION: "0.13.7" # RK_IF_UV_UNPINNED
+    # RK_IF_UV_REQUIRED UV_VERSION: "RK_UV_REQUIRED"
+  before_script:
+    # Every tool these jobs fetch goes into one directory outside the
+    # checkout, on PATH before rk runs, so an image needs no /usr/local and
+    # no fetched binary lands in the tree rk commits from.
+    - RELEASE_TOOLS="${TMPDIR:-/tmp}/rk-tools" && mkdir -p "$RELEASE_TOOLS/bin" && export PATH="$RELEASE_TOOLS/bin:$PATH"
+# RK_DEV_ENV_SCRIPT_BEGIN
+    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl git xz-utils
+    - curl -fsSL -o "$RELEASE_TOOLS/git-cliff.tar.gz" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+    - echo "${GIT_CLIFF_SHA256}  $RELEASE_TOOLS/git-cliff.tar.gz" | sha256sum -c -
+    - tar -xzf "$RELEASE_TOOLS/git-cliff.tar.gz" --strip-components 1 -C "$RELEASE_TOOLS/bin" "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+    - curl -fsSL -o "$RELEASE_TOOLS/uv-installer.sh" "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-installer.sh"
+    - if [ "$UV_VERSION" = "$UV_PIN" ]; then echo "${UV_PIN_INSTALLER_SHA256}  $RELEASE_TOOLS/uv-installer.sh" | sha256sum -c -; fi
+    - UV_UNMANAGED_INSTALL="$RELEASE_TOOLS/bin" sh "$RELEASE_TOOLS/uv-installer.sh"
+# RK_DEV_ENV_SCRIPT_END
+    - curl -fsSL -o "$RELEASE_TOOLS/glab.tar.gz" "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz"
+    - echo "${GLAB_SHA256}  $RELEASE_TOOLS/glab.tar.gz" | sha256sum -c -
+    - tar -xzf "$RELEASE_TOOLS/glab.tar.gz" -C "$RELEASE_TOOLS" bin/glab
+# RK_DEV_ENV_RK_BEGIN
+    - curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/vRK_SELF_VERSION/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RELEASE_TOOLS/bin" sh
+# RK_DEV_ENV_RK_END
+
+# The release request. rk opens it on rk-release/<base>, refreshes it in
+# place on every push, and arms it where the landing arms it
+# (release-engine:the-request-arms-where-the-projection-arms).
+release-request:
+  extends: .tooling
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+  resource_group: release-request
+  script:
+    - RK_DEV_RUN rk release request
+
+# The release build. rk decides from the commit and the forge whether this
+# push releases, and skips every push that does not. Where it releases, it
+# builds the sdist and the wheel with uv build into dist/, which holds nothing
+# else, and creates no tag. Where PyPI already serves a file of the version, # RK_IF_REGISTRY
+# it compares the rebuild with its digest and stops on a difference. # RK_IF_REGISTRY
+# RUNNER_GENERATE_ARTIFACTS_METADATA makes the runner emit its SLSA v1
+# provenance statement beside the exported artifacts, which is what the
+# provenance job signs. The build report in .rk-release/ tells the jobs after
+# this one whether a release is in flight.
+build:
+  extends: .tooling
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+  resource_group: release
+  variables:
+    RUNNER_GENERATE_ARTIFACTS_METADATA: "true"
+  script:
+    - RK_DEV_RUN rk release build
+  artifacts:
+    paths:
+      - dist/
+      - .rk-release/
+    expire_in: 7d
+
+# Provenance. The runner already wrote a SLSA v1 provenance statement for the
+# build above; this job signs that statement keylessly with cosign over the
+# sdist and over the wheel, producing the bundles a consumer verifies. It is a
+# build-provenance attestation — the statement carries the source commit, the
+# builder identity, and the build parameters — where a bare signature over a
+# distribution would prove only that some identity signed a digest. The job is isolated from the build on
+# purpose: the signing identity lives here and never in the job that ran the
+# project's own build steps. No standing private key is managed anywhere —
+# keyless signing mints an ephemeral key pair against the job's OIDC identity
+# and discards it, which is what keeps this inside the one signing scheme the
+# channel offers.
+#
+# Sigstore's public instance trusts gitlab.com as an OIDC issuer and no
+# self-managed CI_SERVER_URL, so keyless signing works on GitLab.com only;
+# elsewhere this job says so and the release continues without provenance
+# rather than failing a pipeline that cannot mint certificates.
+provenance:
+  stage: provenance
+  needs: ["build"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+  image: alpine:3
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  variables:
+    COSIGN_YES: "true"
+    COSIGN_VERSION: "3.1.3"
+    COSIGN_SHA256: "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      set -eu
+      state="$(jq -r .state .rk-release/build.json)"
+      case "$state" in
+        release|resume) ;;
+        *)
+          echo "the build reports $state; nothing to attest."
+          exit 0
+          ;;
+      esac
+      if [ "$CI_SERVER_HOST" != "gitlab.com" ]; then
+        echo "keyless signing needs GitLab.com: Sigstore's public instance does not trust this instance as an OIDC issuer."
+        echo "continuing without provenance; the release page will carry the distributions and their checksums alone."
+        exit 0
+      fi
+      # A tool whose version floats with a base image is not pinned: fetch
+      # the release binary at the pin and refuse to run it unless its digest
+      # matches the one authored here beside the version.
+      curl -fsSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+      echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c -
+      chmod +x /usr/local/bin/cosign
+      # The runner's statement wraps the predicate; cosign re-wraps it over
+      # each distribution's own digest, so the signed subject is the file
+      # itself.
+      jq -c .predicate artifacts-metadata.json > predicate.json
+      for artifact in $(jq -r '.artifacts[].path' .rk-release/build.json); do
+        cosign attest-blob \
+          --predicate predicate.json \
+          --type slsaprovenance1 \
+          --bundle "$artifact.sigstore.json" \
+          "$artifact"
+        # Self-verify before anything publishes: the certificate identity is
+        # the CI configuration path at the ref this release was built from,
+        # which is what a consumer checks too.
+        cosign verify-blob-attestation \
+          --type slsaprovenance1 \
+          --bundle "$artifact.sigstore.json" \
+          --certificate-oidc-issuer "https://gitlab.com" \
+          --certificate-identity "https://gitlab.com/${CI_PROJECT_PATH}//${CI_CONFIG_PATH}@refs/heads/${CI_COMMIT_BRANCH}" \
+          "$artifact"
+        echo "provenance signed and verified for $artifact."
+      done
+  artifacts:
+    paths:
+      - dist/*.sigstore.json
+    expire_in: 7d
+
+# The upload to PyPI over OIDC, with the PEP 740 attestations PyPI serves # RK_IF_REGISTRY
+# beside each file. pypi-attestations signs each distribution with this job's # RK_IF_REGISTRY
+# Sigstore identity, and uv publish exchanges the job's PyPI token through # RK_IF_REGISTRY
+# the trusted publisher and uploads each distribution with its attestation. # RK_IF_REGISTRY
+# A rerun skips every file PyPI already holds with the same bytes, which the # RK_IF_REGISTRY
+# build compared. # RK_IF_REGISTRY
+# # RK_IF_REGISTRY
+# PyPI's GitLab trusted publisher accepts projects on GitLab.com alone, so # RK_IF_REGISTRY
+# elsewhere this job says so and uploads nothing, and the release goes on to # RK_IF_REGISTRY
+# its page. The python binding's recovery section carries the upload by hand. # RK_IF_REGISTRY
+pypi: # RK_IF_REGISTRY
+  extends: .tooling # RK_IF_REGISTRY
+  stage: upload # RK_IF_REGISTRY
+  needs: ["build", "provenance"] # RK_IF_REGISTRY
+  rules: # RK_IF_REGISTRY
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/' # RK_IF_REGISTRY
+  resource_group: release # RK_IF_REGISTRY
+  id_tokens: # RK_IF_REGISTRY
+    SIGSTORE_ID_TOKEN: # RK_IF_REGISTRY
+      aud: sigstore # RK_IF_REGISTRY
+    PYPI_ID_TOKEN: # RK_IF_REGISTRY
+      aud: pypi # RK_IF_REGISTRY
+  variables: # RK_IF_REGISTRY
+    PYPI_ATTESTATIONS_VERSION: "0.0.31" # RK_IF_REGISTRY
+  script: # RK_IF_REGISTRY
+    - | # RK_IF_REGISTRY
+      set -eu # RK_IF_REGISTRY
+      state="$(sed -n 's/^  "state": "\([a-z]*\)",$/\1/p' .rk-release/build.json)" # RK_IF_REGISTRY
+      case "$state" in # RK_IF_REGISTRY
+        release|resume) ;; # RK_IF_REGISTRY
+        *) # RK_IF_REGISTRY
+          echo "the build reports $state; nothing to upload." # RK_IF_REGISTRY
+          exit 0 # RK_IF_REGISTRY
+          ;; # RK_IF_REGISTRY
+      esac # RK_IF_REGISTRY
+      if [ "$CI_SERVER_HOST" != "gitlab.com" ]; then # RK_IF_REGISTRY
+        echo "PyPI trusted publishing needs GitLab.com: PyPI accepts no self-managed instance as a trusted publisher." # RK_IF_REGISTRY
+        echo "continuing without the upload; the python binding's recovery section uploads the distributions by hand." # RK_IF_REGISTRY
+        exit 0 # RK_IF_REGISTRY
+      fi # RK_IF_REGISTRY
+      RK_DEV_RUN uvx --from "pypi-attestations==${PYPI_ATTESTATIONS_VERSION}" pypi-attestations sign dist/*.tar.gz dist/*.whl # RK_IF_REGISTRY
+      RK_DEV_RUN uv publish --trusted-publishing always --check-url https://pypi.org/simple/ # RK_IF_REGISTRY
+
+# Publication, last, so nothing publicly reachable exists before its
+# provenance does. rk uploads every file to the GitLab package registry, then
+# sends one release create that names the commit and every link, and GitLab
+# creates the tag from it. A rerun uploads what the registry lacks, links what the
+# page lacks, creates the release on a tag a failed save left at this commit,
+# and stops on a tag at another commit (release-engine:every-step-converges).
+# On a self-managed instance the bundles do not exist, and the page carries
+# the distributions and their checksums alone.
+publish:
+  extends: .tooling
+  stage: publish
+  needs: ["build", "provenance", "pypi"] # RK_IF_REGISTRY
+  # RK_IF_NO_REGISTRY needs: ["build", "provenance"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+  resource_group: release
+  script:
+    - RK_DEV_RUN rk release publish

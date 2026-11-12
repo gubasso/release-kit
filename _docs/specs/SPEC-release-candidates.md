@@ -34,7 +34,7 @@ Verify: `cargo nextest run -E 'binary(cli) & test(a_mint_takes_the_next_rc_from_
 - WHEN `rk lines mint 1.4 --promote --expect <tip> --apply` runs again
 - THEN it reports `pending` for `1.4.3` and writes nothing
 
-Verify: `cargo nextest run -E 'binary(cli) & test(promotion)'`
+Verify: `cargo nextest run -E 'binary(cli) & (test(promotion) | test(a_python_promote_commits_the_lock))'`
 
 ### `release-candidates:a-mint-acts-only-on-the-tip-its-caller-saw` — A mint acts only on the tip its caller saw
 
@@ -62,7 +62,7 @@ Verify: `cargo nextest run -E 'binary(cli) & test(a_lost_mint_race_names_the_win
 
 ### `release-candidates:a-line-derives-its-candidate` — A line derives its candidate
 
-`rk lines mint` MUST derive the candidate from the remote tags of the line alone: the stable base is the newest stable `v<major>.<minor>.<patch>` tag plus one patch, or `<major>.<minor>.0` while the line has released nothing, and the number is the highest candidate of that base plus one, because a line only ships its own patches and a clone holds only the tags it fetched.
+`rk lines mint` MUST derive the candidate from the remote tags of the line alone: the stable base is the newest stable `v<major>.<minor>.<patch>` tag plus one patch, or `<major>.<minor>.0` while the line has released nothing, and the number is the highest candidate of that base plus one, because a line only ships its own patches and a clone holds only the tags it fetched. It MUST write the candidate through the driver adapter, so a python cut runs `uv version` and its commit carries `pyproject.toml` and `uv.lock`.
 
 #### Scenario: A clone that never fetched the candidates
 
@@ -70,7 +70,7 @@ Verify: `cargo nextest run -E 'binary(cli) & test(a_lost_mint_race_names_the_win
 - WHEN `rk lines mint 1.4` previews
 - THEN it reports `1.4.3-rc.3`
 
-Verify: `cargo nextest run -E 'binary(cli) & (test(a_mint_takes_its_stable_base_as_settled) | test(a_mint_writes_each_technology_spelling))'`
+Verify: `cargo nextest run -E 'binary(cli) & (test(a_mint_takes_its_stable_base_as_settled) | test(a_mint_writes_each_technology_spelling) | test(a_python_cut_commits_the_lock))'`
 
 ### `release-candidates:a-pending-candidate-is-published-not-reminted` — A pending candidate is published, not reminted
 

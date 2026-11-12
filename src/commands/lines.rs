@@ -689,29 +689,19 @@ fn commit_and_push(
         tip,
         ..
     } = context;
-    let spelled = version.spelled(driver);
-    // Both new contents are prepared and validated before either file is
-    // written, so a refusal leaves the checkout as it found it.
-    let manifest = versioned_manifest(target, driver, &spelled)?;
-    // The lockfile is part of the update only where git tracks it: an
-    // ignored local one is never read, rewritten, or staged.
-    let lock_tracked = driver == "rust"
-        && git(target, &["ls-files", "--error-unmatch", "--", "Cargo.lock"])?
-            .status
-            .success();
-    let lock = if lock_tracked {
-        let old = adapter::manifest_version(target.as_std_path(), driver).unwrap_or_default();
-        let name = adapter::package_name(target.as_std_path(), driver).unwrap_or_default();
-        versioned_lock(target, &name, &old, &spelled)?
+    // A python version is written through the adapter, uv version, which
+    // relocks, so the commit carries pyproject.toml and uv.lock together.
+    let written = if *driver == "python" {
+        let python = adapter::for_driver(driver, "")
+            .ok_or_else(|| RkError::Usage(format!("no version writer for the {driver} driver")))?;
+        python
+            .write_version(target, version)?
+            .into_iter()
+            .map(String::from)
+            .collect()
     } else {
-        None
+        write_manifest_and_lock(target, driver, file, version)?
     };
-    std::fs::write(target.join(file), manifest).map_err(RkError::Io)?;
-    let mut written = vec![(*file).to_owned()];
-    if let Some(lock) = lock {
-        std::fs::write(target.join("Cargo.lock"), lock).map_err(RkError::Io)?;
-        written.push("Cargo.lock".to_owned());
-    }
     let mut add = vec!["add", "--"];
     add.extend(written.iter().map(String::as_str));
     run_git(target, &add, "the version staged")?;
@@ -757,6 +747,40 @@ fn commit_and_push(
             .expected(format!("a push of {branch} the remote accepts"))
             .target_state("the remote is unchanged; the local commit is not pushed"),
     ))
+}
+
+/// Write the version into the rust or bash version file and, where git
+/// tracks it, the rust lockfile, and name every file written.
+fn write_manifest_and_lock(
+    target: &Utf8Path,
+    driver: &str,
+    file: &str,
+    version: Version,
+) -> Result<Vec<String>, RkError> {
+    let spelled = version.spelled(driver);
+    // Both new contents are prepared and validated before either file is
+    // written, so a refusal leaves the checkout as it found it.
+    let manifest = versioned_manifest(target, driver, &spelled)?;
+    // The lockfile is part of the update only where git tracks it: an
+    // ignored local one is never read, rewritten, or staged.
+    let lock_tracked = driver == "rust"
+        && git(target, &["ls-files", "--error-unmatch", "--", "Cargo.lock"])?
+            .status
+            .success();
+    let lock = if lock_tracked {
+        let old = adapter::manifest_version(target.as_std_path(), driver).unwrap_or_default();
+        let name = adapter::package_name(target.as_std_path(), driver).unwrap_or_default();
+        versioned_lock(target, &name, &old, &spelled)?
+    } else {
+        None
+    };
+    std::fs::write(target.join(file), manifest).map_err(RkError::Io)?;
+    let mut written = vec![file.to_owned()];
+    if let Some(lock) = lock {
+        std::fs::write(target.join("Cargo.lock"), lock).map_err(RkError::Io)?;
+        written.push("Cargo.lock".to_owned());
+    }
+    Ok(written)
 }
 
 /// One `v<line>.*` tag on the remote: its version and the commit it names.
@@ -1016,6 +1040,11 @@ fn same_but_version(driver: &str, file: &str, name: &str, sides: &Sides<'_>) -> 
         return masked_lock(sides.before, name, sides.own_before)
             .is_some_and(|before| Some(before) == masked_lock(sides.after, name, sides.own_after));
     }
+    if file == "uv.lock" {
+        return masked_uv_lock(sides.before, name, sides.own_before).is_some_and(|before| {
+            Some(before) == masked_uv_lock(sides.after, name, sides.own_after)
+        });
+    }
     match adapter::version_file(driver) {
         Some((_, None)) => {
             Version::parse(sides.before.trim()).is_some()
@@ -1063,10 +1092,53 @@ fn masked_lock(text: &str, name: &str, own: &str) -> Option<toml::Table> {
     Some(value)
 }
 
+/// `uv.lock` with the project's own entry reduced to its name: the entry
+/// whose normalized name is the project's, whose source is the project
+/// itself, editable or virtual, and whose version is `own`. Every other
+/// entry, a dependency of the same name from an index included, keeps its
+/// version in the comparison.
+fn masked_uv_lock(text: &str, name: &str, own: &str) -> Option<toml::Table> {
+    let normalized = |raw: &str| -> String {
+        let mut out = String::new();
+        for c in raw.chars() {
+            if matches!(c, '-' | '_' | '.') {
+                if !out.ends_with('-') {
+                    out.push('-');
+                }
+            } else {
+                out.push(c.to_ascii_lowercase());
+            }
+        }
+        out
+    };
+    let wanted = normalized(name);
+    let mut value: toml::Table = toml::from_str(text).ok()?;
+    let packages = value.get_mut("package")?.as_array_mut()?;
+    for package in packages.iter_mut() {
+        let package = package.as_table_mut()?;
+        let local = package
+            .get("source")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|source| {
+                source.contains_key("editable") || source.contains_key("virtual")
+            });
+        let is_own = local
+            && package
+                .get("name")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|found| normalized(found) == wanted)
+            && package.get("version").and_then(toml::Value::as_str) == Some(own);
+        if is_own {
+            package.remove("version");
+        }
+    }
+    Some(value)
+}
+
 /// The commits `tip` holds after `base` that change more than the version,
 /// one `<short sha> <subject>` each, oldest first: the commits no candidate
 /// tested. A commit that writes only the package's own version, in the
-/// version file and in the rust lockfile, changes no tested code.
+/// version file and in the rust or uv lockfile, changes no tested code.
 fn untested_commits(
     context: &MintContext<'_>,
     base: &str,
@@ -1111,16 +1183,12 @@ fn version_only(context: &MintContext<'_>, name: &str, commit: &str) -> Result<b
         return Ok(false);
     }
     let own_at = |rev: &str| -> Option<String> {
-        let text = show(target, rev, "Cargo.toml")?;
-        let value: toml::Table = toml::from_str(&text).ok()?;
-        value
-            .get("package")?
-            .get("version")?
-            .as_str()
-            .map(str::to_owned)
+        let text = show(target, rev, file)?;
+        adapter::version_in(driver, &text)
     };
     for path in String::from_utf8_lossy(&changed.stdout).lines() {
-        let lockfile = *driver == "rust" && path == "Cargo.lock";
+        let lockfile = (*driver == "rust" && path == "Cargo.lock")
+            || (*driver == "python" && path == "uv.lock");
         if path != *file && !lockfile {
             return Ok(false);
         }

@@ -18,7 +18,7 @@ A binding is the release automation capability at two dimensions: the release dr
 | Axis                | Rust            | Python                               | JS and Node                          | Go                     | Bash                        |
 | ------------------- | --------------- | ------------------------------------ | ------------------------------------ | ---------------------- | --------------------------- |
 | Version file        | `Cargo.toml`    | `pyproject.toml` `[project] version` | `package.json` `version`             | the tag itself         | `VERSION`                   |
-| Release-request bot | release-plz     | release-please                       | Changesets                           | none                   | rk with git-cliff           |
+| Release-request bot | release-plz     | rk with git-cliff                    | Changesets                           | none                   | rk with git-cliff           |
 | Registry and auth   | crates.io, OIDC | PyPI, OIDC                           | npm, OIDC                            | none; the module proxy | none                        |
 | Artifact builder    | cargo-dist      | wheels and sdist are the artifacts   | the registry tarball is the artifact | GoReleaser             | the build command's tarball |
 
@@ -34,10 +34,11 @@ Because the two vary independently, the release automation a project selects is 
 (driver, forge) -> the concrete answers
 (rust,   github) -> Cargo.toml, release-plz, crates.io+OIDC, cargo-dist, gh
 (rust,   gitlab) -> Cargo.toml, release-plz, crates.io+OIDC, none, glab
-(python, github) -> pyproject.toml, release-please, PyPI+OIDC, wheels, gh
+(python, github) -> pyproject.toml, rk with git-cliff, PyPI+OIDC, wheels, gh
+(python, gitlab) -> pyproject.toml, rk with git-cliff, PyPI+OIDC, wheels, glab
 ```
 
-An axis answer can be nothing, and the pair table already holds one: `(rust, gitlab)` has no artifact builder, the same shape as the Go column's bot and registry rows. [The Rust binding](../bindings/rust.md) carries that fact, because it is a property of the pair rather than of either axis alone. A pair the distribution ships no files for, `(python, gitlab)` today, is a capability that is unavailable at those dimensions: the profile stays valid, and an apply that requires the automation refuses naming the available tuples.
+An axis answer can be nothing, and the pair table already holds one: `(rust, gitlab)` has no artifact builder, the same shape as the Go column's bot and registry rows. [The Rust binding](../bindings/rust.md) carries that fact, because it is a property of the pair rather than of either axis alone. A pair the distribution ships no files for is a capability that is unavailable at those dimensions: the profile stays valid, and an apply that requires the automation refuses naming the available tuples.
 
 What the forge axis owns: how the release request is named and refreshed, which merge verbs keep the trunk linear, how branches and tags are protected, what the bot identity is, and which CI file format the workflows use. What it never changes: the one-pull-request gate, the committed version leading the tag, the one-directional release lines, and the recovery paths.
 

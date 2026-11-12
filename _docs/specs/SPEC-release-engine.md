@@ -132,7 +132,7 @@ A rerun at the same commit MUST skip what the forge holds with the same bytes, M
 - WHEN `rk release publish` runs again
 - THEN it uploads that one file and writes nothing else
 
-Verify: `cargo nextest run -E 'test(the_build_resumes_at_the_same_commit) or test(a_rerun_publishes_a_same_commit_draft) or test(a_rerun_repairs_a_partial_release) or test(the_publish_refuses_an_asset_whose_digest_differs) or test(the_build_refuses_a_rebuild_that_differs_from_pypi) or test(a_full_rerun_keeps_the_provenance_of_a_published_release) or test(a_full_rerun_creates_the_gitlab_release_after_an_interrupted_create) or test(a_held_bundle_is_kept_only_beside_a_matching_artifact) or test(an_asset_on_a_later_page_is_found)'`
+Verify: `cargo nextest run -E 'test(the_build_resumes_at_the_same_commit) or test(a_rerun_publishes_a_same_commit_draft) or test(a_rerun_repairs_a_partial_release) or test(the_publish_refuses_an_asset_whose_digest_differs) or test(the_build_refuses_a_rebuild_that_differs_from_pypi) or test(a_full_rerun_keeps_the_provenance_of_a_published_release) or test(a_full_rerun_creates_the_gitlab_release_after_an_interrupted_create) or test(a_held_bundle_is_kept_only_beside_a_matching_artifact) or test(an_asset_on_a_later_page_is_found) or test(the_python_upload_takes_only_the_distributions)'`
 
 ### `release-engine:a-candidate-is-a-prerelease` — A candidate is a prerelease
 
@@ -168,7 +168,7 @@ The engine MUST run git-cliff at the version the embedded `versions.toml` pins, 
 - WHEN `rk release request` or `rk release build` runs
 - THEN it exits 73 with `tool-off-pin`, naming the pin, and nothing is pushed
 
-Verify: `cargo nextest run -E 'test(the_engine_refuses_git_cliff_off_its_pin) or test(every_engine_tool_download_verifies_its_checksum)'`
+Verify: `cargo nextest run -E 'test(the_engine_refuses_git_cliff_off_its_pin) or test(every_engine_tool_download_verifies_its_checksum) or test(the_python_uv_version_follows_the_target_pin)'`
 
 ### `release-engine:the-output-declares-its-schema` — The output declares its schema
 

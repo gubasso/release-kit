@@ -604,6 +604,15 @@ fn binding_serves_each_technology() {
             .success()
             .stdout(predicate::str::starts_with(heading));
     }
+    // The python binding states the engine it runs on both forges, and
+    // names no tool it no longer lands.
+    rk().args(["binding", "python"]).assert().success().stdout(
+        predicate::str::contains("uv version")
+            .and(predicate::str::contains("uv build"))
+            .and(predicate::str::contains(".gitlab-ci.yml"))
+            .and(predicate::str::contains("release-please").not())
+            .and(predicate::str::contains("twine").not()),
+    );
 }
 
 #[test]
@@ -776,8 +785,12 @@ fn snippet_lists_every_landable_file() {
                 "rust/github/.github/workflows/release-plz.yml",
             ))
             .and(predicate::str::contains(
-                "python/github/.github/workflows/release-please.yml",
+                "python/github/.github/workflows/release.yml",
             ))
+            .and(predicate::str::contains("python/github/cliff.toml"))
+            .and(predicate::str::contains("python/gitlab/.gitlab-ci.yml"))
+            .and(predicate::str::contains("python/gitlab/cliff.toml"))
+            .and(predicate::str::contains("release-please").not())
             .and(predicate::str::contains("bash/github/VERSION"))
             .and(predicate::str::contains("bash/github/cliff.toml")),
     );
@@ -985,7 +998,8 @@ fn versions_prints_the_registry() {
     rk().arg("versions").assert().success().stdout(
         predicate::str::contains("release-plz")
             .and(predicate::str::contains("git-cliff"))
-            .and(predicate::str::contains("release-please")),
+            .and(predicate::str::contains("setup-uv"))
+            .and(predicate::str::contains("name = \"uv\"")),
     );
 }
 
@@ -5027,29 +5041,8 @@ fn init_lands_nothing_from_the_host_only_roots() {
 }
 
 #[test]
-fn init_refuses_an_unsupported_pair_and_an_undetectable_forge() {
+fn init_refuses_an_undetectable_forge() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args([
-        "init",
-        "--technology",
-        "python",
-        "--forge",
-        "gitlab",
-        "--repo",
-        "acme/widget",
-        "--release-mode",
-        "automatic",
-        "--release-driver",
-        "python",
-        "--apply",
-        "--target",
-    ])
-    .arg(target.path())
-    .assert()
-    .code(73)
-    .stderr(predicate::str::contains("no landable files"))
-    .stderr(predicate::str::contains("rust, github"));
-    assert!(!target.path().join(".release-kit").exists());
     // An automatic release needs a forge; a release-less profile does not.
     rk().args([
         "init",
@@ -5238,11 +5231,17 @@ esac
 exit 0
 "#;
 
-/// A python3 stand-in for the packaging gate: `-m build` succeeds and the
-/// run is logged, so no test depends on a build backend being installed.
-const MOCK_PYTHON3: &str = r#"#!/usr/bin/env bash
+/// A uv stand-in for the packaging gate: `uv build` writes an sdist and a
+/// wheel into dist/ and the run is logged, so no test depends on a build
+/// backend being installed.
+const MOCK_UV: &str = r#"#!/usr/bin/env bash
 STATE="__STATE__"
-printf 'python3 %s\n' "$*" >> "$STATE/log"
+printf 'uv %s\n' "$*" >> "$STATE/log"
+if [ "$1" = build ]; then
+  mkdir -p dist
+  printf 'sdist\n' > dist/widget-0.1.0.tar.gz
+  printf 'wheel\n' > dist/widget-0.1.0-py3-none-any.whl
+fi
 exit 0
 "#;
 
@@ -5664,7 +5663,7 @@ impl ForgeFixture {
             ("openssl", MOCK_OPENSSL),
             ("curl", MOCK_CURL),
             ("cargo", MOCK_CARGO),
-            ("python3", MOCK_PYTHON3),
+            ("uv", MOCK_UV),
             ("make", MOCK_MAKE),
         ] {
             let path = fixture.mock.path().join(name);
@@ -7017,8 +7016,16 @@ fn package_check_names_the_binding_limitation_for_bash_and_python() {
     .expect("the project file writes");
     std::fs::remove_file(fixture.target.path().join("VERSION")).expect("the bash marker goes");
     let line = package_check_line(&fixture);
-    assert!(line.contains("package-check"), "{line}");
+    assert!(line.starts_with("ok package-check"), "{line}");
+    // The python check runs the release's own build and names both files
+    // it left, and their contents stay unproved.
+    assert!(fixture.log().contains("uv build"), "{}", fixture.log());
+    assert!(
+        line.contains("the sdist widget-0.1.0.tar.gz and the wheel widget-0.1.0-py3-none-any.whl"),
+        "{line}"
+    );
     assert!(line.contains("sdist and wheel"), "{line}");
+    assert!(!fixture.log().contains("python3"), "{}", fixture.log());
 }
 
 /// The preview names every command the step would run and the shape each
@@ -13378,6 +13385,9 @@ fn snippet_action_refs() -> Vec<(String, String, String, Option<String>)> {
             .display()
             .to_string();
         for line in text.lines() {
+            // A line marker is a rendering instruction, never a part of the
+            // readable comment it trails.
+            let line = line.strip_suffix(" # RK_IF_REGISTRY").unwrap_or(line);
             let Some(spec) = line
                 .trim_start()
                 .strip_prefix("- uses: ")
@@ -13560,6 +13570,9 @@ fn a_rendered_app_token_step_passes_the_identity_as_client_id() {
     for tech in ["rust", "python", "bash"] {
         for integration in ["local", "forge"] {
             let target = tempfile::tempdir().expect("a scratch target exists");
+            if tech == "python" {
+                seed_uv_project(target.path(), "0.1.0");
+            }
             rk().args(["init", "--tech", tech, "--forge", "github"])
                 .args(["--repo", "acme/widget", "--integration", integration])
                 .arg("--target")
@@ -13769,18 +13782,19 @@ fn invariant_codes(report: &serde_json::Value) -> Vec<(String, String)> {
 
 /// SATISFIES project-profile:release-intent-has-three-modes
 ///
-/// The registry answer belongs to an automatic rust release alone: under
-/// another driver or another mode it refuses and names its key and the
-/// shape it needs, whether the configuration names the driver or the
-/// resolution derives it.
+/// The registry answer belongs to an automatic rust or python release, each
+/// with its own registry: under another driver, another mode, or the other
+/// driver's registry it refuses and names its key and the shape it needs,
+/// whether the configuration names the driver or the resolution derives it.
 #[test]
-fn a_registry_answer_is_valid_only_for_an_automatic_rust_release() {
+fn a_registry_answer_is_valid_only_for_an_automatic_rust_or_python_release() {
     for release in [
         "mode = \"automatic\"\ndriver = \"bash\"\nregistry = \"none\"\n",
-        "mode = \"automatic\"\ndriver = \"python\"\nregistry = \"none\"\n",
         "mode = \"external\"\nregistry = \"none\"\n",
         "mode = \"none\"\nregistry = \"crates-io\"\n",
         "mode = \"automatic\"\ndriver = \"rust\"\nregistry = \"pypi\"\n",
+        "mode = \"automatic\"\ndriver = \"python\"\nregistry = \"crates-io\"\n",
+        "mode = \"automatic\"\ndriver = \"python\"\nregistry = \"npm\"\n",
     ] {
         let target = tempfile::tempdir().expect("a scratch target exists");
         write_release_config(target.path(), release);
@@ -13795,30 +13809,41 @@ fn a_registry_answer_is_valid_only_for_an_automatic_rust_release() {
             stderr.contains("profile.release.registry"),
             "{release}: {stderr}"
         );
-        assert!(stderr.contains("crates-io or none"), "{release}: {stderr}");
+        assert!(
+            stderr.contains("crates-io or none") && stderr.contains("pypi or none"),
+            "{release}: {stderr}"
+        );
+    }
+    // A python release takes pypi and none.
+    for answer in ["pypi", "none"] {
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        write_release_config(
+            target.path(),
+            &format!("mode = \"automatic\"\ndriver = \"python\"\nregistry = \"{answer}\"\n"),
+        );
+        rk().args(["profile", "--tech", "python", "--forge", "github"])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
     }
     // A driver the resolution derives from the technology, not from the
     // configuration, refuses in the preview that reports it too.
-    for tech in ["bash", "python"] {
-        let target = tempfile::tempdir().expect("a scratch target exists");
-        write_release_config(target.path(), "registry = \"none\"\n");
-        let out = rk()
-            .args(["profile", "--tech", tech, "--forge", "github"])
-            .args(["--repo", "acme/widget", "--json", "--target"])
-            .arg(target.path())
-            .output()
-            .expect("the profile runs");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(!out.status.success(), "{tech}: {stderr}");
-        assert!(
-            stderr.contains("profile.release.registry") && stderr.contains("crates-io or none"),
-            "{tech}: {stderr}"
-        );
-        assert!(
-            stderr.contains(&format!("driver is {tech}")),
-            "{tech}: {stderr}"
-        );
-    }
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    write_release_config(target.path(), "registry = \"none\"\n");
+    let out = rk()
+        .args(["profile", "--tech", "bash", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--json", "--target"])
+        .arg(target.path())
+        .output()
+        .expect("the profile runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("profile.release.registry") && stderr.contains("crates-io or none"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("driver is bash"), "{stderr}");
     // And at the landing.
     let target = tempfile::tempdir().expect("a scratch target exists");
     write_release_config(target.path(), "registry = \"none\"\n");
@@ -13987,7 +14012,7 @@ fn package_check_is_inapplicable_for_a_crate_with_no_registry() {
     let line = package_check_line(&fixture);
     assert!(line.starts_with("not-applicable package-check"), "{line}");
     assert!(
-        line.contains("the crate publishes to no registry, so nothing is packaged"),
+        line.contains("the release publishes to no registry, so nothing is packaged"),
         "{line}"
     );
     assert!(
@@ -18333,37 +18358,33 @@ fn a_gitlab_check_reports_the_auto_merge_limitation() {
 /// re-arms the replacement.
 #[test]
 fn every_arming_step_authenticates_as_the_bot() {
-    for path in [
-        "snippets/rust/github/.github/workflows/release-plz.yml",
-        "snippets/python/github/.github/workflows/release-please.yml",
-    ] {
-        let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
-        assert!(
-            text.contains("RELEASE_STYLE: RK_STYLE"),
-            "{path}: the rendered style is the arm's gate"
-        );
-        assert!(
-            text.contains("gh pr merge") && text.contains("--auto RK_MERGE_FLAG --delete-branch"),
-            "{path}: the arm sets auto-merge with the protected merge method, which the merge form renders"
-        );
-        let arm_at = text
-            .find("arm the release request")
-            .or_else(|| text.find("standing arm"))
-            .expect("the arming step exists");
-        let arm = &text[arm_at..];
-        assert!(
-            arm.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
-            "{path}: the arm authenticates as the bot"
-        );
-        assert!(
-            arm.contains("a line's request is never armed"),
-            "{path}: the arm must step aside off the trunk"
-        );
-        assert!(
-            !arm.contains("secrets.GITHUB_TOKEN") && !arm.contains("github.token"),
-            "{path}: an arm under the default token merges a bump that starts no workflow"
-        );
-    }
+    let path = "snippets/rust/github/.github/workflows/release-plz.yml";
+    let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
+    assert!(
+        text.contains("RELEASE_STYLE: RK_STYLE"),
+        "{path}: the rendered style is the arm's gate"
+    );
+    assert!(
+        text.contains("gh pr merge") && text.contains("--auto RK_MERGE_FLAG --delete-branch"),
+        "{path}: the arm sets auto-merge with the protected merge method, which the merge form renders"
+    );
+    let arm_at = text
+        .find("arm the release request")
+        .or_else(|| text.find("standing arm"))
+        .expect("the arming step exists");
+    let arm = &text[arm_at..];
+    assert!(
+        arm.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
+        "{path}: the arm authenticates as the bot"
+    );
+    assert!(
+        arm.contains("a line's request is never armed"),
+        "{path}: the arm must step aside off the trunk"
+    );
+    assert!(
+        !arm.contains("secrets.GITHUB_TOKEN") && !arm.contains("github.token"),
+        "{path}: an arm under the default token merges a bump that starts no workflow"
+    );
     let path = "snippets/rust/gitlab/.gitlab-ci.yml";
     let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
     assert!(
@@ -18390,28 +18411,35 @@ fn every_arming_step_authenticates_as_the_bot() {
     // The engine pairs arm inside rk release request, which reads the style
     // and the base from the record. The job that runs it hands it the bot's
     // token and never the default one, and the pipeline arms nothing itself.
-    let github = std::fs::read_to_string(repo_path(
-        "snippets/bash/github/.github/workflows/release.yml",
-    ))
-    .expect("the snippet reads");
-    let request = workflow_step(&github, "maintain the release request");
-    assert!(
-        request.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
-        "{request}"
-    );
-    assert!(request.contains("rk release request"), "{request}");
-    let gitlab = std::fs::read_to_string(repo_path("snippets/bash/gitlab/.gitlab-ci.yml"))
+    for driver in ["bash", "python"] {
+        let github = std::fs::read_to_string(repo_path(&format!(
+            "snippets/{driver}/github/.github/workflows/release.yml"
+        )))
         .expect("the snippet reads");
-    assert!(
-        gitlab.contains("GITLAB_TOKEN: $RELEASE_BOT_TOKEN"),
-        "{gitlab}"
-    );
-    for text in [&github, &gitlab] {
-        assert!(!text.contains("gh pr merge"), "{text}");
-        assert!(!text.contains("auto_merge=true"), "{text}");
-        assert!(!text.contains("CI_JOB_TOKEN"), "{text}");
-        assert!(!text.contains("secrets.GITHUB_TOKEN"), "{text}");
-        assert!(!text.contains("github.token"), "{text}");
+        let request = workflow_step(&github, "maintain the release request");
+        assert!(
+            request.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
+            "{driver}: {request}"
+        );
+        assert!(
+            request.contains("rk release request"),
+            "{driver}: {request}"
+        );
+        let gitlab = std::fs::read_to_string(repo_path(&format!(
+            "snippets/{driver}/gitlab/.gitlab-ci.yml"
+        )))
+        .expect("the snippet reads");
+        assert!(
+            gitlab.contains("GITLAB_TOKEN: $RELEASE_BOT_TOKEN"),
+            "{driver}: {gitlab}"
+        );
+        for text in [&github, &gitlab] {
+            assert!(!text.contains("gh pr merge"), "{driver}: {text}");
+            assert!(!text.contains("auto_merge=true"), "{driver}: {text}");
+            assert!(!text.contains("CI_JOB_TOKEN"), "{driver}: {text}");
+            assert!(!text.contains("secrets.GITHUB_TOKEN"), "{driver}: {text}");
+            assert!(!text.contains("github.token"), "{driver}: {text}");
+        }
     }
 }
 
@@ -18441,14 +18469,14 @@ fn every_app_token_mint_scopes_its_permissions() {
             vec!["contents: write", "pull-requests: read"],
         ),
         (
-            "python/github/.github/workflows/release-please.yml",
-            "release-please-pr",
+            "python/github/.github/workflows/release.yml",
+            "release-request",
             vec!["contents: write", "pull-requests: write"],
         ),
         (
-            "python/github/.github/workflows/release-please.yml",
-            "tag-and-publish",
-            vec!["contents: write"],
+            "python/github/.github/workflows/release.yml",
+            "release",
+            vec!["contents: write", "pull-requests: read"],
         ),
         (
             "rust/github/.github/workflows/release-plz.yml",
@@ -18867,6 +18895,20 @@ impl MintLine {
         git_in(&work, &["config", "user.name", "t"]);
         git_in(&work, &["config", "user.email", "t@invalid"]);
         git_in(&work, &["config", "core.hooksPath", ".git/hooks"]);
+        if tech == "python" {
+            seed_uv_project(&work, "1.4.2");
+        }
+        // The stand-in uv a python mint writes the version through.
+        let stubs = dir.path().join("stubs");
+        std::fs::create_dir_all(stubs.join("state")).expect("the stub dir exists");
+        std::fs::write(stubs.join("state/log"), "").expect("writes");
+        std::fs::write(stubs.join("uv"), ENGINE_UV).expect("the stand-in writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(stubs.join("uv"), std::fs::Permissions::from_mode(0o755))
+                .expect("the stand-in is executable");
+        }
         rk().args(["init", "--tech", tech, "--forge", "github"])
             .args(["--repo", "acme/widget", "--integration", "forge"])
             .args(["--style", "lines", "--target"])
@@ -18889,11 +18931,7 @@ impl MintLine {
                 )
                 .expect("writes");
             }
-            "python" => std::fs::write(
-                work.join("pyproject.toml"),
-                "[project]\nname = \"acme\"\nversion = \"1.4.2\"\n",
-            )
-            .expect("writes"),
+            "python" => {}
             _ => std::fs::write(work.join("VERSION"), "1.4.2\n").expect("writes"),
         }
         git_in(&work, &["add", "-A"]);
@@ -18962,7 +19000,8 @@ impl MintLine {
     }
 
     fn mint(&self, args: &[&str]) -> assert_cmd::assert::Assert {
-        rk().args(["lines", "mint"])
+        rk().env("RK_UV_BIN", self.dir.path().join("stubs/uv"))
+            .args(["lines", "mint"])
             .args(args)
             .arg("--target")
             .arg(&self.work)
@@ -19135,6 +19174,98 @@ fn a_mint_writes_each_technology_spelling() {
         assert!(
             line.read(file).contains(expected),
             "{tech}: {}",
+            line.read(file)
+        );
+    }
+}
+
+/// The files one commit changed, sorted.
+fn commit_files(work: &Path, commit: &str) -> Vec<String> {
+    let mut files: Vec<String> = git_out(work, &["show", "--name-only", "--format=", commit])
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    files.sort();
+    files
+}
+
+/// SATISFIES release-candidates:a-line-derives-its-candidate
+///
+/// A python cut writes its candidate through uv version, which relocks, so
+/// the commit the mint pushes carries `pyproject.toml` and `uv.lock`, both
+/// at the PEP 440 spelling.
+#[test]
+fn a_python_cut_commits_the_lock() {
+    let line = MintLine::new("python");
+    let tip = line.head();
+    let report = line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    assert_eq!(report["mode"], "minted", "{report}");
+    assert_eq!(report["version"], "1.4.3rc1", "{report}");
+    let commit = report["commit"]
+        .as_str()
+        .expect("the mint commit")
+        .to_owned();
+    assert_eq!(
+        commit_files(&line.work, &commit),
+        ["pyproject.toml", "uv.lock"]
+    );
+    assert!(
+        line.read("pyproject.toml")
+            .contains("version = \"1.4.3rc1\""),
+        "{}",
+        line.read("pyproject.toml")
+    );
+    assert!(
+        line.read("uv.lock").contains("version = \"1.4.3rc1\""),
+        "{}",
+        line.read("uv.lock")
+    );
+    let log = std::fs::read_to_string(line.dir.path().join("stubs/state/log")).expect("reads");
+    assert!(log.contains("uv version 1.4.3rc1 --no-sync"), "{log}");
+    assert_eq!(
+        line.remote_refs("refs/heads/release/1.4")
+            .split_whitespace()
+            .next(),
+        Some(commit.as_str())
+    );
+}
+
+/// SATISFIES release-candidates:a-promotion-writes-only-tested-code
+///
+/// A python promotion writes the stable version through uv version into
+/// `pyproject.toml` and `uv.lock`, and a candidate commit after the tagged
+/// one that changed only those two files is a version change, never
+/// untested code.
+#[test]
+fn a_python_promote_commits_the_lock() {
+    let line = MintLine::new("python");
+    let tip = line.head();
+    line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    line.remote_tag("v1.4.3-rc.1");
+    let tested = line.head();
+    let second = line.mint_json(&["1.4", "--expect", &tested, "--apply"]);
+    assert_eq!(second["version"], "1.4.3rc2", "{second}");
+    let candidate = line.head();
+    assert_eq!(
+        commit_files(&line.work, &candidate),
+        ["pyproject.toml", "uv.lock"]
+    );
+    let report = line.mint_json(&["1.4", "--promote", "--expect", &candidate, "--apply"]);
+    assert_eq!(report["mode"], "promoted", "{report}");
+    assert_eq!(report["version"], "1.4.3", "{report}");
+    let commit = report["commit"]
+        .as_str()
+        .expect("the promote commit")
+        .to_owned();
+    assert_eq!(
+        commit_files(&line.work, &commit),
+        ["pyproject.toml", "uv.lock"]
+    );
+    for file in ["pyproject.toml", "uv.lock"] {
+        assert!(
+            line.read(file).contains("version = \"1.4.3\""),
+            "{file}: {}",
             line.read(file)
         );
     }
@@ -20574,8 +20705,16 @@ fn both_github_scanners_carry_the_permissions_the_upload_needs() {
 /// target's dimensions is no reason to refuse the release it can.
 #[test]
 fn a_binding_with_no_scanner_reports_the_capability_unavailable() {
-    for (tech, forge) in [("bash", "github"), ("bash", "gitlab"), ("python", "github")] {
+    for (tech, forge) in [
+        ("bash", "github"),
+        ("bash", "gitlab"),
+        ("python", "github"),
+        ("python", "gitlab"),
+    ] {
         let target = tempfile::tempdir().expect("a scratch dir exists");
+        if tech == "python" {
+            seed_uv_project(target.path(), "0.1.0");
+        }
         rk().args(["init", "--tech", tech, "--forge", forge])
             .args(["--repo", "acme/widget", "--code-scanning", "semgrep"])
             .arg("--target")
@@ -26777,9 +26916,14 @@ fn private_reporting_policy_lands_in_every_supported_pair() {
         ("python", "github"),
         ("bash", "github"),
         ("rust", "gitlab"),
+        ("python", "gitlab"),
         ("bash", "gitlab"),
     ] {
         let target = tempfile::tempdir().unwrap();
+        if tech == "python" {
+            seed_uv_project(target.path(), "0.1.0");
+        }
+        let seeded = reporting_tree(target.path());
         let repo = if forge == "gitlab" {
             "acme/group/widget"
         } else {
@@ -26795,7 +26939,7 @@ fn private_reporting_policy_lands_in_every_supported_pair() {
             .assert()
             .success()
             .stdout(predicate::str::contains("SECURITY.md"));
-        assert!(reporting_tree(target.path()).is_empty());
+        assert_eq!(reporting_tree(target.path()), seeded);
         preview.arg("--apply").assert().success();
         let manifest = read_manifest(target.path());
         let file = manifest_file(&manifest, "SECURITY.md");
@@ -27027,6 +27171,9 @@ fn authored_policy(forge: &str) -> String {
 /// Land one pair into a fresh target and return it.
 fn land_pair(tech: &str, forge: &str) -> tempfile::TempDir {
     let target = tempfile::tempdir().expect("a scratch target exists");
+    if tech == "python" {
+        seed_uv_project(target.path(), "0.1.0");
+    }
     rk().args(["init", "--tech", tech, "--forge", forge])
         .args(["--repo", "acme/widget", "--target"])
         .arg(target.path())
@@ -27034,6 +27181,21 @@ fn land_pair(tech: &str, forge: &str) -> tempfile::TempDir {
         .assert()
         .success();
     target
+}
+
+/// Seed a uv project with a static `version` and its lock into `target`,
+/// the shape a python landing requires.
+fn seed_uv_project(target: &Path, version: &str) {
+    std::fs::write(
+        target.join("pyproject.toml"),
+        format!("[project]\nname = \"acme\"\nversion = \"{version}\"\n"),
+    )
+    .expect("the project file writes");
+    std::fs::write(
+        target.join("uv.lock"),
+        format!("version = 1\n\n[[package]]\nname = \"acme\"\nversion = \"{version}\"\nsource = {{ editable = \".\" }}\n"),
+    )
+    .expect("the lock writes");
 }
 
 /// The landed policy, as text.
@@ -27049,6 +27211,7 @@ fn the_default_policy_lands_as_its_forge_authored_it() {
         ("rust", "github"),
         ("rust", "gitlab"),
         ("python", "github"),
+        ("python", "gitlab"),
         ("bash", "github"),
         ("bash", "gitlab"),
     ] {
@@ -30782,8 +30945,7 @@ fn release_workflow(driver: &str, integration: release_kit::landing::Integration
     );
     let file = match driver {
         "rust" => "release-plz.yml",
-        "python" => "release-please.yml",
-        "bash" => "release.yml",
+        "python" | "bash" => "release.yml",
         other => panic!("{other} has no GitHub release workflow"),
     };
     let source = release_kit::embedded::SNIPPETS
@@ -31422,9 +31584,9 @@ fn a_forge_integrated_target_keeps_the_standing_arm() {
     use release_kit::landing::Integration;
     for driver in ["rust", "python", "bash"] {
         let text = release_workflow(driver, Integration::Forge);
-        // The bash pair arms inside rk release request, so its workflow
+        // The engine pairs arm inside rk release request, so their workflow
         // carries no arm, and the engine arms where the authored arm would.
-        if driver == "bash" {
+        if matches!(driver, "bash" | "python") {
             assert!(!text.contains("gh pr merge"), "{driver}");
             assert!(engine_arms(Integration::Forge), "{driver}");
         } else {
@@ -31557,7 +31719,7 @@ fn each_driver_proves_its_release_request_identity() {
     use release_kit::landing::Integration;
     for (driver, shape) in [
         ("rust", "BRANCH_SHAPE: release-plz-"),
-        ("python", "BRANCH_SHAPE: release-please--branches--master"),
+        ("python", "BRANCH_SHAPE: rk-release/"),
         ("bash", "BRANCH_SHAPE: rk-release/"),
     ] {
         let text = release_workflow(driver, Integration::Local);
@@ -31591,11 +31753,7 @@ fn each_driver_proves_its_release_request_identity() {
 fn an_imitating_request_never_merges() {
     for (driver, branch, shape) in [
         ("rust", "release-plz-imitation", "release-plz-"),
-        (
-            "python",
-            "release-please--branches--master",
-            "release-please--branches--master",
-        ),
+        ("python", "rk-release/master", "rk-release/"),
         ("bash", "rk-release/master", "rk-release/"),
     ] {
         let mut owned = gate_candidate(7, "imitation");
@@ -37480,15 +37638,17 @@ fn the_observation_proposes_a_release_mode() {
 }
 
 /// SATISFIES project-profile:an-operation-refuses-only-what-it-requires
+/// SATISFIES landing:a-landing-writes-what-the-catalog-selects
 /// A profile may request a release this binary cannot land: the preview
-/// reports it unavailable with the tuples that are, and the apply refuses
-/// before any write rather than recording an automation nothing landed.
+/// reports the automation with the bindings that exist, and the apply
+/// refuses before any write rather than recording an automation nothing
+/// landed.
 #[test]
-fn python_on_gitlab_reports_unavailable_and_apply_refuses() {
+fn an_unknown_driver_reports_its_automation_and_apply_refuses() {
     let target = bare_target();
     let flags = [
         "--technology",
-        "python",
+        "go",
         "--forge",
         "gitlab",
         "--repo",
@@ -37496,7 +37656,7 @@ fn python_on_gitlab_reports_unavailable_and_apply_refuses() {
         "--release-mode",
         "automatic",
         "--release-driver",
-        "python",
+        "go",
         "--target",
     ];
     rk().arg("init")
@@ -37505,9 +37665,9 @@ fn python_on_gitlab_reports_unavailable_and_apply_refuses() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "capability release.automation: unavailable",
+            "capability release.automation: unknown",
         ))
-        .stdout(predicate::str::contains("python, github"));
+        .stdout(predicate::str::contains("bash, python, rust"));
     rk().arg("init")
         .args(flags)
         .arg(target.path())
@@ -39371,7 +39531,8 @@ dir="$(dirname "$0")/answers"
 printf '%s\n' "$url" >> "$dir/calls.log"
 if [ -f "$dir/curl-$key" ]; then cat "$dir/curl-$key"; else printf 404; fi
 "#;
-        for (name, body) in [("gh", gh), ("curl", curl)] {
+        // glab answers the same API paths the same way, under its own name.
+        for (name, body) in [("gh", gh), ("glab", gh), ("curl", curl)] {
             let path = mock.path().join(name);
             std::fs::write(&path, body).expect("the mock writes");
             #[cfg(unix)]
@@ -39467,6 +39628,7 @@ if [ -f "$dir/curl-$key" ]; then cat "$dir/curl-$key"; else printf 404; fi
         let mut command = rk();
         command
             .env("RK_GH_BIN", self.mock.path().join("gh"))
+            .env("RK_GLAB_BIN", self.mock.path().join("glab"))
             .env("RK_CURL_BIN", self.mock.path().join("curl"))
             .env("RK_RELEASE_WAIT_INTERVAL_MS", "10")
             .args(["release", "status", "--json", "--target"])
@@ -40124,6 +40286,443 @@ fn release_status_wait_reads_the_tag_a_trunk_run_made() {
     assert_ne!(report["last_release"]["published"], "yes", "{report}");
 }
 
+/// A python target landed on `forge` at 0.2.0, in a repository with one
+/// commit, with `release` appended to the release table first.
+fn python_release_target(forge: &str, release: &str) -> tempfile::TempDir {
+    let target = status_repo();
+    seed_uv_project(target.path(), "0.2.0");
+    if !release.is_empty() {
+        write_release_config(target.path(), release);
+    }
+    rk().args(["init", "--tech", "python", "--forge", forge])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "forge",
+            "--target",
+        ])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    target
+}
+
+/// The GitHub forge of a python project whose v0.2.0 published with an
+/// sdist, a wheel, and the checksum file, from a merged engine request.
+fn python_github_forge(wheel_attested: bool) -> ReleaseForge {
+    let forge = ReleaseForge::new();
+    forge
+        .answer(PULLS_OPEN, &serde_json::json!([]))
+        .answer(
+            PULLS_CLOSED,
+            &serde_json::json!([{
+                "number": 11, "title": "chore(release): release v0.2.0",
+                "head": {"ref": "rk-release/master", "sha": "c0ffee"},
+                "merged_at": "2026-11-12T10:00:00Z"
+            }]),
+        )
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v0.2.0", "commit": {"sha": "aaa"}}]),
+        )
+        .answer(
+            "repos/acme/widget/releases/tags/v0.2.0",
+            &serde_json::json!({"assets": [
+                {"name": "acme-0.2.0.tar.gz", "digest": "sha256:d1"},
+                {"name": "acme-0.2.0-py3-none-any.whl", "digest": "sha256:d2"},
+                {"name": "SHA256SUMS", "digest": "sha256:d3"}
+            ]}),
+        )
+        .answer(
+            "repos/acme/widget/attestations/sha256:d1",
+            &serde_json::json!({"attestations": [{"bundle": {}}]}),
+        )
+        .answer(
+            "repos/acme/widget/attestations/sha256:d2",
+            &serde_json::json!({"attestations": if wheel_attested { serde_json::json!([{"bundle": {}}]) } else { serde_json::json!([]) }}),
+        )
+        .registry("https://pypi.org/pypi/acme/0.2.0/json", "200");
+    forge
+}
+
+/// The GitLab forge of a python project whose v0.2.0 release page carries
+/// the sdist, the wheel, the checksum file, and a provenance bundle beside
+/// each distribution the provenance job signed.
+fn python_gitlab_forge(bundles: &[&str]) -> ReleaseForge {
+    let project = "projects/acme%2Fwidget";
+    let mut links = vec![
+        serde_json::json!({"name": "acme-0.2.0.tar.gz"}),
+        serde_json::json!({"name": "acme-0.2.0-py3-none-any.whl"}),
+        serde_json::json!({"name": "SHA256SUMS"}),
+    ];
+    links.extend(
+        bundles
+            .iter()
+            .map(|name| serde_json::json!({"name": format!("{name}.sigstore.json")})),
+    );
+    let forge = ReleaseForge::new();
+    forge
+        .answer(
+            &format!("{project}/merge_requests?state=opened&target_branch=master&per_page=100"),
+            &serde_json::json!([]),
+        )
+        .answer(
+            &format!("{project}/merge_requests?state=merged&target_branch=master&order_by=updated_at&sort=desc&per_page=30"),
+            &serde_json::json!([{
+                "iid": 5, "title": "chore(release): release v0.2.0",
+                "source_branch": "rk-release/master",
+                "merged_at": "2026-11-12T10:00:00Z"
+            }]),
+        )
+        .answer(
+            &format!("{project}/repository/tags?per_page=100"),
+            &serde_json::json!([{"name": "v0.2.0", "commit": {"id": "aaa"}}]),
+        )
+        .answer(
+            &format!("{project}/releases/v0.2.0"),
+            &serde_json::json!({"assets": {"links": links}}),
+        );
+    forge
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// `rk release status` reads a python release on each forge: the engine's
+/// request branch, the page with the sdist and the wheel, each one's
+/// attestation, `PyPI` where the answer is `pypi`, and the page alone where
+/// it is `none`. A distribution no attestation covers is a symptom, and
+/// the checksum file needs none.
+#[test]
+fn release_status_reads_the_python_page_on_each_forge() {
+    let github = python_release_target("github", "");
+    let forge = python_github_forge(true);
+    let report = forge.report(github.path(), &[]);
+    assert_eq!(report["last_release"]["tag"], "v0.2.0", "{report}");
+    assert_eq!(report["last_release"]["published"], "yes", "{report}");
+    assert_eq!(
+        report["last_release"]["artifacts_verified"], "yes",
+        "{report}"
+    );
+    assert!(
+        report["symptoms"].as_array().is_some_and(Vec::is_empty),
+        "{report}"
+    );
+    let calls = forge.calls();
+    assert!(
+        calls.contains("https://pypi.org/pypi/acme/0.2.0/json"),
+        "{calls}"
+    );
+    assert!(!calls.contains("attestations/sha256:d3"), "{calls}");
+
+    let unattested = python_github_forge(false);
+    let report = unattested.report(github.path(), &[]);
+    let symptoms = report["symptoms"].as_array().expect("the symptoms");
+    assert!(
+        symptoms
+            .iter()
+            .any(|symptom| symptom["code"] == "artifact-without-attestation"
+                && symptom["evidence"]
+                    .as_str()
+                    .is_some_and(|evidence| evidence.contains("acme-0.2.0-py3-none-any.whl"))),
+        "{report}"
+    );
+
+    // Under none the page is the publication, and PyPI is never asked.
+    let gitlab = python_release_target("gitlab", "registry = \"none\"\n");
+    let forge = python_gitlab_forge(&["acme-0.2.0.tar.gz", "acme-0.2.0-py3-none-any.whl"]);
+    let report = forge.report(gitlab.path(), &[]);
+    assert_eq!(report["forge"]["read"], "yes", "{report}");
+    assert_eq!(report["last_release"]["tag"], "v0.2.0", "{report}");
+    assert_eq!(report["last_release"]["published"], "yes", "{report}");
+    assert_eq!(
+        report["last_release"]["artifacts_verified"], "yes",
+        "{report}"
+    );
+    assert!(
+        report["symptoms"].as_array().is_some_and(Vec::is_empty),
+        "{report}"
+    );
+    assert!(!forge.calls().contains("pypi.org"), "{}", forge.calls());
+
+    let unsigned = python_gitlab_forge(&["acme-0.2.0.tar.gz"]);
+    let report = unsigned.report(gitlab.path(), &[]);
+    assert_eq!(
+        report["last_release"]["artifacts_verified"], "no",
+        "{report}"
+    );
+    let symptoms = report["symptoms"].as_array().expect("the symptoms");
+    assert!(
+        symptoms
+            .iter()
+            .any(|symptom| symptom["code"] == "artifact-without-attestation"
+                && symptom["evidence"]
+                    .as_str()
+                    .is_some_and(|evidence| evidence.contains("acme-0.2.0-py3-none-any.whl"))),
+        "{report}"
+    );
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// The checksum file and a provenance bundle are support material, never
+/// a release artifact. A page that carries only them, on each forge, has
+/// no verified artifact, shows the published-no-artifacts symptom, and is
+/// no complete release for the cutoff of the tags before it. The
+/// distributions beside the checksum file still read verified, as
+/// `release_status_reads_the_python_page_on_each_forge` proves.
+#[test]
+fn a_page_of_support_files_alone_is_no_verified_release() {
+    let assert_incomplete = |report: &serde_json::Value| {
+        assert_eq!(
+            report["last_release"]["artifacts_verified"], "no",
+            "{report}"
+        );
+        let symptoms = report["symptoms"].as_array().expect("the symptoms");
+        for code in ["published-no-artifacts", "tag-without-release"] {
+            assert!(
+                symptoms.iter().any(|symptom| symptom["code"] == code
+                    && symptom["evidence"]
+                        .as_str()
+                        .is_some_and(|evidence| evidence.contains("v0.2.0"))),
+                "{code}: {report}"
+            );
+        }
+    };
+
+    let github = python_release_target("github", "registry = \"none\"\n");
+    let forge = ReleaseForge::new();
+    forge
+        .answer(PULLS_OPEN, &serde_json::json!([]))
+        .answer(PULLS_CLOSED, &serde_json::json!([]))
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v0.2.0", "commit": {"sha": "aaa"}}]),
+        )
+        .answer(
+            "repos/acme/widget/releases/tags/v0.2.0",
+            &serde_json::json!({"assets": [
+                {"name": "SHA256SUMS", "digest": "sha256:d3"},
+                {"name": "acme-0.2.0.tar.gz.sigstore.json", "digest": "sha256:d4"}
+            ]}),
+        )
+        .answer(
+            "repos/acme/widget/attestations/sha256:d4",
+            &serde_json::json!({"attestations": [{"bundle": {}}]}),
+        );
+    let report = forge.report(github.path(), &[]);
+    assert_eq!(report["last_release"]["published"], "yes", "{report}");
+    assert_incomplete(&report);
+
+    let gitlab = python_release_target("gitlab", "registry = \"none\"\n");
+    let project = "projects/acme%2Fwidget";
+    let forge = ReleaseForge::new();
+    forge
+        .answer(
+            &format!("{project}/merge_requests?state=opened&target_branch=master&per_page=100"),
+            &serde_json::json!([]),
+        )
+        .answer(
+            &format!("{project}/merge_requests?state=merged&target_branch=master&order_by=updated_at&sort=desc&per_page=30"),
+            &serde_json::json!([]),
+        )
+        .answer(
+            &format!("{project}/repository/tags?per_page=100"),
+            &serde_json::json!([{"name": "v0.2.0", "commit": {"id": "aaa"}}]),
+        )
+        .answer(
+            &format!("{project}/releases/v0.2.0"),
+            &serde_json::json!({"assets": {"links": [
+                {"name": "SHA256SUMS"},
+                {"name": "acme-0.2.0.tar.gz.sigstore.json"}
+            ]}}),
+        );
+    let report = forge.report(gitlab.path(), &[]);
+    assert_eq!(report["last_release"]["published"], "yes", "{report}");
+    assert_incomplete(&report);
+}
+
+/// SATISFIES release-state:a-wait-selects-runs-by-commit
+///
+/// A python release builds and publishes in one run on each forge, so the
+/// wait reads that one run as both the publish and the artifact run, and
+/// reads the tag it made once it concluded.
+#[test]
+fn release_status_waits_for_the_python_release_run() {
+    let github = python_release_target("github", "");
+    let forge = python_github_forge(true);
+    let runs = "repos/acme/widget/actions/runs?head_sha=aaa&per_page=100";
+    let run = |done: bool| {
+        serde_json::json!({
+            "id": 30, "head_sha": "aaa", "event": "push",
+            "status": if done { "completed" } else { "in_progress" },
+            "conclusion": if done { serde_json::json!("success") } else { serde_json::Value::Null },
+            "path": ".github/workflows/release.yml", "head_branch": "master"
+        })
+    };
+    forge.answer_in_turn(
+        runs,
+        &[
+            serde_json::json!({ "workflow_runs": [run(false)] }),
+            serde_json::json!({ "workflow_runs": [run(true)] }),
+        ],
+    );
+    let report = forge.report(github.path(), &["--wait", "aaa", "--timeout", "5"]);
+    let wait = &report["wait"];
+    assert_eq!(wait["timed_out"], false, "{report}");
+    assert_eq!(wait["publish"]["id"], 30, "{report}");
+    assert_eq!(wait["artifact"]["id"], 30, "{report}");
+    assert_eq!(wait["tag"], "v0.2.0", "{report}");
+    assert_eq!(
+        report["last_release"]["artifacts_verified"], "yes",
+        "{report}"
+    );
+
+    // A candidate's run made a candidate tag, and PyPI knows the candidate
+    // in its PEP 440 spelling.
+    let candidate = ReleaseForge::new();
+    candidate
+        .answer(PULLS_OPEN, &serde_json::json!([]))
+        .answer(PULLS_CLOSED, &serde_json::json!([]))
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v0.2.0-rc.1", "commit": {"sha": "aaa"}}]),
+        )
+        .answer(
+            "repos/acme/widget/releases/tags/v0.2.0-rc.1",
+            &serde_json::json!({"assets": []}),
+        )
+        .answer(runs, &serde_json::json!({ "workflow_runs": [run(true)] }))
+        .registry("https://pypi.org/pypi/acme/0.2.0rc1/json", "200");
+    let report = candidate.report(github.path(), &["--wait", "aaa", "--timeout", "5"]);
+    assert_eq!(report["wait"]["tag"], "v0.2.0-rc.1", "{report}");
+    assert_eq!(report["last_release"]["published"], "yes", "{report}");
+    assert!(
+        candidate
+            .calls()
+            .contains("https://pypi.org/pypi/acme/0.2.0rc1/json"),
+        "{}",
+        candidate.calls()
+    );
+
+    let gitlab = python_release_target("gitlab", "registry = \"none\"\n");
+    let forge = python_gitlab_forge(&["acme-0.2.0.tar.gz", "acme-0.2.0-py3-none-any.whl"]);
+    let pipelines = "projects/acme%2Fwidget/pipelines?sha=aaa&per_page=100";
+    forge.answer_in_turn(
+        pipelines,
+        &[
+            serde_json::json!([{"id": 40, "sha": "aaa", "ref": "master", "source": "push", "status": "running"}]),
+            serde_json::json!([{"id": 40, "sha": "aaa", "ref": "master", "source": "push", "status": "success"}]),
+        ],
+    );
+    let report = forge.report(gitlab.path(), &["--wait", "aaa", "--timeout", "5"]);
+    let wait = &report["wait"];
+    assert_eq!(wait["timed_out"], false, "{report}");
+    assert_eq!(wait["publish"]["id"], 40, "{report}");
+    assert_eq!(wait["artifact"]["id"], 40, "{report}");
+    assert_eq!(wait["tag"], "v0.2.0", "{report}");
+}
+
+/// A `tech` engine target landed on GitLab at 1.4.2, in a repository with
+/// one commit, publishing to no registry.
+fn engine_gitlab_target(tech: &str) -> tempfile::TempDir {
+    let target = status_repo();
+    if tech == "python" {
+        seed_uv_project(target.path(), "1.4.2");
+        write_release_config(target.path(), "registry = \"none\"\n");
+    }
+    rk().args(["init", "--tech", tech, "--forge", "gitlab"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "forge",
+            "--target",
+        ])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    target
+}
+
+/// SATISFIES release-state:a-wait-selects-runs-by-commit
+///
+/// An engine release on GitLab builds and publishes in the branch-push
+/// pipeline of the commit it released, on the trunk or on a release line.
+/// The wait concludes with that pipeline's outcome, for a final version
+/// and for a candidate, on python and on bash. A pipeline at another
+/// commit, a merge-request, schedule, or child pipeline at the same
+/// commit, and the tag's own pipeline are never selected, each concluding
+/// the other way.
+#[test]
+fn an_engine_wait_on_gitlab_follows_the_release_line_pipeline() {
+    let project = "projects/acme%2Fwidget";
+    let pipelines = format!("{project}/pipelines?sha=aaa&per_page=100");
+    for tech in ["python", "bash"] {
+        let target = engine_gitlab_target(tech);
+        for tag in ["v1.4.3", "v1.4.3-rc.1"] {
+            for outcome in ["success", "failed"] {
+                let other = if outcome == "success" {
+                    "failed"
+                } else {
+                    "success"
+                };
+                let distractors = [
+                    serde_json::json!({"id": 31, "sha": "bbb", "ref": "release/1.4", "source": "push", "status": other}),
+                    serde_json::json!({"id": 32, "sha": "aaa", "ref": "refs/merge-requests/7/head", "source": "merge_request_event", "status": other}),
+                    serde_json::json!({"id": 33, "sha": "aaa", "ref": "release/1.4", "source": "merge_request_event", "status": other}),
+                    serde_json::json!({"id": 34, "sha": "aaa", "ref": "release/1.4", "source": "schedule", "status": other}),
+                    serde_json::json!({"id": 35, "sha": "aaa", "ref": "release/1.4", "source": "parent_pipeline", "status": other}),
+                    serde_json::json!({"id": 36, "sha": "aaa", "ref": tag, "source": "push", "status": other}),
+                    serde_json::json!({"id": 37, "sha": "aaa", "ref": "master", "source": "schedule", "status": other}),
+                ];
+                let body = |status: &str| {
+                    let mut list = distractors.to_vec();
+                    list.push(serde_json::json!({"id": 50, "sha": "aaa", "ref": "release/1.4", "source": "push", "status": status}));
+                    serde_json::Value::Array(list)
+                };
+                let forge = ReleaseForge::new();
+                forge
+                    .answer(
+                        &format!("{project}/merge_requests?state=opened&target_branch=master&per_page=100"),
+                        &serde_json::json!([]),
+                    )
+                    .answer(
+                        &format!("{project}/merge_requests?state=merged&target_branch=master&order_by=updated_at&sort=desc&per_page=30"),
+                        &serde_json::json!([]),
+                    )
+                    .answer(
+                        &format!("{project}/repository/tags?per_page=100"),
+                        &serde_json::json!([{"name": tag, "commit": {"id": "aaa"}}]),
+                    )
+                    .answer(
+                        &format!("{project}/releases/{tag}"),
+                        &serde_json::json!({"assets": {"links": [
+                            {"name": "widget-1.4.3.tar.gz"},
+                            {"name": "widget-1.4.3.tar.gz.sigstore.json"}
+                        ]}}),
+                    )
+                    .answer_in_turn(&pipelines, &[body("running"), body(outcome)]);
+                let run = forge
+                    .rk(target.path(), &["--wait", "aaa", "--timeout", "5"])
+                    .assert()
+                    .code(i32::from(outcome != "success"));
+                let report: serde_json::Value =
+                    serde_json::from_slice(&run.get_output().stdout).expect("one JSON object");
+                let wait = &report["wait"];
+                let case = format!("{tech} {tag} {outcome}");
+                assert_eq!(wait["publish"]["id"], 50, "{case}: {report}");
+                assert_eq!(wait["artifact"]["id"], 50, "{case}: {report}");
+                assert_eq!(wait["timed_out"], false, "{case}: {report}");
+                assert_eq!(wait["publish"]["conclusion"], outcome, "{case}: {report}");
+                assert_eq!(wait["tag"], tag, "{case}: {report}");
+            }
+        }
+    }
+}
+
 /// The milestone events of one `rk setup check --json`, by id.
 fn milestones_of(
     forge: &ReleaseForge,
@@ -40234,6 +40833,43 @@ fn setup_check_reports_the_publish_milestones() {
         found["trusted-publishing-required"].0, "operator",
         "{found:?}"
     );
+
+    // A python release publishes from release.yml, whose filename and
+    // pypi environment the trusted publisher names, and under none it
+    // has no registry milestone and no registry form at all.
+    let python = python_release_target("github", "");
+    let shipped = ReleaseForge::new();
+    shipped
+        .registry("https://pypi.org/pypi/acme/json", "200")
+        .answer(
+            "repos/acme/widget/releases?per_page=1",
+            &serde_json::json!([{"tag_name": "v0.2.0"}]),
+        )
+        .answer(
+            "repos/acme/widget/commits/v0.2.0",
+            &serde_json::json!({"sha": "aaa"}),
+        )
+        .answer(
+            "repos/acme/widget/actions/workflows/release.yml/runs?branch=master&head_sha=aaa&event=push&status=success&per_page=1",
+            &serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1}]}),
+        );
+    let found = milestones_of(&shipped, python.path());
+    assert_eq!(found["first-version-published"].0, "observed", "{found:?}");
+    assert_eq!(found["automated-release-proven"].0, "observed", "{found:?}");
+    let publisher = &found["trusted-publisher"];
+    assert_eq!(publisher.0, "operator", "{found:?}");
+    assert!(publisher.1.contains("release.yml"), "{found:?}");
+    assert!(publisher.1.contains("environment pypi"), "{found:?}");
+    assert!(!publisher.1.contains("release-please"), "{found:?}");
+    let none = python_release_target("github", "registry = \"none\"\n");
+    let found = milestones_of(&shipped, none.path());
+    assert_eq!(
+        found["first-version-published"].0, "not-applicable",
+        "{found:?}"
+    );
+    assert_eq!(found["automated-release-proven"].0, "observed", "{found:?}");
+    assert!(!found.contains_key("trusted-publisher"), "{found:?}");
+    assert!(!found.contains_key("bootstrap-token-revoked"), "{found:?}");
 }
 
 /// Commit every change in a scratch repository.
@@ -47253,21 +47889,32 @@ fn bash_pipeline_with_environment(forge: &str) -> String {
 #[test]
 fn the_github_release_job_can_read_the_request_merge() {
     use release_kit::landing::Integration;
-    for integration in [Integration::Local, Integration::Forge] {
-        let workflow = release_workflow("bash", integration);
+    for (driver, integration) in [
+        ("bash", Integration::Local),
+        ("bash", Integration::Forge),
+        ("python", Integration::Local),
+        ("python", Integration::Forge),
+    ] {
+        let workflow = release_workflow(driver, integration);
         let job = workflow_job(&workflow, "release");
         let at = job
             .find("actions/create-github-app-token@")
             .expect("the release job mints the app token");
         let mint = &job[at..];
         let mint = &mint[..mint.find("\n      - ").unwrap_or(mint.len())];
-        assert!(mint.contains("permission-contents: write"), "{mint}");
-        assert!(mint.contains("permission-pull-requests: read"), "{mint}");
+        assert!(
+            mint.contains("permission-contents: write"),
+            "{driver}: {mint}"
+        );
+        assert!(
+            mint.contains("permission-pull-requests: read"),
+            "{driver}: {mint}"
+        );
         for action in ["build", "publish"] {
             let step = workflow_step(job, action);
             assert!(
                 step.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
-                "{action}: {step}"
+                "{driver} {action}: {step}"
             );
             assert!(
                 step.contains(&format!("run: rk release {action}")),
@@ -47386,7 +48033,61 @@ fn the_bash_pipelines_carry_no_release_shell() {
 /// SATISFIES release-engine:git-cliff-runs-at-its-pin
 #[test]
 fn every_engine_tool_download_verifies_its_checksum() {
-    let pipeline = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
+    for driver in ["bash", "python"] {
+        every_gitlab_tool_download_verifies_its_checksum(driver);
+    }
+    // The python jobs check the uv installer against the digest authored
+    // beside the pinned version, before they run it.
+    let pipeline = landed_bash_pipeline(land_pair("python", "gitlab").path(), "gitlab");
+    let tooling = gitlab_job(&pipeline, ".tooling");
+    let (uv, installer) = registry_archive("uv");
+    assert!(
+        tooling.contains(&format!("    UV_PIN: \"{uv}\"\n")),
+        "{tooling}"
+    );
+    assert!(
+        tooling.contains(&format!("    UV_PIN_INSTALLER_SHA256: \"{installer}\"\n")),
+        "{tooling}"
+    );
+    let lines: Vec<&str> = tooling.lines().collect();
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains("uv-installer.sh") && line.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle} line for the uv installer: {tooling}"))
+    };
+    let (fetch, check, run) = (
+        at("curl -fsSL -o"),
+        at("sha256sum -c -"),
+        at("UV_UNMANAGED_INSTALL"),
+    );
+    assert!(
+        lines[check].contains("${UV_PIN_INSTALLER_SHA256}"),
+        "{}",
+        lines[check]
+    );
+    assert!(fetch < check && check < run, "{tooling}");
+    let version = env!("CARGO_PKG_VERSION");
+    let workflow = landed_bash_pipeline(land_pair("bash", "github").path(), "github");
+    let (cliff, _) = registry_archive("git-cliff");
+    for job in ["release-request", "release"] {
+        let body = workflow_job(&workflow, job);
+        assert!(
+            body.contains(&format!("pipx install git-cliff=={cliff}")),
+            "{job}: {body}"
+        );
+        assert!(
+            body.contains(&format!("RK_VERSION: \"{version}\"")),
+            "{job}: {body}"
+        );
+    }
+}
+
+/// The GitLab rk jobs of `driver` check every archive they fetch against
+/// the SHA-256 `versions.toml` records before they unpack it, and install
+/// rk at the landing binary's version.
+fn every_gitlab_tool_download_verifies_its_checksum(driver: &str) {
+    let pipeline = landed_bash_pipeline(land_pair(driver, "gitlab").path(), "gitlab");
     let tooling = gitlab_job(&pipeline, ".tooling");
     for (tool, var) in [("git-cliff", "GIT_CLIFF"), ("glab", "GLAB")] {
         let (version, sha256) = registry_archive(tool);
@@ -47433,19 +48134,6 @@ fn every_engine_tool_download_verifies_its_checksum() {
         )),
         "{tooling}"
     );
-    let workflow = landed_bash_pipeline(land_pair("bash", "github").path(), "github");
-    let (cliff, _) = registry_archive("git-cliff");
-    for job in ["release-request", "release"] {
-        let body = workflow_job(&workflow, job);
-        assert!(
-            body.contains(&format!("pipx install git-cliff=={cliff}")),
-            "{job}: {body}"
-        );
-        assert!(
-            body.contains(&format!("RK_VERSION: \"{version}\"")),
-            "{job}: {body}"
-        );
-    }
 }
 
 /// Under a recorded development environment every rk job takes the
@@ -47577,6 +48265,547 @@ fn each_engine_job_installs_rk_at_the_landing_version_without_an_environment() {
             "{job}: {body}"
         );
     }
+}
+
+/// Land python on `forge` over a uv project, with `config` appended to the
+/// release table first, and answer the target.
+fn land_python(forge: &str, release: &str) -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    seed_uv_project(target.path(), "0.1.0");
+    if !release.is_empty() {
+        write_release_config(target.path(), release);
+    }
+    rk().args(["init", "--tech", "python", "--forge", forge])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    target
+}
+
+/// A python landing refused before any write: the command exits 73 naming
+/// the remedy, and the target holds what it held before.
+fn assert_python_landing_refused(target: &Path, remedy: &str) {
+    let before = tree_digests(target);
+    for forge in ["github", "gitlab"] {
+        let out = rk()
+            .args(["init", "--tech", "python", "--forge", forge])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target)
+            .arg("--apply")
+            .output()
+            .expect("the landing runs");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(73), "{forge}: {stderr}");
+        assert!(
+            stderr.contains("prerequisite-unmet")
+                || stderr.contains("cannot take the selected release driver"),
+            "{forge}: {stderr}"
+        );
+        assert!(stderr.contains(remedy), "{forge}: {stderr}");
+        assert_eq!(
+            tree_digests(target),
+            before,
+            "{forge}: a refused landing writes nothing"
+        );
+        assert!(!target.join(".release-kit").exists(), "{forge}");
+    }
+    // The preview names the refusal before the operator applies.
+    rk().args(["init", "--tech", "python", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "the apply refuses until the project takes the release driver",
+        ));
+}
+
+/// SATISFIES project-profile:release-intent-has-three-modes
+///
+/// The committed version must lead the tag, so a python project whose
+/// version is dynamic, or absent, refuses before any write and names the
+/// static version as the remedy.
+#[test]
+fn a_python_landing_refuses_a_dynamic_version() {
+    for project in [
+        "[project]\nname = \"acme\"\ndynamic = [\"version\"]\n",
+        "[project]\nname = \"acme\"\n",
+    ] {
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        std::fs::write(target.path().join("pyproject.toml"), project).expect("writes");
+        std::fs::write(target.path().join("uv.lock"), "version = 1\n").expect("writes");
+        assert_python_landing_refused(target.path(), "static version");
+    }
+}
+
+/// SATISFIES project-profile:release-intent-has-three-modes
+///
+/// The python release writes every version through uv version, which
+/// relocks, so a project with no `uv.lock` refuses before any write and
+/// names `uv lock` as the remedy.
+#[test]
+fn a_python_landing_refuses_a_missing_lock() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    seed_uv_project(target.path(), "0.1.0");
+    std::fs::remove_file(target.path().join("uv.lock")).expect("removes");
+    assert_python_landing_refused(target.path(), "uv lock");
+}
+
+/// SATISFIES project-profile:release-intent-has-three-modes
+///
+/// `registry = "none"` reaches the record and every python pipeline holds
+/// no `PyPI` step, no `pypi` environment, and no `PyPI` token, while the
+/// provenance of the release page stays.
+#[test]
+fn the_python_registry_answer_none_publishes_nothing() {
+    for forge in ["github", "gitlab"] {
+        let target = land_python(forge, "registry = \"none\"\n");
+        assert_eq!(
+            read_manifest(target.path())["profile"]["release"]["registry"],
+            "none",
+            "{forge}"
+        );
+        let pipeline = landed_bash_pipeline(target.path(), forge);
+        for absent in [
+            "gh-action-pypi-publish",
+            "environment: pypi",
+            "PYPI_ID_TOKEN",
+            "aud: pypi",
+            "uv publish",
+            "pypi-attestations",
+            "upload to PyPI",
+            "RK_IF",
+        ] {
+            assert!(
+                !pipeline.contains(absent),
+                "{forge} carries {absent}: {pipeline}"
+            );
+        }
+        if forge == "github" {
+            let release = workflow_job(&pipeline, "release");
+            assert!(release.contains("id-token: write"), "{release}");
+            assert!(release.contains("actions/attest@"), "{release}");
+        } else {
+            assert!(!pipeline.contains("\npypi:"), "{pipeline}");
+            assert!(!pipeline.contains("- upload\n"), "{pipeline}");
+            let publish = gitlab_job(&pipeline, "publish");
+            assert!(
+                publish.contains("  needs: [\"build\", \"provenance\"]\n"),
+                "{publish}"
+            );
+            assert!(pipeline.contains("aud: sigstore"), "{pipeline}");
+        }
+        let _: serde_json::Value = yaml_serde::from_str(&pipeline).expect("the pipeline parses");
+    }
+    // The unanswered landing publishes to PyPI on both forges.
+    for forge in ["github", "gitlab"] {
+        let target = land_python(forge, "");
+        let pipeline = landed_bash_pipeline(target.path(), forge);
+        assert!(!pipeline.contains("RK_IF"), "{pipeline}");
+        if forge == "github" {
+            assert!(
+                workflow_job(&pipeline, "release").contains("    environment: pypi\n"),
+                "{pipeline}"
+            );
+            assert!(
+                pipeline.contains("pypa/gh-action-pypi-publish@"),
+                "{pipeline}"
+            );
+        } else {
+            let pypi = gitlab_job(&pipeline, "pypi");
+            assert!(
+                pypi.contains("    PYPI_ID_TOKEN:\n      aud: pypi\n"),
+                "{pypi}"
+            );
+            assert!(
+                pypi.contains("uv publish --trusted-publishing always"),
+                "{pypi}"
+            );
+            let publish = gitlab_job(&pipeline, "publish");
+            assert!(
+                publish.contains("  needs: [\"build\", \"provenance\", \"pypi\"]\n"),
+                "{publish}"
+            );
+        }
+        let _: serde_json::Value = yaml_serde::from_str(&pipeline).expect("the pipeline parses");
+    }
+}
+
+/// SATISFIES release-engine:every-step-converges
+///
+/// The upload sends every file of `dist/`, so `dist/` holds exactly the
+/// sdist and the wheel the build reports, and the GitLab signer and the
+/// GitHub upload read nothing else.
+#[test]
+fn the_python_upload_takes_only_the_distributions() {
+    let engine = Engine::new("python", "github", &[], "0.1.0");
+    engine.commit("feat: first feature", &[("a.py", "a = 1\n")]);
+    let number = engine.ok("request")["request"].as_u64().expect("a request");
+    engine.merge(number);
+    let build = engine.ok("build");
+    assert_eq!(build["state"], "release", "{build}");
+    let mut dist: Vec<String> = std::fs::read_dir(engine.dir().join("dist"))
+        .expect("dist exists")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    dist.sort();
+    assert_eq!(dist, ["acme-0.1.0-py3-none-any.whl", "acme-0.1.0.tar.gz"]);
+    let reported: Vec<&str> = build["artifacts"]
+        .as_array()
+        .expect("the artifacts")
+        .iter()
+        .filter_map(|artifact| artifact["path"].as_str())
+        .collect();
+    assert_eq!(
+        reported,
+        ["dist/acme-0.1.0-py3-none-any.whl", "dist/acme-0.1.0.tar.gz"]
+    );
+    let github = landed_bash_pipeline(land_python("github", "").path(), "github");
+    let upload = workflow_step(workflow_job(&github, "release"), "upload to PyPI");
+    assert!(upload.contains("packages-dir: dist/\n"), "{upload}");
+    assert!(upload.contains("skip-existing: true"), "{upload}");
+    let gitlab = landed_bash_pipeline(land_python("gitlab", "").path(), "gitlab");
+    let pypi = gitlab_job(&gitlab, "pypi");
+    assert!(
+        pypi.contains("pypi-attestations sign dist/*.tar.gz dist/*.whl\n"),
+        "{pypi}"
+    );
+    assert!(
+        pypi.contains("--check-url https://pypi.org/simple/\n"),
+        "{pypi}"
+    );
+}
+
+/// The uv a python job installs: the target's exact `required-version`
+/// where it names one, else the `versions.toml` pin, on both forges.
+#[test]
+fn the_python_uv_version_follows_the_target_pin() {
+    let (pin, sha256) = registry_archive("uv");
+    assert_ne!(pin, "0.11.2", "the fixture pins another uv");
+    for (required, expected) in [
+        (None, pin.as_str()),
+        (Some("==0.11.2"), "0.11.2"),
+        (Some(">=0.5"), pin.as_str()),
+    ] {
+        for forge in ["github", "gitlab"] {
+            let target = tempfile::tempdir().expect("a scratch target exists");
+            seed_uv_project(target.path(), "0.1.0");
+            if let Some(required) = required {
+                let path = target.path().join("pyproject.toml");
+                let mut text = std::fs::read_to_string(&path).expect("reads");
+                text = format!("{text}\n[tool.uv]\nrequired-version = \"{required}\"\n");
+                std::fs::write(&path, text).expect("writes");
+            }
+            rk().args(["init", "--tech", "python", "--forge", forge])
+                .args(["--repo", "acme/widget", "--target"])
+                .arg(target.path())
+                .arg("--apply")
+                .assert()
+                .success();
+            let pipeline = landed_bash_pipeline(target.path(), forge);
+            assert!(!pipeline.contains("RK_IF_UV"), "{pipeline}");
+            assert!(!pipeline.contains("RK_UV_REQUIRED"), "{pipeline}");
+            let exact = required.is_some_and(|stated| stated.starts_with("=="));
+            if forge == "github" {
+                for job in ["release-request", "release"] {
+                    let body = workflow_job(&pipeline, job);
+                    assert!(body.contains("astral-sh/setup-uv@"), "{job}: {body}");
+                    // setup-uv installs the project's own exact version
+                    // where it is given no version input.
+                    assert_eq!(
+                        body.contains(&format!("version: \"{pin}\"")),
+                        !exact,
+                        "{required:?} {job}: {body}"
+                    );
+                    assert!(!body.contains("version: \"0.11.2\""), "{body}");
+                }
+            } else {
+                let tooling = gitlab_job(&pipeline, ".tooling");
+                assert!(
+                    tooling.contains(&format!("    UV_VERSION: \"{expected}\"\n")),
+                    "{required:?}: {tooling}"
+                );
+                assert_eq!(tooling.matches("UV_VERSION:").count(), 1, "{tooling}");
+                assert!(
+                    tooling.contains(&format!("    UV_PIN: \"{pin}\"\n")),
+                    "{tooling}"
+                );
+                assert!(
+                    tooling.contains(&format!("    UV_PIN_INSTALLER_SHA256: \"{sha256}\"\n")),
+                    "{tooling}"
+                );
+                assert!(
+                    tooling.contains("releases/download/${UV_VERSION}/uv-installer.sh"),
+                    "{tooling}"
+                );
+            }
+        }
+    }
+}
+
+/// uv reads `uv.toml` alone where it exists and ignores `[tool.uv]` of
+/// `pyproject.toml` beside it. So a `uv.toml` with no exact
+/// `required-version` installs the `versions.toml` pin, given explicitly,
+/// and one with an exact pin installs that pin, on both forges, whatever
+/// `pyproject.toml` requires.
+#[test]
+fn a_uv_toml_alone_answers_the_python_uv_version() {
+    let (pin, _) = registry_archive("uv");
+    assert_ne!(pin, "0.11.2", "the fixture pins another uv");
+    assert_ne!(pin, "0.11.3", "the fixture pins another uv");
+    for (uv_toml, expected) in [
+        ("native-tls = true\n", pin.as_str()),
+        ("required-version = \"==0.11.3\"\n", "0.11.3"),
+    ] {
+        for forge in ["github", "gitlab"] {
+            let target = tempfile::tempdir().expect("a scratch target exists");
+            seed_uv_project(target.path(), "0.1.0");
+            let path = target.path().join("pyproject.toml");
+            let text = std::fs::read_to_string(&path).expect("reads");
+            std::fs::write(
+                &path,
+                format!("{text}\n[tool.uv]\nrequired-version = \"==0.11.2\"\n"),
+            )
+            .expect("writes");
+            std::fs::write(target.path().join("uv.toml"), uv_toml).expect("writes");
+            rk().args(["init", "--tech", "python", "--forge", forge])
+                .args(["--repo", "acme/widget", "--target"])
+                .arg(target.path())
+                .arg("--apply")
+                .assert()
+                .success();
+            let pipeline = landed_bash_pipeline(target.path(), forge);
+            assert!(!pipeline.contains("0.11.2"), "{uv_toml}: {pipeline}");
+            if forge == "github" {
+                for job in ["release-request", "release"] {
+                    let body = workflow_job(&pipeline, job);
+                    // setup-uv reads an exact pin from uv.toml itself, and
+                    // takes the registry pin as its version input otherwise.
+                    assert_eq!(
+                        body.contains(&format!("version: \"{pin}\"")),
+                        expected == pin,
+                        "{uv_toml} {job}: {body}"
+                    );
+                }
+            } else {
+                let tooling = gitlab_job(&pipeline, ".tooling");
+                assert!(
+                    tooling.contains(&format!("    UV_VERSION: \"{expected}\"\n")),
+                    "{uv_toml}: {tooling}"
+                );
+            }
+        }
+    }
+}
+
+/// A landed python pipeline on `forge`, upgraded under the GitHub or GitLab
+/// development environment answer the rust tests record.
+fn python_pipeline_with_environment(forge: &str) -> String {
+    let target = land_python(forge, "");
+    append_target_config(target.path(), &dev_environment_answer(forge));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    landed_bash_pipeline(target.path(), forge)
+}
+
+/// Under a recorded development environment every python job takes the
+/// recorded setup or image and runs rk, and uv, through the recorded
+/// prefix, with no install of rk, git-cliff, or uv.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn each_python_job_takes_rk_from_a_recorded_environment() {
+    let github = python_pipeline_with_environment("github");
+    let _: serde_json::Value = yaml_serde::from_str(&github).expect("the workflow parses");
+    for absent in [
+        "release-kit-installer.sh",
+        "pipx install git-cliff",
+        "astral-sh/setup-uv",
+        "release-plz",
+    ] {
+        assert!(!github.contains(absent), "{absent}: {github}");
+    }
+    assert_no_landing_token(&github);
+    let request = workflow_job(&github, "release-request");
+    let release = workflow_job(&github, "release");
+    for job in [request, release] {
+        assert!(job.contains("nix-installer-action@"), "{job}");
+    }
+    assert!(
+        request.contains("run: nix develop --command rk release request"),
+        "{request}"
+    );
+    for action in ["build", "publish"] {
+        assert!(
+            release.contains(&format!("run: nix develop --command rk release {action}")),
+            "{release}"
+        );
+    }
+    let gitlab = python_pipeline_with_environment("gitlab");
+    // The tool directory opens the one before_script, and the recorded
+    // setup lines follow it.
+    let parsed: serde_json::Value = yaml_serde::from_str(&gitlab).expect("the pipeline parses");
+    let script: Vec<&str> = parsed[".tooling"]["before_script"]
+        .as_array()
+        .expect("the rk jobs carry a before_script")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(script[0].contains("/rk-tools\""), "{script:?}");
+    assert_eq!(script.get(1), Some(&"echo ready"), "{script:?}");
+    let tooling = gitlab_job(&gitlab, ".tooling");
+    assert!(tooling.contains("  image: nixos/nix:2.35.2\n"), "{tooling}");
+    for absent in [
+        "debian:",
+        "apt-get",
+        "uv-installer.sh",
+        "/git-cliff.tar.gz",
+        "release-kit-installer.sh",
+    ] {
+        assert!(!tooling.contains(absent), "{absent}: {tooling}");
+    }
+    assert!(tooling.contains("$RELEASE_TOOLS/glab.tar.gz"), "{tooling}");
+    for action in ["request", "build", "publish"] {
+        assert!(
+            gitlab.contains(&format!(
+                "    - nix develop --command rk release {action}\n"
+            )),
+            "{gitlab}"
+        );
+    }
+    let pypi = gitlab_job(&gitlab, "pypi");
+    assert!(
+        pypi.contains("      nix develop --command uv publish"),
+        "{pypi}"
+    );
+    assert!(
+        pypi.contains("      nix develop --command uvx --from"),
+        "{pypi}"
+    );
+    assert_no_landing_token(&gitlab);
+}
+
+/// With no development environment every python job installs rk through
+/// the shell installer of the landing binary's version, uv at its version,
+/// and git-cliff at its pin, and runs rk with no prefix.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn each_python_job_installs_rk_at_the_landing_version_without_an_environment() {
+    let version = env!("CARGO_PKG_VERSION");
+    let installer = format!("{}/releases/download/v", env!("CARGO_PKG_REPOSITORY"));
+    let (cliff, _) = registry_archive("git-cliff");
+    let github = landed_bash_pipeline(land_python("github", "").path(), "github");
+    for (job, actions) in [
+        ("release-request", &["request"][..]),
+        ("release", &["build", "publish"][..]),
+    ] {
+        let body = workflow_job(&github, job);
+        let install = workflow_step(body, "install rk");
+        assert!(
+            install.contains(&format!("RK_VERSION: \"{version}\"")),
+            "{job}: {install}"
+        );
+        assert!(
+            install.contains(&format!(
+                "\"{installer}${{RK_VERSION}}/release-kit-installer.sh\""
+            )),
+            "{job}: {install}"
+        );
+        assert!(
+            body.contains(&format!("pipx install git-cliff=={cliff}")),
+            "{job}: {body}"
+        );
+        let setup = body.find("astral-sh/setup-uv@").expect("the uv setup");
+        for action in actions {
+            let run_at = body
+                .find(&format!("run: rk release {action}\n"))
+                .unwrap_or_else(|| panic!("{job} runs no rk release {action}: {body}"));
+            assert!(setup < run_at, "{job}: {body}");
+        }
+    }
+    let gitlab = landed_bash_pipeline(land_python("gitlab", "").path(), "gitlab");
+    let tooling = gitlab_job(&gitlab, ".tooling");
+    assert!(
+        tooling.contains(&format!(
+            "    - curl --proto '=https' --tlsv1.2 -LsSf \"{installer}{version}/release-kit-installer.sh\" | RELEASE_KIT_UNMANAGED_INSTALL=\"$RELEASE_TOOLS/bin\" sh\n"
+        )),
+        "{tooling}"
+    );
+    assert!(
+        tooling.contains("    - UV_UNMANAGED_INSTALL=\"$RELEASE_TOOLS/bin\" sh \"$RELEASE_TOOLS/uv-installer.sh\"\n"),
+        "{tooling}"
+    );
+    for (job, action) in [
+        ("release-request", "request"),
+        ("build", "build"),
+        ("publish", "publish"),
+    ] {
+        let body = gitlab_job(&gitlab, job);
+        assert!(body.contains("  extends: .tooling\n"), "{job}: {body}");
+        assert!(
+            body.contains(&format!("    - rk release {action}\n")),
+            "{job}: {body}"
+        );
+    }
+}
+
+/// SATISFIES landing:a-landing-writes-what-the-catalog-selects
+///
+/// Python lands on GitLab: the record lists its destinations, `rk stage`
+/// renders the bytes the landing wrote, and the status check reads clean.
+#[test]
+fn python_on_gitlab_lands_and_reads_clean() {
+    let target = status_repo();
+    seed_uv_project(target.path(), "0.1.0");
+    let flags = [
+        "--tech",
+        "python",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+    ];
+    rk().arg("init")
+        .args(flags)
+        .arg("--target")
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "capability release.automation: selected",
+        ));
+    let manifest = read_manifest(target.path());
+    for destination in [".gitlab-ci.yml", "cliff.toml", ".gitlab/ci/mr-title.yml"] {
+        manifest_file(&manifest, destination);
+    }
+    assert_eq!(manifest["profile"]["release"]["driver"], "python");
+    commit_all(target.path(), "chore: land release-kit");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &flags);
+    let report = compare_json(&stage, target.path());
+    let rows = report["rows"].as_array().expect("the rows");
+    assert!(!rows.is_empty(), "{report}");
+    for row in rows {
+        assert_eq!(row["state"], "equal", "{row}");
+    }
+    seed_setup_proof(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
 }
 
 /// The absolute path of `tool` on the test's own `PATH`.
@@ -49245,11 +50474,13 @@ impl Engine {
     /// and push it to the bare origin.
     fn new(tech: &str, forge: &'static str, init: &[&str], version: &str) -> Self {
         let work = tempfile::tempdir().expect("a scratch checkout exists");
-        // The python pair lands on GitHub alone in this release, so its
-        // GitLab fixture records the forge by hand.
-        let land_forge = if tech == "python" { "github" } else { forge };
+        // A python landing reads the uv project it releases, so the project
+        // stands before the landing does.
+        if tech == "python" {
+            seed_uv_project(work.path(), version);
+        }
         let mut land = rk();
-        land.args(["init", "--tech", tech, "--forge", land_forge])
+        land.args(["init", "--tech", tech, "--forge", forge])
             .args(["--repo", "acme/widget", "--target"])
             .arg(work.path())
             .args(init);
@@ -49261,27 +50492,6 @@ impl Engine {
         if tech == "bash" {
             std::fs::write(dir.join("build.sh"), ENGINE_BUILD).expect("writes");
             std::fs::write(dir.join("VERSION"), format!("{version}\n")).expect("writes");
-        } else {
-            std::fs::write(
-                dir.join("pyproject.toml"),
-                format!("[project]\nname = \"acme\"\nversion = \"{version}\"\n"),
-            )
-            .expect("writes");
-            std::fs::write(
-                dir.join("uv.lock"),
-                format!("version = 1\n\n[[package]]\nname = \"acme\"\nversion = \"{version}\"\nsource = {{ editable = \".\" }}\n"),
-            )
-            .expect("writes");
-            std::fs::copy(
-                repo_path("snippets/bash/github/cliff.toml"),
-                dir.join("cliff.toml"),
-            )
-            .expect("copies");
-        }
-        if land_forge != forge {
-            let mut manifest = read_manifest(dir);
-            manifest["profile"]["forge"] = serde_json::json!(forge);
-            write_manifest(dir, &manifest);
         }
         let remote = tempfile::tempdir().expect("a scratch remote exists");
         git_in(remote.path(), &["init", "-q", "--bare", "-b", "master"]);

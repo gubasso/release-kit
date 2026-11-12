@@ -668,6 +668,24 @@ pub fn licence_refusal(reason: &str) -> RkError {
     )
 }
 
+/// The refusal a project the selected release driver cannot release
+/// answers, before any write: a python project with a dynamic version or
+/// no `uv.lock` would land a release that fails at its first bump.
+///
+/// SATISFIES project-profile:release-intent-has-three-modes
+#[must_use]
+pub fn driver_refusal(reason: &str) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::PrerequisiteUnmet,
+            format!("the project cannot take the selected release driver, and nothing was written: {reason}"),
+        )
+        .expected("a uv project with a static [project] version and a committed uv.lock")
+        .action("uv lock, or a static version in [project], then land again")
+        .target_state("unchanged"),
+    )
+}
+
 /// The refusal a selected release automation this release cannot land
 /// answers, before any write: silently omitting the declared release would
 /// write a record that claims an automation nothing landed.
@@ -894,6 +912,9 @@ pub fn land(
     }
     if let Some(reason) = prepared.projection.release_unavailable() {
         return Err(release_unavailable(reason));
+    }
+    if let Some(reason) = prepared.projection.driver_refusal.as_deref() {
+        return Err(driver_refusal(reason));
     }
     if !prepared.collisions.is_empty() {
         return Err(refusal(target.display(), &prepared.collisions));

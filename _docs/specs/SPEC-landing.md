@@ -295,11 +295,11 @@ Every destination a landing writes MUST belong to exactly one capability the cat
 
 #### Scenario: A profile asks for a release this binary cannot land
 
-- GIVEN a GitLab target whose release is automatic and driven by `python`
+- GIVEN a GitLab target whose release is automatic and driven by `go`, which no binding carries
 - WHEN `rk init` previews and then applies
-- THEN the preview reports `release.automation` unavailable with the available tuples, the apply exits 73 before any write, and no `.release-kit/` directory appears
+- THEN the preview reports `release.automation` unknown with the bindings this release carries, the apply exits 73 before any write, and no `.release-kit/` directory appears
 
-Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_apply_refuses) or test(an_occupied_gitlab_root_pipeline_withholds_the_title_gate) or test(a_target_with_no_technology_and_no_forge_lands_the_guards)'`
+Verify: `cargo nextest run -E 'test(an_unknown_driver_reports_its_automation_and_apply_refuses) or test(python_on_gitlab_lands_and_reads_clean) or test(an_occupied_gitlab_root_pipeline_withholds_the_title_gate) or test(a_target_with_no_technology_and_no_forge_lands_the_guards)'`
 
 ### `landing:the-nix-capability-is-a-recorded-opt-in` — An opt-in capability is a recorded landing parameter
 

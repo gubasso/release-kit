@@ -52,9 +52,14 @@ const fn word(answer: Answer) -> &'static str {
     }
 }
 
-/// The registry forms no API exposes, per driver, each with the
+/// The registry forms no API exposes, per driver and forge, each with the
 /// binding's read-back check.
-fn operator_forms(driver: &str, package: &str) -> Vec<(&'static str, String)> {
+fn operator_forms(
+    driver: &str,
+    package: &str,
+    forge: Option<Forge>,
+    repo: &str,
+) -> Vec<(&'static str, String)> {
     match driver {
         "rust" => vec![
             (
@@ -77,9 +82,15 @@ fn operator_forms(driver: &str, package: &str) -> Vec<(&'static str, String)> {
         "python" => vec![
             (
                 "trusted-publisher",
-                format!(
-                    "rk binding python, setup specifics: the publishing settings of {package} on PyPI list the owner, the repository, and release-please.yml"
-                ),
+                if forge == Some(Forge::Gitlab) {
+                    format!(
+                        "rk binding python, setup specifics: the publishing settings of {package} on PyPI list a GitLab publisher with the namespace and the project of {repo} and the top-level pipeline file .gitlab-ci.yml"
+                    )
+                } else {
+                    format!(
+                        "rk binding python, setup specifics: the publishing settings of {package} on PyPI list the owner, the repository, the workflow release.yml, and the environment pypi"
+                    )
+                },
             ),
             (
                 "bootstrap-token-revoked",
@@ -116,7 +127,7 @@ pub fn observe(ctx: &Ctx) -> Vec<Milestone> {
     // the release, so a crate that publishes to none reports no
     // crates.io instruction.
     if let Some(package) = package.as_deref().filter(|_| registry.is_some()) {
-        for (id, check) in operator_forms(driver, package) {
+        for (id, check) in operator_forms(driver, package, ctx.forge, &ctx.repo) {
             found.push(Milestone {
                 id,
                 status: "operator",
@@ -221,7 +232,6 @@ fn automated_release(ctx: &Ctx, driver: &str) -> Milestone {
         Forge::Github => {
             let workflow = match driver {
                 "rust" => "release-plz.yml",
-                "python" => "release-please.yml",
                 _ => "release.yml",
             };
             format!(
@@ -258,11 +268,12 @@ fn automated_release(ctx: &Ctx, driver: &str) -> Milestone {
 #[cfg(test)]
 mod tests {
     use super::{operator_forms, word};
+    use crate::detect::Forge;
     use crate::release_state::Answer;
 
     #[test]
     fn each_registry_form_carries_its_read_back_check() {
-        let rust: Vec<&str> = operator_forms("rust", "widget")
+        let rust: Vec<&str> = operator_forms("rust", "widget", Some(Forge::Github), "acme/widget")
             .iter()
             .map(|(id, _)| *id)
             .collect();
@@ -275,12 +286,18 @@ mod tests {
             ]
         );
         assert!(
-            operator_forms("rust", "widget")[0]
+            operator_forms("rust", "widget", Some(Forge::Github), "acme/widget")[0]
                 .1
                 .contains("crates.io/crates/widget/settings")
         );
-        assert_eq!(operator_forms("python", "widget").len(), 2);
-        assert!(operator_forms("bash", "widget").is_empty());
+        let github = operator_forms("python", "widget", Some(Forge::Github), "acme/widget");
+        assert_eq!(github.len(), 2);
+        assert!(github[0].1.contains("release.yml"), "{}", github[0].1);
+        assert!(github[0].1.contains("environment pypi"), "{}", github[0].1);
+        let gitlab = operator_forms("python", "widget", Some(Forge::Gitlab), "acme/widget");
+        assert!(gitlab[0].1.contains("acme/widget"), "{}", gitlab[0].1);
+        assert!(gitlab[0].1.contains(".gitlab-ci.yml"), "{}", gitlab[0].1);
+        assert!(operator_forms("bash", "widget", Some(Forge::Github), "acme/widget").is_empty());
         assert_eq!(word(Answer::Yes), "observed");
         assert_eq!(word(Answer::No), "not-observed");
     }

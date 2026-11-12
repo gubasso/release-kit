@@ -158,8 +158,7 @@ pub fn observe(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkE
 
 /// What Python's check cannot answer. PEP 517 lets a project choose its
 /// build backend, and an sdist and a wheel can carry different files, so
-/// one `python3 -m build` run supplies no listing contract across both
-/// outputs.
+/// one `uv build` run supplies no listing contract across both outputs.
 const PYTHON_LIMITATION: &str = "sdist and wheel policy inclusion is unproved: PEP 517 leaves the file set to the build backend and the two outputs can differ; inspect both before publishing";
 
 /// What Bash's check cannot answer. Its binding builds the tarball with
@@ -283,10 +282,9 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     if let Some(reason) = super::steps::no_registry(ctx) {
         return Ok(StepState::ok(reason));
     }
-    let policy = ctx.reporting_policy();
     let (program, args): (&str, &[&str]) = match ctx.tech {
         Some("rust") => ("cargo", &["publish", "--dry-run", "--allow-dirty"]),
-        Some("python") => ("python3", &["-m", "build"]),
+        Some("python") => return python_build_check(ctx, run, ctx.reporting_policy()),
         Some("bash") => return bash_build_check(ctx, run),
         Some(other) => {
             return Ok(StepState::unknown(format!(
@@ -307,10 +305,53 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
         )));
     }
     let built = "the package builds and passes the registry's dry run";
-    Ok(match ctx.tech {
-        Some("rust") => policy_in_the_crate(ctx, run, built)?,
-        _ if policy => StepState::ok_with_limitation(built, PYTHON_LIMITATION),
-        _ => StepState::ok(built),
+    policy_in_the_crate(ctx, run, built)
+}
+
+/// The python check: `uv build`, the build the release runs, then the sdist
+/// and the wheel it left in `dist/`, named. Their contents stay unproved
+/// where the target requests the reporting policy.
+fn python_build_check(ctx: &Ctx, run: &mut Runner, policy: bool) -> Result<StepState, RkError> {
+    let exec = Exec {
+        program: crate::probes::uv_bin(),
+        args: vec!["build".into()],
+        env: ctx.child_env("package-check"),
+        cwd: ctx.target.as_std_path().to_path_buf(),
+        stdin: None,
+    };
+    let outcome = run(&exec)?;
+    if !outcome.success() {
+        return Ok(StepState::not(format!(
+            "the packaging check failed: {}",
+            last_line(&outcome.stderr)
+        )));
+    }
+    let listed = |suffix: &str| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(ctx.target.join("dist").as_std_path())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(suffix))
+            .collect();
+        names.sort();
+        names
+    };
+    let (sdists, wheels) = (listed(".tar.gz"), listed(".whl"));
+    if sdists.is_empty() || wheels.is_empty() {
+        return Ok(StepState::not(
+            "uv build left no sdist and wheel pair in dist/; the release uploads both",
+        ));
+    }
+    let built = format!(
+        "uv build wrote the sdist {} and the wheel {}",
+        sdists.join(", "),
+        wheels.join(", ")
+    );
+    Ok(if policy {
+        StepState::ok_with_limitation(built, PYTHON_LIMITATION)
+    } else {
+        StepState::ok(built)
     })
 }
 

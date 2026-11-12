@@ -71,8 +71,10 @@ impl ReleaseMode {
     }
 }
 
-/// Where an automatic rust release publishes: the answer of
-/// `profile.release.registry`. An absent answer reads as crates.io, so a
+/// Where an automatic release publishes: `profile.release.registry`.
+///
+/// A rust release takes `crates-io` or `none`, and a python release takes
+/// `pypi` or `none`. An absent answer reads as the driver's registry, so a
 /// target that never answered keeps its behavior and its record.
 ///
 /// SATISFIES project-profile:release-intent-has-three-modes
@@ -81,8 +83,10 @@ impl ReleaseMode {
 pub enum RegistryAnswer {
     /// The crate publishes to crates.io.
     CratesIo,
-    /// The crate publishes to no registry: release-plz reads the last
-    /// release from the tags, and the release page is the publication.
+    /// The package publishes to the Python Package Index.
+    Pypi,
+    /// The release publishes to no registry: the tag and the release page
+    /// are the publication.
     None,
 }
 
@@ -92,12 +96,30 @@ impl RegistryAnswer {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CratesIo => "crates-io",
+            Self::Pypi => "pypi",
             Self::None => "none",
         }
     }
 
-    /// The one driver the answer is valid for.
-    pub const DRIVER: &'static str = "rust";
+    /// The registry an unanswered `driver` publishes to, or `None` for a
+    /// driver the answer is not valid for.
+    #[must_use]
+    pub fn default_for(driver: &str) -> Option<Self> {
+        match driver {
+            "rust" => Some(Self::CratesIo),
+            "python" => Some(Self::Pypi),
+            _ => None,
+        }
+    }
+
+    /// Whether the answer is one `driver` takes.
+    #[must_use]
+    pub fn fits(self, driver: &str) -> bool {
+        Self::default_for(driver).is_some_and(|default| self == Self::None || self == default)
+    }
+
+    /// The answers each driver takes, as the refusals name them.
+    pub const SHAPE: &'static str = "crates-io or none for profile.release.driver = \"rust\", and pypi or none for profile.release.driver = \"python\"";
 }
 
 /// How an automatic bash release builds its distribution.
@@ -152,9 +174,9 @@ pub struct ReleaseIntent {
     /// alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_prefix: Option<String>,
-    /// Where the crate publishes; answered for an automatic rust release
-    /// alone, and absent where nothing answered it, which reads as
-    /// crates.io.
+    /// Where the release publishes; answered for an automatic rust or
+    /// python release alone, and absent where nothing answered it, which
+    /// reads as the driver's registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<RegistryAnswer>,
     /// How the distribution builds; answered for an automatic bash release
@@ -547,18 +569,16 @@ impl Params {
         self.profile.release.style
     }
 
-    /// Where an automatic rust release publishes, with an absent answer
-    /// read as crates.io; `None` for every other release.
+    /// Where an automatic rust or python release publishes, with an
+    /// absent answer read as the driver's registry; `None` for every other
+    /// release.
     #[must_use]
     pub fn registry(&self) -> Option<RegistryAnswer> {
-        (self.release_mode() == ReleaseMode::Automatic
-            && self.driver() == Some(RegistryAnswer::DRIVER))
-        .then(|| {
-            self.profile
-                .release
-                .registry
-                .unwrap_or(RegistryAnswer::CratesIo)
-        })
+        if self.release_mode() != ReleaseMode::Automatic {
+            return None;
+        }
+        let default = RegistryAnswer::default_for(self.driver()?)?;
+        Some(self.profile.release.registry.unwrap_or(default))
     }
 
     /// The packages an automatic bash release installs before it builds,
@@ -1187,9 +1207,10 @@ pub fn resolve(
         (Some(value), source)
     });
 
-    // Where the crate publishes: no flag and no observation answer it, and
-    // an absent answer stays absent, which reads as crates.io, so a target
-    // that never answered keeps its record byte for byte.
+    // Where the release publishes: no flag and no observation answer it,
+    // and an absent answer stays absent, which reads as the driver's
+    // registry, so a target that never answered keeps its record byte for
+    // byte.
     let (registry, registry_source) = answered([
         (None, Source::Flag),
         (
@@ -1301,8 +1322,11 @@ pub fn resolve(
             };
             // A preview reports what it cannot judge, but a known driver
             // judges the answer in every purpose.
-            if registry.is_some() && (driver.is_some() || !reporting) {
-                catalog::registry_answer_fits(mode, driver.as_deref()).map_err(RkError::Usage)?;
+            if let Some(answer) = registry
+                && (driver.is_some() || !reporting)
+            {
+                catalog::registry_answer_fits(mode, driver.as_deref(), answer)
+                    .map_err(RkError::Usage)?;
             }
             if build.is_some() && (driver.is_some() || !reporting) {
                 catalog::build_answer_fits(mode, driver.as_deref()).map_err(RkError::Usage)?;
@@ -1310,7 +1334,11 @@ pub fn resolve(
             sources.insert("profile.release.driver", driver_source);
             sources.insert("profile.release.style", style_source);
             sources.insert("profile.release.line_prefix", prefix_source);
-            if driver.as_deref() == Some(RegistryAnswer::DRIVER) {
+            if driver
+                .as_deref()
+                .and_then(RegistryAnswer::default_for)
+                .is_some()
+            {
                 sources.insert("profile.release.registry", registry_source);
             }
             if driver.as_deref() == Some(BuildAnswer::DRIVER) {

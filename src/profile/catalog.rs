@@ -3,8 +3,9 @@
 //! is available at the dimensions a target resolved to.
 //!
 //! Availability belongs to a capability at its dimensions and never to a
-//! category alone: `release.automation` at `(python, github)` is available
-//! while the same capability at `(python, gitlab)` is unavailable. Every
+//! category alone: `supply-chain.code-scanning` at `(rust, gitlab)` is
+//! available while the same capability at `(python, gitlab)` is
+//! unavailable. Every
 //! omission is recorded with one of the five reasons the vocabulary
 //! names, so a reader can tell a product nobody asked for from one this
 //! release cannot land.
@@ -325,23 +326,30 @@ pub fn known_drivers() -> Vec<String> {
 
 /// Judge a stated `profile.release.registry` answer against its release.
 ///
-/// The answer is valid for an automatic release driven by `rust` alone,
-/// because only that driver's automation reads where the crate publishes.
+/// The answer is valid for an automatic release driven by `rust`, which
+/// takes `crates-io` or `none`, or by `python`, which takes `pypi` or
+/// `none`, because only those drivers' automation reads where the release
+/// publishes.
 ///
 /// # Errors
 ///
 /// Returns the reason, naming the key and the shape it needs.
 ///
 /// SATISFIES project-profile:release-intent-has-three-modes
-pub fn registry_answer_fits(mode: ReleaseMode, driver: Option<&str>) -> Result<(), String> {
+pub fn registry_answer_fits(
+    mode: ReleaseMode,
+    driver: Option<&str>,
+    answer: crate::profile::RegistryAnswer,
+) -> Result<(), String> {
     let shape = format!(
-        "profile.release.registry takes crates-io or none, under profile.release.mode = \"automatic\" with profile.release.driver = \"{}\" alone",
-        crate::profile::RegistryAnswer::DRIVER
+        "profile.release.registry takes {}, under profile.release.mode = \"automatic\" alone",
+        crate::profile::RegistryAnswer::SHAPE
     );
     match (mode, driver) {
-        (ReleaseMode::Automatic, Some(crate::profile::RegistryAnswer::DRIVER)) => Ok(()),
+        (ReleaseMode::Automatic, Some(driver)) if answer.fits(driver) => Ok(()),
         (ReleaseMode::Automatic, Some(other)) => Err(format!(
-            "profile.release.registry is set while profile.release.driver is {other}; {shape}"
+            "profile.release.registry is {} while profile.release.driver is {other}; {shape}",
+            answer.as_str()
         )),
         (ReleaseMode::Automatic, None) => Err(format!(
             "profile.release.registry is set while no profile.release.driver is named; {shape}"
@@ -796,13 +804,39 @@ mod tests {
     #[test]
     fn the_catalog_answers_availability_per_tuple() {
         let availability = Availability::embedded();
-        let mut github = Params::for_test("acme/widget", Some(Style::Trunk));
+        // One capability, two answers at two dimensions: code scanning lands
+        // for the rust binding on GitLab and not for the python one.
+        let mut rust = Params::for_test("acme/widget", Some(Style::Trunk));
+        rust.set_pair_for_test("rust", "gitlab");
+        rust.set_code_scanning_for_test(Some(crate::projection::Provider::Semgrep));
+        let mut python = rust.clone();
+        python.set_pair_for_test("python", "gitlab");
+        assert_eq!(
+            status_of(&select(&rust, &availability), CODE_SCANNING),
+            Status::Selected
+        );
+        let on_python = select(&python, &availability);
+        assert_eq!(status_of(&on_python, CODE_SCANNING), Status::Unavailable);
+        // The release automation lands for python on both forges.
+        let mut github = python.clone();
         github.set_pair_for_test("python", "github");
-        let mut gitlab = github.clone();
-        gitlab.set_pair_for_test("python", "gitlab");
-        let on_github = select(&github, &availability);
-        let on_gitlab = select(&gitlab, &availability);
-        assert_eq!(status_of(&on_github, RELEASE_AUTOMATION), Status::Selected);
+        for params in [&python, &github] {
+            assert_eq!(
+                status_of(&select(params, &availability), RELEASE_AUTOMATION),
+                Status::Selected
+            );
+        }
+        // A tree that carries no python GitLab files answers the same tuple
+        // unavailable, naming the tuples it does carry.
+        let narrowed = Availability::over(
+            availability
+                .files()
+                .iter()
+                .filter(|path| !path.starts_with("python/gitlab/"))
+                .cloned()
+                .collect(),
+        );
+        let on_gitlab = select(&python, &narrowed);
         assert_eq!(
             status_of(&on_gitlab, RELEASE_AUTOMATION),
             Status::Unavailable
@@ -814,6 +848,11 @@ mod tests {
             .expect("an unavailable capability states why");
         assert!(reason.contains("rust, gitlab"), "{reason}");
         assert!(reason.contains("python, github"), "{reason}");
+        let tuples = reason
+            .split_once("the available tuples are:")
+            .map(|(_, tuples)| tuples)
+            .expect("the reason names the tuples");
+        assert!(!tuples.contains("python, gitlab"), "{reason}");
         // The title gate still lands on GitLab, with the release-less root
         // pipeline beside the fragment.
         let title = on_gitlab
@@ -1020,14 +1059,15 @@ mod tests {
                     "{:?}",
                     gate.sources
                 );
-                // Python automates no release on GitLab, so the commit
-                // gate's own root pipeline activates the fragment.
-                assert_eq!(
-                    gate.sources
+                // Every pair here automates its release, so the binding's
+                // own root pipeline activates the fragment, and the commit
+                // gate's release-less root pipeline stays out.
+                assert!(
+                    !gate
+                        .sources
                         .iter()
                         .any(|s| s == "_commit-gate/gitlab/.gitlab-ci.yml"),
-                    driver == "python",
-                    "{:?}",
+                    "{driver} {forge}: {:?}",
                     gate.sources
                 );
             }

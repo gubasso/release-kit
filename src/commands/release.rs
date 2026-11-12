@@ -316,7 +316,7 @@ fn pair_of(target: &Utf8Path, manifest: &Manifest) -> Result<Pair, String> {
     }
     let artifacts = match (forge, driver.as_str()) {
         (Forge::Github, "rust") => manifest.file("dist-workspace.toml").is_some(),
-        (Forge::Github | Forge::Gitlab, "bash") => true,
+        (Forge::Github | Forge::Gitlab, "bash" | "python") => true,
         _ => false,
     };
     Ok(Pair {
@@ -326,6 +326,12 @@ fn pair_of(target: &Utf8Path, manifest: &Manifest) -> Result<Pair, String> {
         forge,
         repo: manifest.parameters.repo.clone(),
         trunk: manifest.git.trunk.clone(),
+        line_prefix: manifest
+            .profile
+            .release
+            .line_prefix
+            .clone()
+            .unwrap_or_else(|| crate::config::LINE_PREFIX_DEFAULT.to_owned()),
         artifacts,
     })
 }
@@ -581,10 +587,15 @@ impl Reader<'_> {
     /// Whether the version a tag names is published: the registry's
     /// answer where the pair has one, the release page's otherwise.
     fn published(&self, tag: &str, page: Option<&Page>) -> Answer {
-        let version = tag.strip_prefix('v').unwrap_or(tag);
+        // The registry knows the version in the driver's own spelling: a
+        // python candidate tagged v1.4.3-rc.2 is 1.4.3rc2 on PyPI.
+        let version = crate::release_engine::adapter::Version::from_tag(tag).map_or_else(
+            || tag.strip_prefix('v').unwrap_or(tag).to_owned(),
+            |version| version.spelled(&self.pair.driver),
+        );
         match (self.pair.registry(), self.pair.package.as_deref()) {
             (Some(registry), Some(package)) => {
-                release_state::registry_serves(registry, package, Some(version))
+                release_state::registry_serves(registry, package, Some(&version))
             }
             (Some(_), None) => Answer::Unknown,
             (None, _) => page
@@ -790,6 +801,12 @@ impl Reader<'_> {
                     let Some(name) = asset["name"].as_str() else {
                         continue;
                     };
+                    // The engine's checksum file lists the attested
+                    // artifacts and is no artifact itself, so it neither
+                    // counts as one nor needs an attestation.
+                    if release_state::is_support(name) {
+                        continue;
+                    }
                     page.assets.push(name.to_owned());
                     let Some(digest) = asset["digest"].as_str() else {
                         page.attestation_unknown = true;
@@ -821,20 +838,29 @@ impl Reader<'_> {
                     .collect();
                 let bundles: Vec<&String> = names
                     .iter()
-                    .filter(|name| name.ends_with(".sigstore.json"))
+                    .filter(|name| name.ends_with(release_state::BUNDLE_SUFFIX))
                     .collect();
+                // The checksum file and the bundles are support material,
+                // and no artifact the page must carry.
                 let assets: Vec<String> = names
                     .iter()
-                    .filter(|name| !name.ends_with(".sigstore.json"))
+                    .filter(|name| !release_state::is_support(name))
                     .cloned()
                     .collect();
+                // The distributions the provenance job signs: the bash
+                // tarball, and the python sdist and wheel, each named in the
+                // lowercase the builds write.
                 let unattested = assets
                     .iter()
-                    .filter(|name| name.ends_with(".tar.gz"))
                     .filter(|name| {
-                        !bundles
+                        [".tar.gz", ".whl"]
                             .iter()
-                            .any(|bundle| **bundle == format!("{name}.sigstore.json"))
+                            .any(|suffix| name.to_ascii_lowercase().ends_with(suffix))
+                    })
+                    .filter(|name| {
+                        !bundles.iter().any(|bundle| {
+                            **bundle == format!("{name}{}", release_state::BUNDLE_SUFFIX)
+                        })
                     })
                     .cloned()
                     .collect();
@@ -908,19 +934,26 @@ impl Reader<'_> {
                 )) else {
                     return (None, None);
                 };
+                // The rk engine builds and publishes in the branch-push
+                // pipeline of the commit it released, on the trunk or on a
+                // release line. A rust pair publishes from the trunk and
+                // builds in the pipeline of the tag it pushed.
+                let engine =
+                    self.pair.request_prefix() == Some(crate::release_engine::REQUEST_PREFIX);
+                if engine {
+                    let run = release_state::gitlab_branch_push_on(&body, sha, |reference| {
+                        self.pair.is_base(reference)
+                    });
+                    let artifact = self.pair.artifacts.then(|| run.clone()).flatten();
+                    return (run, artifact);
+                }
                 let trunk = self.pair.trunk.clone();
                 let publish =
                     release_state::gitlab_pipeline_on(&body, |reference| reference == trunk);
-                let artifact = self
-                    .pair
-                    .artifacts
-                    .then(|| {
-                        release_state::gitlab_pipeline_on(&body, |reference| {
-                            reference.starts_with('v')
-                        })
-                    })
-                    .flatten();
-                (publish, artifact)
+                let artifact = self.pair.artifacts.then(|| {
+                    release_state::gitlab_pipeline_on(&body, |reference| reference.starts_with('v'))
+                });
+                (publish, artifact.flatten())
             }
         }
     }

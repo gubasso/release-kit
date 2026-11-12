@@ -325,6 +325,12 @@ fn preview(
             format!("the apply refuses until the licence condition is answered: {reason}"),
         );
     }
+    if let Some(reason) = prepared.projection.driver_refusal.as_deref() {
+        next.insert(
+            0,
+            format!("the apply refuses until the project takes the release driver: {reason}"),
+        );
+    }
     next.push(format!(
         "rk stage --target {} stages the complete candidate for a byte comparison",
         args.target

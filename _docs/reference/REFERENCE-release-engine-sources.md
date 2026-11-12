@@ -139,7 +139,11 @@ The latest uv release is `0.13.7`, published 2026-11-03. The package guide state
 - https://github.com/astral-sh/uv/issues/13139
 - https://github.com/astral-sh/uv/releases/tag/0.13.7
 
-Bearing: the engine sets the version with `uv version <v> --no-sync`, which rewrites `pyproject.toml` and relocks, or with `--frozen` plus a separate scoped relock. It requires a static `project.version` under `uv_build`. It publishes with `uv publish --trusted-publishing always` on both forges, and it cannot count on `uv` to sign attestations or to honor `SOURCE_DATE_EPOCH`.
+The release `0.13.7` publishes `uv-installer.sh` beside its archives. The installer downloaded from the release on 2026-11-12 hashes to `d263ee68314cf5bea36b08e6bd9e2c4563240d7adb73756cf33af5c199b92db4`. It carries `APP_VERSION="0.13.7"` and a SHA-256 for each platform archive, which it checks after the download. It installs into the directory `UV_UNMANAGED_INSTALL` names, with no receipt and no change to the shell profile. The release names no checksum file for the installer itself.
+
+- https://github.com/astral-sh/uv/releases/download/0.13.7/uv-installer.sh
+
+Bearing: the engine sets the version with `uv version <v> --no-sync`, which rewrites `pyproject.toml` and relocks, or with `--frozen` plus a separate scoped relock. It requires a static `project.version` under `uv_build`. The GitLab `pypi` job publishes with `uv publish --trusted-publishing always`, and the engine cannot count on `uv` to sign attestations or to honor `SOURCE_DATE_EPOCH`. The GitLab python jobs fetch the installer of the uv they need, check it against the digest above where that uv is the pinned `0.13.7`, and run it into their tool directory.
 
 ## astral-sh/setup-uv, on the uv version it chooses
 
@@ -151,7 +155,11 @@ The latest release is `v10.3.3`, published 2026-10-28. Its tag points directly a
 - https://github.com/astral-sh/setup-uv/blob/v10.3.3/README.md
 - https://github.com/astral-sh/setup-uv/releases/tag/v10.3.3
 
-Bearing: a landed workflow can pin uv once, in `required-version` in `pyproject.toml` or `uv.toml`, and leave `setup-uv` unconfigured. A target without that key gets the latest uv on every run.
+uv's configuration page, read on 2026-11-12, states that "`uv.toml` files take precedence over `pyproject.toml` files". Where both files sit in one directory, "configuration will be read from `uv.toml`, and the `[tool.uv]` section in the accompanying `pyproject.toml` will be ignored."
+
+- https://docs.astral.sh/uv/concepts/configuration-files/
+
+Bearing: where `uv.toml` exists, it alone answers which uv the project requires, and a `required-version` in the `[tool.uv]` table of `pyproject.toml` beside it is ignored. Where no `uv.toml` exists, `pyproject.toml` answers. A target whose answering file names an exact `required-version` gets that uv from `setup-uv` with no version input. Every other target passes the `versions.toml` pin as `version`. Without that input, a target with no pin would get the latest uv on every run, and a target whose `uv.toml` names no pin could get the ignored `pyproject.toml` pin, because `setup-uv` searches both files. The workflow sets `enable-cache: false`, because the release jobs hold a publishing identity and read no cache another workflow writes.
 
 ## git-cliff, on `--bumped-version`, `--bump`, `--unreleased --tag`, and the `[bump]` table
 
@@ -256,6 +264,30 @@ PyPI accepts attestations signed by the Trusted Publisher identities "GitHub Act
 - https://docs.pypi.org/attestations/producing-attestations/
 
 Bearing: the engine spells Python prereleases `X.Y.ZrcN` and maps SemVer `-rc.N` to that form. It publishes through trusted publishing on both forges. On GitLab, attestations need a separate `pypi-attestations sign` job before the upload, because neither `uv publish` nor GitLab signs them.
+
+## PyPI from GitLab CI/CD, on the upload and its PEP 740 attestations
+
+Verified: 2026-11-12
+
+PyPI's page on adding a trusted publisher states for GitLab CI/CD: "Currently, only projects hosted on https://gitlab.com are supported. Self-managed instances are not supported." The form takes the namespace, the project name, the file path of the top-level pipeline definition, and an optional environment.
+
+PyPI's page on producing attestations documents GitLab CI/CD in three jobs. A `generate-pypi-attestations` job requests `id_tokens: SIGSTORE_ID_TOKEN: aud: sigstore`, installs `pypi-attestations`, and runs `python -m pypi_attestations sign python_pkg/dist/*`. The publish job requests `PYPI_ID_TOKEN` with audience `pypi`, or `testpypi` for TestPyPI, and runs `twine upload --attestations python_pkg/dist/*`. The page names no uv path.
+
+uv's CLI reference states that `uv publish` "Selects only wheels and source distributions and their attestations, while ignoring other files", and that `--no-attestations` turns off what it does "By default", which is to "upload matching PEP 740 attestations with each distribution that is published". Its trusted-publishing environments "include GitHub Actions and GitLab CI/CD". `--check-url` makes a retry skip a file the index already holds with the same hash. uv's packaging guide states: "uv publish does not currently generate attestations; attestations must be created separately before publishing", and shows a `dist/` in which `hello_world-1.0.0.tar.gz.publish.attestation` sits beside `hello_world-1.0.0.tar.gz`. In uv's source, trusted publishing asks `https://pypi.org/_/oidc/audience` for the audience and takes the token through the `ambient-id` crate. That crate's GitLab detector, read at version 0.0.11, runs where `GITLAB_CI` is `true` and reads the variable `<AUDIENCE>_ID_TOKEN`, so the audience `pypi` reads `PYPI_ID_TOKEN`.
+
+`pypi-attestations` 0.0.31 was published on 2026-11-02. Its README shows `pypi-attestations sign` writing `<file>.publish.attestation` beside each input, and states that the CLI "is intended primarily for experimentation, and is not considered a stable interface for generating or verifying attestations".
+
+- https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+- https://docs.pypi.org/trusted-publishers/using-a-publisher/
+- https://docs.pypi.org/attestations/producing-attestations/
+- https://docs.astral.sh/uv/reference/cli/#uv-publish
+- https://docs.astral.sh/uv/guides/package/
+- https://github.com/astral-sh/uv/blob/main/crates/uv-publish/src/trusted_publishing.rs
+- https://docs.rs/ambient-id/0.0.11/src/ambient_id/gitlab.rs.html
+- https://github.com/pypi/pypi-attestations
+- https://pypi.org/project/pypi-attestations/0.0.31/
+
+Bearing: the documented signer is `pypi-attestations sign` under a Sigstore ID token, and uv documents uploading the `.publish.attestation` files it finds beside each distribution, so `uv publish` takes the place of `twine upload --attestations`. The GitLab `pypi` job requests both ID tokens, signs the sdist and the wheel with `pypi-attestations` at its pin, and runs `uv publish --trusted-publishing always --check-url https://pypi.org/simple/`. It signs in the upload job rather than in a job of its own. PyPI's GitLab publisher names the project and the pipeline file, not a job, so a reading of the form finds no reason for a separate job. The job runs on GitLab.com alone and states the limitation elsewhere. Pending: a live run against TestPyPI from a GitLab.com project has not taken place, so what PyPI shows for these attestations is not yet observed.
 
 ## GitHub REST, on draft releases, the tag a publish creates, and the request a commit merges
 

@@ -56,7 +56,7 @@ Verify: `cargo nextest run -E 'test(a_target_with_no_technology_and_no_forge_lan
 
 ### `project-profile:release-intent-has-three-modes` — Release intent has three modes
 
-`profile.release.mode` MUST be one of `automatic`, `external`, and `none`. `automatic` MUST require a forge, a repository identity, a driver present in `profile.technologies`, and a style, and `external` and `none` MUST carry no driver, no style, and no line prefix. `external` names a release the target owns through a process release-kit does not drive, and it MUST route the operator to no bot-operate chapter. `profile.release.registry` names where the crate publishes, `crates-io` or `none`, and it MUST be refused, naming the key and the shape it needs, under any mode but `automatic` and any driver but `rust`. An absent key MUST read as `crates-io` and leave the record and every landed byte as they were, so a target that never answered keeps its behavior. `none` MUST seed `publish = false` with `git_only = true`, and MUST land a release workflow that requests no registry credential. `profile.release.build` names the `command` that produces `dist/*.tar.gz` and its `.sha256` and the `apt` `packages` the release image installs first on either forge, and it MUST be refused, naming the key and the shape it needs, under any mode but `automatic` and any driver but `bash`; an empty command MUST refuse by name. An absent key MUST read as `make dist` and `make` and leave the record and every landed byte as they were.
+`profile.release.mode` MUST be one of `automatic`, `external`, and `none`. `automatic` MUST require a forge, a repository identity, a driver present in `profile.technologies`, and a style, and `external` and `none` MUST carry no driver, no style, and no line prefix. `external` names a release the target owns through a process release-kit does not drive, and it MUST route the operator to no bot-operate chapter. `profile.release.registry` names where the release publishes, `crates-io` or `none` for the `rust` driver and `pypi` or `none` for the `python` driver, and it MUST be refused, naming the key and the shape it needs, under any mode but `automatic`, any other driver, and the other driver's registry. An absent key MUST read as the driver's registry and leave the record and every landed byte as they were, so a target that never answered keeps its behavior. `none` MUST land a release pipeline that requests no registry credential, and for `rust` MUST seed `publish = false` with `git_only = true`. An automatic `python` release MUST refuse before any write where `[project] version` is dynamic or absent, or the root holds no `uv.lock`, naming a static version or `uv lock` as the remedy, because every version write runs `uv version`, which relocks. `profile.release.build` names the `command` that produces `dist/*.tar.gz` and its `.sha256` and the `apt` `packages` the release image installs first on either forge, and it MUST be refused, naming the key and the shape it needs, under any mode but `automatic` and any driver but `bash`; an empty command MUST refuse by name. An absent key MUST read as `make dist` and `make` and leave the record and every landed byte as they were.
 
 #### Scenario: A release-less profile carries a style
 
@@ -64,7 +64,7 @@ Verify: `cargo nextest run -E 'test(a_target_with_no_technology_and_no_forge_lan
 - WHEN the reader loads it
 - THEN it refuses naming `profile.release.style` and the shape a `none` mode takes
 
-Verify: `cargo nextest run -E 'test(every_invalid_release_state_names_its_key) or test(a_registry_answer_is_valid_only_for_an_automatic_rust_release) or test(an_absent_registry_answer_resolves_to_crates_io_and_moves_no_byte) or test(a_registry_less_seed_pairs_publish_off_with_git_only) or test(a_build_parameter_resolves_by_precedence_and_renders) or test(a_build_parameter_refuses_a_driver_that_is_not_bash) or test(a_record_without_build_parameters_reads_as_make_dist) or test(an_empty_build_command_refuses_by_name) or test(only_the_bash_pipelines_carry_the_build_tokens) or test(the_build_packages_install_through_apt_on_both_forges)'`
+Verify: `cargo nextest run -E 'test(every_invalid_release_state_names_its_key) or test(a_registry_answer_is_valid_only_for_an_automatic_rust_or_python_release) or test(a_python_landing_refuses_a_dynamic_version) or test(a_python_landing_refuses_a_missing_lock) or test(the_python_registry_answer_none_publishes_nothing) or test(an_absent_registry_answer_resolves_to_crates_io_and_moves_no_byte) or test(a_registry_less_seed_pairs_publish_off_with_git_only) or test(a_build_parameter_resolves_by_precedence_and_renders) or test(a_build_parameter_refuses_a_driver_that_is_not_bash) or test(a_record_without_build_parameters_reads_as_make_dist) or test(an_empty_build_command_refuses_by_name) or test(only_the_bash_pipelines_carry_the_build_tokens) or test(the_build_packages_install_through_apt_on_both_forges)'`
 
 ### `project-profile:an-unknown-category-is-preserved` — An unknown category is preserved
 
@@ -80,13 +80,13 @@ Verify: `cargo nextest run -E 'test(an_unknown_forge_survives_init_status_and_up
 
 ### `project-profile:availability-belongs-to-a-capability-at-its-dimensions` — Availability belongs to a capability at its dimensions
 
-The catalog MUST answer availability for one capability at its selected dimensions and never for a category alone, so `release.automation` at `(python, github)` is available while the same capability at `(python, gitlab)` is unavailable, and every omission MUST carry one of `unavailable`, `unknown`, `not-applicable`, `not-requested`, and `withheld`.
+The catalog MUST answer availability for one capability at its selected dimensions and never for a category alone, so `supply-chain.code-scanning` at `(rust, gitlab)` is available while the same capability at `(python, gitlab)` is unavailable, and every omission MUST carry one of `unavailable`, `unknown`, `not-applicable`, `not-requested`, and `withheld`.
 
-#### Scenario: One driver on two forges
+#### Scenario: One capability at two drivers
 
-- GIVEN two automatic profiles driven by `python`, one on each forge
+- GIVEN two automatic GitLab profiles that ask for code scanning, one driven by `rust` and one by `python`
 - WHEN the catalog selects for each
-- THEN the GitHub profile selects the release automation and the GitLab profile reports it unavailable naming the available tuples
+- THEN the `rust` profile selects code scanning, the `python` profile reports it unavailable, and both select the release automation
 
 Verify: `cargo nextest run -E 'test(the_catalog_answers_availability_per_tuple)'`
 
@@ -154,13 +154,13 @@ Verify: `cargo nextest run -E 'test(the_observation_proposes_a_release_mode) or 
 
 A valid profile MAY request an unavailable capability, and an apply MUST refuse only where the selected release automation is unavailable, naming the dimensions and the available tuples, while an unavailable optional capability MUST be reported and omitted.
 
-#### Scenario: Python on GitLab asks for automation
+#### Scenario: A driver no binding carries asks for automation
 
-- GIVEN a GitLab target driven by `python` with `mode = "automatic"`
+- GIVEN a GitLab target driven by `go` with `mode = "automatic"`
 - WHEN `rk init` previews and then applies
-- THEN the preview reports the automation unavailable with the available tuples, and the apply refuses before any write
+- THEN the preview reports the automation unknown with the bindings this release carries, and the apply refuses before any write
 
-Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_apply_refuses) or test(a_binding_with_no_scanner_reports_the_capability_unavailable) or test(a_recorded_provider_the_pair_cannot_run_is_reported_and_omitted) or test(an_unavailable_provider_is_not_judged_on_its_licence)'`
+Verify: `cargo nextest run -E 'test(an_unknown_driver_reports_its_automation_and_apply_refuses) or test(a_binding_with_no_scanner_reports_the_capability_unavailable) or test(a_recorded_provider_the_pair_cannot_run_is_reported_and_omitted) or test(an_unavailable_provider_is_not_judged_on_its_licence)'`
 
 ### `project-profile:the-profile-command-writes-nothing` — The profile command writes nothing
 

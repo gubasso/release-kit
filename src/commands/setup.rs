@@ -648,8 +648,8 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
         "package-check" => match ctx.tech {
             Some("rust") if ctx.reporting_policy() => "would run: cargo publish --dry-run --allow-dirty, then cargo metadata --no-deps --format-version 1, then cargo package --list --allow-dirty for a single default package rooted at the target, asserting it carries SECURITY.md and none of release-kit's own files; another workspace shape reports both as unproved".to_owned(),
             Some("rust") => "would run: cargo publish --dry-run --allow-dirty, then cargo metadata --no-deps --format-version 1, then cargo package --list --allow-dirty for a single default package rooted at the target, asserting it ships none of release-kit's own files; another workspace shape reports that as unproved".to_owned(),
-            Some("python") if ctx.reporting_policy() => "would run: python3 -m build; sdist and wheel SECURITY.md inclusion stays unproved".to_owned(),
-            Some("python") => "would run: python3 -m build".to_owned(),
+            Some("python") if ctx.reporting_policy() => "would run: uv build, then list the sdist and the wheel in dist/; sdist and wheel SECURITY.md inclusion stays unproved".to_owned(),
+            Some("python") => "would run: uv build, then list the sdist and the wheel in dist/".to_owned(),
             Some("bash") => {
                 let command = ctx
                     .profile
