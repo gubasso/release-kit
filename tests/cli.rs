@@ -41522,6 +41522,157 @@ fn milestones_of(
         .collect()
 }
 
+/// A host with no uv cannot build the python package, so the packaging
+/// step reads unknown and names uv, and every other step and milestone of
+/// the check still reports.
+#[test]
+fn setup_check_without_uv_still_reports_every_milestone() {
+    let python = python_release_target("github", "");
+    let forge = ReleaseForge::new();
+    let out = rk()
+        .env("RK_GH_BIN", forge.mock.path().join("gh"))
+        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env("RK_UV_BIN", forge.mock.path().join("no-such-uv"))
+        .env_remove("RK_BOT_APP_ID")
+        .env_remove("RK_BOT_PRIVATE_KEY")
+        .env_remove("RK_BOT_PRIVATE_KEY_FILE")
+        .env_remove("RK_BOT_TOKEN")
+        .args(["setup", "check", "--json", "--target"])
+        .arg(python.path())
+        .output()
+        .expect("the check runs");
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one event per line"))
+        .collect();
+    let package = events
+        .iter()
+        .find(|event| event["step"] == "package-check")
+        .unwrap_or_else(|| panic!("the packaging step reports: {events:?}"));
+    assert_eq!(package["status"], "unknown", "{package}");
+    assert!(
+        package["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("uv")),
+        "{package}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "milestone" && event["step"] == "first-version-published"),
+        "{events:?}"
+    );
+}
+
+/// The package step of a python target, run from `caller` with the given
+/// uv program and PATH prefix, as `(status, detail)`, beside whether the
+/// check reported its first milestone.
+fn python_package_step_from(
+    target: &Path,
+    caller: &Path,
+    uv: Option<&str>,
+    path_prefix: Option<&str>,
+) -> (String, String, bool) {
+    let forge = ReleaseForge::new();
+    let mut command = rk();
+    command
+        .current_dir(caller)
+        .env("RK_GH_BIN", forge.mock.path().join("gh"))
+        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env_remove("RK_BOT_APP_ID")
+        .env_remove("RK_BOT_PRIVATE_KEY")
+        .env_remove("RK_BOT_PRIVATE_KEY_FILE")
+        .env_remove("RK_BOT_TOKEN")
+        .env_remove("RK_UV_BIN");
+    if let Some(uv) = uv {
+        command.env("RK_UV_BIN", uv);
+    }
+    // No uv of the host's: only the stand-in may answer to the bare name.
+    let host: Vec<String> = std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|dir| !Path::new(dir).join("uv").exists())
+        .map(str::to_owned)
+        .collect();
+    let path = path_prefix
+        .into_iter()
+        .map(str::to_owned)
+        .chain(host)
+        .collect::<Vec<_>>()
+        .join(":");
+    command.env("PATH", path);
+    let out = command
+        .args(["setup", "check", "--json", "--target"])
+        .arg(target)
+        .output()
+        .expect("the check runs");
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one event per line"))
+        .collect();
+    let package = events
+        .iter()
+        .find(|event| event["step"] == "package-check")
+        .unwrap_or_else(|| panic!("the packaging step reports: {events:?}"));
+    let milestone = events
+        .iter()
+        .any(|event| event["type"] == "milestone" && event["step"] == "first-version-published");
+    (
+        package["status"].as_str().unwrap_or_default().to_owned(),
+        package["detail"].as_str().unwrap_or_default().to_owned(),
+        milestone,
+    )
+}
+
+/// Write an executable uv stand-in whose build leaves an sdist and a wheel.
+fn write_uv_stub(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::create_dir_all(dir).expect("the stub dir creates");
+    let path = dir.join("uv");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nif [ \"$1\" = build ]; then mkdir -p dist; printf s > dist/acme-0.2.0.tar.gz; printf w > dist/acme-0.2.0-py3-none-any.whl; fi\nexit 0\n",
+    )
+    .expect("the stub writes");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .expect("the stub is executable");
+}
+
+/// The package step reads unknown exactly where the build cannot start. A
+/// relative `RK_UV_BIN` and a relative PATH entry both resolve in the target,
+/// where the build runs, never in the caller's directory. Either way the
+/// check goes on to its milestones.
+#[test]
+fn the_python_package_check_resolves_uv_where_the_build_runs() {
+    // (uv program, PATH prefix, stub directory, stub beside the caller,
+    // whether the build runs)
+    for (uv, prefix, stub_dir, in_caller, runs) in [
+        (Some("./uv"), None, "", true, false),
+        (Some("./uv"), None, "", false, true),
+        (None, Some("uvbin"), "uvbin", true, false),
+        (None, Some("uvbin"), "uvbin", false, true),
+    ] {
+        let python = python_release_target("github", "");
+        let caller = tempfile::tempdir().expect("a caller dir");
+        let home = if in_caller {
+            caller.path()
+        } else {
+            python.path()
+        };
+        write_uv_stub(&home.join(stub_dir));
+        let (status, detail, milestone) =
+            python_package_step_from(python.path(), caller.path(), uv, prefix);
+        let case = format!("{uv:?} {prefix:?} in_caller={in_caller}: {detail}");
+        if runs {
+            assert_eq!(status, "satisfied", "{case}");
+        } else {
+            assert_eq!(status, "unknown", "{case}");
+            assert!(detail.contains("uv"), "{case}");
+        }
+        assert!(milestone, "{case}: the check went on");
+    }
+}
+
 /// SATISFIES setup-proof:the-check-reads-the-publish-milestones
 ///
 /// The check reads both milestones back where the forge and the registry

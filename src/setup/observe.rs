@@ -308,14 +308,53 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     policy_in_the_crate(ctx, run, built)
 }
 
+/// Whether the uv program resolves to an executable file the way the spawn
+/// resolves it from `cwd`, the directory the child runs in: a path with a
+/// directory part, or a bare name on the child's PATH, else this
+/// process's. A relative path or PATH entry resolves against `cwd`.
+fn uv_runs(
+    program: &std::ffi::OsStr,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+    cwd: &std::path::Path,
+) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    let runnable = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    };
+    let path = std::path::Path::new(program);
+    if path.components().count() > 1 {
+        return runnable(&cwd.join(path));
+    }
+    env.iter()
+        .find(|(key, _)| key == "PATH")
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var_os("PATH"))
+        .is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| runnable(&cwd.join(dir).join(path)))
+        })
+}
+
 /// The python check: `uv build`, the build the release runs, then the sdist
 /// and the wheel it left in `dist/`, named. Their contents stay unproved
 /// where the target requests the reporting policy.
 fn python_build_check(ctx: &Ctx, run: &mut Runner, policy: bool) -> Result<StepState, RkError> {
+    let program = crate::probes::uv_bin();
+    let env = ctx.child_env("package-check");
+    if !uv_runs(&program, &env, ctx.target.as_std_path()) {
+        // A host with no uv cannot build the package. That is a limit of
+        // this observation, not a defect of the target.
+        return Ok(StepState::Unknown {
+            detail: format!(
+                "uv ({}) is not runnable on this host, so the package build was not checked; install uv, or point RK_UV_BIN at it",
+                program.to_string_lossy()
+            ),
+        });
+    }
     let exec = Exec {
-        program: crate::probes::uv_bin(),
+        program,
         args: vec!["build".into()],
-        env: ctx.child_env("package-check"),
+        env,
         cwd: ctx.target.as_std_path().to_path_buf(),
         stdin: None,
     };
