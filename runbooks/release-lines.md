@@ -73,38 +73,66 @@ git log --oneline -1 origin/release/<line>
 # check: the tip is the crossed fix and nothing else traveled
 ```
 
-## 5. Read the candidate
+## 5. Mint the candidate
 
-A candidate is `v<version>-rc.<n>` on the line, minted by the binding's rc automation where one is wired; the landed release workflows tag releases, not candidates, and this verb reads what exists.
+A candidate is `v<version>-rc.<n>` on the line. On a rust pair, mint it with the tip you read: dispatch the release workflow on GitHub, or run the manual `release-candidate` job of the line's pipeline on GitLab with `LINE` and `EXPECT`. A bash or python pair has no candidate path yet, and its line's release request stays the human gate.
+
+```bash
+git fetch origin --tags --force
+rk lines mint <line>
+# check: previews the next candidate's version and names the tip to pass as expect
+```
+
+On github:
+
+```bash
+gh workflow run release-plz.yml --repo <repo> --ref release/<line> -f line=<line> -f expect=<sha>
+gh run list --repo <repo> --workflow release-plz.yml --branch release/<line> --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId'
+gh run watch <run-id> --repo <repo> --exit-status
+# check: the dispatch run, not the push run the mint starts, ends in success
+```
+
+On gitlab:
+
+```bash
+glab ci list --branch release/<line>
+# check: pick the pipeline, and run its manual release-candidate job with LINE=<line> and EXPECT=<sha>
+glab ci trace release-candidate --pipeline-id <pipeline-id>
+glab ci get --pipeline-id <pipeline-id> --with-job-details
+# check: the release-candidate job itself reads success; the pipeline passes without it, because the job may fail
+```
 
 ```bash
 git fetch origin --tags --force
 rk lines rc <line>
-# check: names the newest candidate on the line and the next number a finding would mint
-# nothing listed: no candidate is tagged; where the binding wires no rc path, the line's release request stays the human gate and this step reads empty
+# check: names the newest candidate on the line and the next number a mint takes
+# nothing listed: no candidate is tagged yet on this line
 ```
 
 ## 6. Validate the candidate
+
+On a rust pair whose crate publishes to crates.io, a validator installs the candidate with `cargo install <crate> --version <version>-rc.<n>`. Where `profile.release.registry` is `none`, the validator installs it from its tag with `cargo install --git <repository URL> --tag v<version>-rc.<n>`.
 
 On github:
 
 ```bash
 gh release view "v<version>-rc.<n>" --repo <repo> --json assets -q '[.assets[].name] | join(", ")'
-# check: the candidate's artifacts exist; install one and use it — the human validation is the gate no command prints
+# check: the candidate's installers exist; install one and use it — the human validation is the gate no command prints
 ```
 
 On gitlab:
 
 ```bash
 glab release view "v<version>-rc.<n>"
-# check: the candidate's page stands; install what it links and use it — the human validation is the gate no command prints
+# check: the candidate's page stands and its description names the install command; run it and use what it installs — the human validation is the gate no command prints
 ```
 
 ## 7. Answer a finding with the next rc
 
-The finding crosses like any fix — step 4 — and the rc path that minted the last candidate mints the next number.
+The finding crosses like any fix, as step 4 says, and the next mint takes the next number: run step 5 again, through its wait and its fetch.
 
 ```bash
+git fetch origin --tags --force
 rk lines rc <line>
 # check: the newest candidate advanced by one; an rc number is single-use, because the tag protection makes a candidate immutable
 ```
@@ -113,7 +141,7 @@ rk lines rc <line>
 
 ### 8a. Promote the candidate
 
-Run `rk guide release` steps 3 to 6 against the line; a line's request is never armed, so the merge is yours, per that runbook's step 4.
+Promote through the same dispatch or job as step 5, with `promote=true` on GitHub or `PROMOTE=true` on GitLab. It writes the candidate's stable version, and it refuses while the line holds a commit the candidate did not test. Then run `rk guide release` steps 3 to 6 against the line. A line's request is never armed, so the merge is yours, per that runbook's step 4.
 
 On github:
 

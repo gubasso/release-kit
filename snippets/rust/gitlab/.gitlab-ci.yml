@@ -7,7 +7,8 @@
 # push is what makes the release job tag the commit, create the GitLab
 # release, and publish to crates.io over OIDC. Only the bot's own bump
 # releases, which release_always = false recognizes by its release-plz-*
-# source branch.
+# source branch. A third job, release-candidate, runs only by hand on a
+# pipeline of a line, and mints or promotes that line's release candidate.
 #
 # Every job authenticates with RELEASE_BOT_TOKEN, the project access token
 # the setup stores as a masked CI variable: a push made with the default CI
@@ -85,10 +86,36 @@ release-request:
   extends: .release-plz
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
-  resource_group: release-request
+  # One group per branch: a line's request never waits on another line's.
+  resource_group: release-request-$CI_COMMIT_REF_SLUG
   variables:
     RELEASE_STYLE: RK_STYLE
   script:
+    - |
+      set -eu
+      # A line that carries a candidate's version keeps this job out of the
+      # candidate numbering: release-plz would propose the next rc in a
+      # request. The request returns once the promotion writes the stable
+      # version. Cargo reads the current package alone, so any valid
+      # manifest form, an inherited workspace version, and any package
+      # metadata are handled, and only the leading name and version of its
+      # report are read. A version it cannot read fails the job.
+      case "$CI_COMMIT_BRANCH" in
+        RK_LINE_PREFIX*)
+          manifest="$(RK_DEV_RUN cargo read-manifest --offline)"
+          version="$(printf '%s' "$manifest" | sed -n 's/^{"name":"[^"]*","version":"\([^"]*\)",.*/\1/p')"
+          if [ -z "$version" ]; then
+            echo "cargo names no package version for Cargo.toml; no request opens past an unreadable manifest." >&2
+            exit 1
+          fi
+          case "$version" in
+            *-*)
+              echo "$CI_COMMIT_BRANCH carries the candidate $version; no release request until it is promoted."
+              exit 0
+              ;;
+          esac
+          ;;
+      esac
     - RK_DEV_RUN release-plz release-pr --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
     - |
       set -eu
@@ -132,7 +159,7 @@ release:
   extends: .release-plz
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
-  resource_group: release
+  resource_group: release-$CI_COMMIT_REF_SLUG
   id_tokens: # RK_IF_REGISTRY
     CRATES_IO_ID_TOKEN: # RK_IF_REGISTRY
       aud: crates.io # RK_IF_REGISTRY
@@ -147,3 +174,69 @@ release:
       RK_DEV_RUN release-plz release --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
       curl -fsS -X DELETE "https://crates.io/api/v1/trusted_publishing/tokens" \ # RK_IF_REGISTRY
         -H "Authorization: Bearer $CARGO_REGISTRY_TOKEN" || true # RK_IF_REGISTRY
+
+# A release candidate, minted on purpose. Run this job by hand on a pipeline
+# of the line, with the variables LINE, the line's <major>.<minor>, and
+# EXPECT, the full SHA of the line's tip you read; PROMOTE=true promotes the
+# line's newest candidate instead. rk writes the candidate's version and
+# pushes the line as the bot, and that push's pipeline releases nothing:
+# no release request carries it. release-plz then releases this commit
+# under a config derived from release-plz.toml with release_always = true,
+# the one key that releases a commit no request carries. It runs in this
+# pipeline because the crates.io publisher binds the top-level pipeline
+# file, not a job. The page names the candidate, because a GitLab release
+# carries no prerelease badge. A promotion writes the stable version alone,
+# and the line's release request proposes it.
+release-candidate:
+  extends: .release-plz
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+      when: manual
+      allow_failure: true
+  resource_group: release-candidate-$CI_COMMIT_REF_SLUG
+  id_tokens: # RK_IF_REGISTRY
+    CRATES_IO_ID_TOKEN: # RK_IF_REGISTRY
+      aud: crates.io # RK_IF_REGISTRY
+  script:
+# RK_DEV_ENV_RK_BEGIN
+    - curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/vRK_SELF_VERSION/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL=/usr/local/bin sh
+# RK_DEV_ENV_RK_END
+    - |
+      set -eu
+      if [ "$CI_COMMIT_BRANCH" != "RK_LINE_PREFIX${LINE:-}" ]; then
+        echo "this pipeline runs $CI_COMMIT_BRANCH, and LINE names RK_LINE_PREFIX${LINE:-}; run the job on a pipeline of the line it names." >&2
+        exit 1
+      fi
+      git config user.name "release-bot"
+      git config user.email "release-bot@invalid"
+      git remote set-url origin "https://release-bot:${RELEASE_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+      if [ "${PROMOTE:-false}" = "true" ]; then
+        RK_DEV_RUN rk lines mint "$LINE" --promote --expect "${EXPECT:-}" --apply
+        exit 0
+      fi
+      count="$(grep -c '^release_always = false$' release-plz.toml || true)"
+      if [ "$count" != "1" ]; then
+        echo "release-plz.toml carries 'release_always = false' $count times; the candidate's config flips exactly one." >&2
+        exit 1
+      fi
+      rc_config="$(mktemp)"
+      sed 's/^release_always = false$/release_always = true/' release-plz.toml > "$rc_config"
+      report="$(RK_DEV_RUN rk lines mint "$LINE" --expect "${EXPECT:-}" --apply --json)"
+      printf '%s\n' "$report"
+      field() { printf '%s\n' "$report" | sed -n "s/^  \"$1\": \"\([^\"]*\)\",\{0,1\}$/\1/p"; }
+      tag="$(field tag)"
+      version="$(field version)"
+      package="$(field package)"
+      response="$(curl -fsS -X PUT "https://crates.io/api/v1/trusted_publishing/tokens" \ # RK_IF_REGISTRY
+        -H 'Content-Type: application/json' \ # RK_IF_REGISTRY
+        -d "{\"jwt\":\"$CRATES_IO_ID_TOKEN\"}")" # RK_IF_REGISTRY
+      CARGO_REGISTRY_TOKEN="$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" # RK_IF_REGISTRY
+      export CARGO_REGISTRY_TOKEN # RK_IF_REGISTRY
+      RK_DEV_RUN release-plz release --forge gitlab --git-token "$RELEASE_BOT_TOKEN" --config "$rc_config"
+      curl -fsS -X DELETE "https://crates.io/api/v1/trusted_publishing/tokens" \ # RK_IF_REGISTRY
+        -H "Authorization: Bearer $CARGO_REGISTRY_TOKEN" || true # RK_IF_REGISTRY
+      install="cargo install $package --version $version" # RK_IF_REGISTRY
+      # RK_IF_NO_REGISTRY install="cargo install --git $CI_PROJECT_URL --tag $tag"
+      curl -fsS -X PUT --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/$tag" \
+        --data-urlencode "description=Release candidate $version, for validation before the stable release. It is not the latest stable release. Install it with: $install" >/dev/null

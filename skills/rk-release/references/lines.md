@@ -18,7 +18,7 @@ By intent:
    2. Cherry-pick only that commit onto the line, as a gated step. Never merge the line back into the trunk.
    3. Wait for the line's CI, then read the line's own release request.
    4. Release it through the `release` task, with the line as its trunk.
-3. A candidate: run `rk lines rc <line> --target .` to read the newest candidate and the next number. The binding's candidate automation tags it, never a hand. Validate the candidate, answer a finding by crossing its fix like any patch, and promote the validated one through the `release` task.
+3. A candidate: on a rust pair, the operator mints it through the pair's dispatch or manual job, which runs `rk lines mint` and tags nothing by hand. `rk lines rc <line> --target .` reads the newest candidate and the next number. A bash or python pair has no candidate path yet. Validate the candidate, answer a finding by crossing its fix like any patch, promote the validated one with `promote` set, and release it through the `release` task.
 4. Retire a line: preview `rk lines retire <line> --target .`, then run it with `--apply` as a gated step. It removes the seat before the branch, only behind the line's tags. Deleting the remote branch is the operator's step.
 
 ## Post-flight

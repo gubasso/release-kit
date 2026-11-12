@@ -220,6 +220,24 @@ mod tests {
                 )),
                 73,
             ),
+            // A mint whose line moved from the tip its caller saw refuses
+            // before any write.
+            (
+                RkError::refusal(Diagnostic::new(
+                    Reason::StateDrift,
+                    "release/1.4 is not at the expected tip",
+                )),
+                73,
+            ),
+            // A mint whose push lost the race to another push refuses with
+            // the remote unchanged, naming the tip that won.
+            (
+                RkError::refusal(Diagnostic::new(
+                    Reason::RemoteConflict,
+                    "release/1.4 moved while the mint ran",
+                )),
+                73,
+            ),
             (RkError::Other(anyhow::anyhow!("unclassified")), 70),
         ];
         for (err, code) in cases {

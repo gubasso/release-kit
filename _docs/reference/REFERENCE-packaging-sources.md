@@ -2,7 +2,7 @@
 
 External sources behind the consumer-pin rules of `SPEC-packaging.md` and the artifact-reach half of `SPEC-forge-setup.md`: what the Nix CLI, direnv, the forge, each venue `rk` publishes to, and each binding's packaging tool promise, the release bot's package boundary, and which rule each promise bears on.
 
-Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, the venue sections on 2026-09-12, the exact-version install section on 2026-09-14, and the release-plz section on 2026-09-27.
+Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, the venue sections on 2026-09-12, the exact-version install section on 2026-09-14, the release-plz section on 2026-09-27, and the shell installer section on 2026-11-12.
 
 ## Venue `crates`, on `cargo install` and the mise cargo backend
 
@@ -20,6 +20,14 @@ Bearing: `packaging:the-venue-and-the-manager-cross-in-one-matrix` — the mise 
 - <https://doc.rust-lang.org/cargo/commands/cargo-install.html>
 
 Bearing: `packaging:the-operator-selects-the-installed-version`. The manager's own surface already installs one exact release into a root of the operator's choosing, so acquisition needs no verb in `rk`, and a landing that fetched a release would duplicate what this command does with a checked lockfile.
+
+## The shell installer, on installing the release it was built for
+
+Each release of this repository carries `release-kit-installer.sh`, which cargo-dist generates for that release. The script names its own version in `APP_VERSION`, downloads its archive from the `releases/download/v<version>` path of that same release, and holds the sha256 of each archive it may download, so a script fetched from one release installs exactly that release. Where `RELEASE_KIT_UNMANAGED_INSTALL` names a directory, the script installs into it and changes no `PATH` setup and no updater.
+
+- <https://github.com/gubasso/release-kit/releases/download/v0.9.10/release-kit-installer.sh>
+
+Bearing: `packaging:a-landed-job-takes-rk-by-one-route`. A landed job that fetches the installer from the release of the version it pins gets that exact binary, with no version argument and no resolution.
 
 ## Venue `flake`, on flake references in a flake input and in devbox
 

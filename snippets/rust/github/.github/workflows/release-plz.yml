@@ -6,7 +6,9 @@
 # RK_IF_NO_REGISTRY # builds the binaries and the GitHub release on the tag push.
 #
 # Both halves run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
-# project keeps older lines. The pull-request half maintains the one release
+# project keeps older lines. A third job, release-candidate, runs only when a
+# person dispatches it for a line, and mints or promotes that line's release
+# candidate. The pull-request half maintains the one release
 # pull request against the pushed branch; the release half publishes and tags
 # only on the push that lands the bot's own bump, which release_always = false
 # recognizes by its release-plz-* head branch. The publish half runs free of
@@ -20,6 +22,23 @@ permissions: {}
 on:
   push:
     branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
+  # A person mints a release candidate on purpose: the line, and the tip they
+  # read, so a line that moved since then refuses. Nothing watches a push.
+  workflow_dispatch:
+    inputs:
+      line:
+        description: The release line, <major>.<minor>, as in 1.4
+        required: true
+        type: string
+      expect:
+        description: The line's tip you read, as a full commit SHA
+        required: true
+        type: string
+      promote:
+        description: Promote the line's newest candidate to its stable version instead of minting a new one
+        required: false
+        type: boolean
+        default: false
 # RK_GATE_TRIGGER_BEGIN
 # RK_GATE_TRIGGER_END
 
@@ -29,7 +48,7 @@ jobs:
   # makes the tag trigger release.yml; a tag pushed with GITHUB_TOKEN starts no
   # further workflow. On a RK_LINE_PREFIX* line the same job tags the line's patch.
   release-plz-release:
-    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
+    if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -63,7 +82,7 @@ jobs:
 # RK_DEV_ENV_RELEASE_END
 
   release-plz-pr:
-    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
+    if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -87,8 +106,43 @@ jobs:
           permission-pull-requests: write
 # RK_DEV_ENV_REQUEST_BEGIN
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      # A line that carries a candidate's version keeps this half out of the
+      # candidate numbering: release-plz would propose the next rc in a
+      # request. The request returns once the promotion writes the stable
+      # version, and it then proposes that version with its changelog. Cargo
+      # reads the version, so any valid manifest form and an inherited
+      # workspace version count, and a version it cannot read fails the job.
+      - name: hold the request while the line carries a candidate
+        id: candidate
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          set -eu
+          case "$REF" in
+            RK_LINE_PREFIX*) ;;
+            *)
+              echo "held=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          metadata="$(cargo metadata --no-deps --format-version 1 --offline)"
+          version="$(printf '%s' "$metadata" | jq -r --arg manifest "$PWD/Cargo.toml" '.packages[] | select(.manifest_path == $manifest) | .version')"
+          if [ -z "$version" ]; then
+            echo "cargo names no package version for $PWD/Cargo.toml; no request opens past an unreadable manifest." >&2
+            exit 1
+          fi
+          case "$version" in
+            *-*)
+              echo "$REF carries the candidate $version; no release request until it is promoted."
+              echo "held=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "held=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
       - uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5
         id: release-pr
+        if: steps.candidate.outputs.held != 'true'
         with:
           command: release-pr
           version: "0.4.3"
@@ -130,5 +184,93 @@ jobs:
           gh pr merge "$number" --auto RK_MERGE_FLAG --delete-branch
           echo "armed pull request #$number."
 # RK_GATE_ARM_END
+
+  # A release candidate, minted on purpose. The job checks out the requested
+  # line under the app token and persists it, because rk pushes the
+  # candidate's version before release-plz configures git; the push starts
+  # the push jobs above, which publish nothing for a commit no release
+  # request carries. release-plz then releases that commit under a config
+  # derived from release-plz.toml with release_always = true, the one key
+  # that releases a commit no request carries. It runs in this file because
+  # a registry binds its publishing to the workflow file, so a second file
+  # could not publish. A promotion writes the stable version alone, and the
+  # line's release request proposes it.
+  release-candidate:
+    if: github.repository_owner == 'OWNER' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # RK_IF_REGISTRY
+    concurrency:
+      group: release-candidate-${{ inputs.line }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          # release-plz looks up the pull requests of the released commit
+          # before it reads release_always, and that lookup needs this read
+          # on a private repository.
+          permission-pull-requests: read
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: RK_LINE_PREFIX${{ inputs.line }}
+          fetch-depth: 0
+          # zizmor: ignore[artipacked] the persisted credential is what pushes
+          # the candidate's version and reads the line's remote tags below.
+          token: ${{ steps.app-token.outputs.token }}
+      - name: configure git as the release app
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -eu
+          uid="$(gh api "/users/${APP_SLUG}[bot]" -q .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${uid}+${APP_SLUG}[bot]@users.noreply.github.com"
+      - name: derive the candidate's release config
+        if: ${{ !inputs.promote }}
+        run: |
+          set -eu
+          count="$(grep -c '^release_always = false$' release-plz.toml || true)"
+          if [ "$count" != "1" ]; then
+            echo "release-plz.toml carries 'release_always = false' $count times; the candidate's config flips exactly one." >&2
+            exit 1
+          fi
+          sed 's/^release_always = false$/release_always = true/' release-plz.toml > "$RUNNER_TEMP/release-plz-rc.toml"
+# RK_DEV_ENV_CANDIDATE_BEGIN
+      - name: install rk
+        env:
+          RK_VERSION: "RK_SELF_VERSION"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
+      - name: mint
+        env:
+          LINE: ${{ inputs.line }}
+          EXPECT: ${{ inputs.expect }}
+          PROMOTE: ${{ inputs.promote }}
+        run: |
+          set -eu
+          if [ "$PROMOTE" = "true" ]; then
+            rk lines mint "$LINE" --promote --expect "$EXPECT" --apply
+          else
+            rk lines mint "$LINE" --expect "$EXPECT" --apply
+          fi
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        if: ${{ !inputs.promote }}
+      - uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5
+        if: ${{ !inputs.promote }}
+        with:
+          command: release
+          version: "0.4.3"
+          config: ${{ runner.temp }}/release-plz-rc.toml
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+# RK_DEV_ENV_CANDIDATE_END
 # RK_GATE_JOB_BEGIN
 # RK_GATE_JOB_END

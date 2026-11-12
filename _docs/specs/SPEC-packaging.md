@@ -14,6 +14,7 @@
   - [`packaging:a-launcher-resolves-through-one-owner` — A launcher resolves through one owner](#packaginga-launcher-resolves-through-one-owner--a-launcher-resolves-through-one-owner)
   - [`packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake](#packagingthe-landable-capability-promises-a-buildable-flake--the-landable-capability-promises-a-buildable-flake)
   - [`packaging:the-operator-selects-the-installed-version` — The operator selects the installed version](#packagingthe-operator-selects-the-installed-version--the-operator-selects-the-installed-version)
+  - [`packaging:a-landed-job-takes-rk-by-one-route` — A landed job takes rk by one route](#packaginga-landed-job-takes-rk-by-one-route--a-landed-job-takes-rk-by-one-route)
   - [`packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover](#packagingthe-consumer-pin-has-two-facts-and-one-mover--the-consumer-pin-has-two-facts-and-one-mover)
   - [`packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis](#packagingthe-pin-is-read-through-a-manager-axis--the-pin-is-read-through-a-manager-axis)
   - [`packaging:the-venue-and-the-manager-cross-in-one-matrix` — The venue and the manager cross in one matrix](#packagingthe-venue-and-the-manager-cross-in-one-matrix--the-venue-and-the-manager-cross-in-one-matrix)
@@ -153,6 +154,18 @@ The operator and the target's tool manager MUST choose the installed `rk` versio
 - THEN both complete from the installed binary, no registry, forge, or cache is consulted, and the receipt names the installed version
 
 Verify: `cargo nextest run -E 'test(stage_and_landing_need_no_release_resolution_network_access)'`
+
+### `packaging:a-landed-job-takes-rk-by-one-route` — A landed job takes rk by one route
+
+Where a landed job runs `rk`, the job MUST run it through the recorded development environment's run prefix when the target records one, and MUST otherwise install it through the shell installer of the release whose version equals the landing binary's own, because a recorded environment is the project's one source of its tools, and the landing binary is the one version known to carry every verb its own jobs call. A job under a recorded environment names no `rk` version, and the binding states that the environment must carry `rk`.
+
+#### Scenario: A target with no recorded environment is landed by a new release
+
+- GIVEN a target with no development environment, landed by the `rk` release that first carries the minting verb
+- WHEN the landing renders the job that mints a candidate
+- THEN the job fetches `release-kit-installer.sh` from that same release, and `versions.toml` names no `rk` version
+
+Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover
 

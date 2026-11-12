@@ -50,7 +50,7 @@ Any trunk commit can be released, at any moment, because unfinished work ships d
 
 ## A release line flows one direction
 
-Where an older line exists, changes reach its `release/<major>.<minor>` branch from the trunk by cherry-pick, and nothing merges back: a fix lands on the trunk first, then crosses alone. A tag outlives its branch — the branch is deleted once its tags pin the commits, never merged to die. An rc tag on a line publishes to no registry; it exists to build the artifacts a human validates.
+Where an older line exists, changes reach its `release/<major>.<minor>` branch from the trunk by cherry-pick, and nothing merges back: a fix lands on the trunk first, then crosses alone. A tag outlives its branch — the branch is deleted once its tags pin the commits, never merged to die. A candidate on a line, `v<version>-rc.<n>`, is a prerelease a human validates before the stable release. A resolver skips a prerelease by default, so a candidate never shadows the version it precedes.
 
 ## Enforcement is a separate switch
 

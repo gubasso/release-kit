@@ -1,9 +1,44 @@
 RK_DEV_SETUP_STEPSRK_DEV_GIT_USER
+      # A line that carries a candidate's version keeps this half out of the
+      # candidate numbering: release-plz would propose the next rc in a
+      # request. The request returns once the promotion writes the stable
+      # version, and it then proposes that version with its changelog. Cargo
+      # reads the version, so any valid manifest form and an inherited
+      # workspace version count, and a version it cannot read fails the job.
+      - name: hold the request while the line carries a candidate
+        id: candidate
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          set -eu
+          case "$REF" in
+            RK_LINE_PREFIX*) ;;
+            *)
+              echo "held=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          metadata="$(RK_DEV_RUN cargo metadata --no-deps --format-version 1 --offline)"
+          version="$(printf '%s' "$metadata" | jq -r --arg manifest "$PWD/Cargo.toml" '.packages[] | select(.manifest_path == $manifest) | .version')"
+          if [ -z "$version" ]; then
+            echo "cargo names no package version for $PWD/Cargo.toml; no request opens past an unreadable manifest." >&2
+            exit 1
+          fi
+          case "$version" in
+            *-*)
+              echo "$REF carries the candidate $version; no release request until it is promoted."
+              echo "held=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "held=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
       # The request half writes the whole JSON report as the pr output. The
       # arm below reads the first request number in it, which is the one
       # request release-plz maintains, and reads none where it opened none.
       - name: release-pr
         id: release-pr
+        if: steps.candidate.outputs.held != 'true'
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |

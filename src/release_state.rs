@@ -779,6 +779,38 @@ pub fn package_name(target: &Path, driver: &str) -> Option<String> {
     value.get(table)?.get("name")?.as_str().map(str::to_owned)
 }
 
+/// The file that carries a driver's version, with the table that holds
+/// its `version` key, or `None` for the `VERSION` file whose whole content
+/// is the version.
+#[must_use]
+pub fn version_file(driver: &str) -> Option<(&'static str, Option<&'static str>)> {
+    match driver {
+        "rust" => Some(("Cargo.toml", Some("package"))),
+        "python" => Some(("pyproject.toml", Some("project"))),
+        "bash" => Some(("VERSION", None)),
+        _ => None,
+    }
+}
+
+/// The version the target's own version file carries, in the
+/// technology's own spelling: `[package].version` in `Cargo.toml`,
+/// `[project].version` in `pyproject.toml`, the trimmed `VERSION` file.
+#[must_use]
+pub fn manifest_version(target: &Path, driver: &str) -> Option<String> {
+    let (file, table) = version_file(driver)?;
+    let text = std::fs::read_to_string(target.join(file)).ok()?;
+    let Some(table) = table else {
+        let version = text.trim();
+        return (!version.is_empty()).then(|| version.to_owned());
+    };
+    let value: toml::Table = toml::from_str(&text).ok()?;
+    value
+        .get(table)?
+        .get("version")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// The GitLab project id a path names, URL-encoded once.
 #[must_use]
 pub fn gitlab_project(repo: &str) -> String {

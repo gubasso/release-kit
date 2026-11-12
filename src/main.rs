@@ -194,6 +194,7 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Lines(args) => match &args.action {
             LinesAction::List { json, .. }
             | LinesAction::Open { json, .. }
+            | LinesAction::Mint { json, .. }
             | LinesAction::Rc { json, .. }
             | LinesAction::Retire { json, .. } => *json,
         },

@@ -3,7 +3,7 @@
 use camino::Utf8PathBuf;
 use clap::{Args, Subcommand};
 
-/// Open, inventory, and retire the release lines.
+/// Open, inventory, mint candidates on, and retire the release lines.
 #[derive(Debug, Args)]
 pub struct LinesArgs {
     /// What to do with the lines.
@@ -12,7 +12,8 @@ pub struct LinesArgs {
 }
 
 /// The line verbs. A line is `release/<major>.<minor>`: cut from an
-/// explicit base, released by hand, and retired only behind its tags.
+/// explicit base, validated through the candidates it mints, released by
+/// hand, and retired only behind its tags.
 #[derive(Debug, Subcommand)]
 pub enum LinesAction {
     /// Report every release line — its tags, its tag coverage, and its
@@ -44,6 +45,39 @@ pub enum LinesAction {
 
         /// Create the line; without it the intent is reported and nothing
         /// is touched.
+        #[arg(long)]
+        apply: bool,
+
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Mint the line's next release candidate: write its version into the
+    /// manifest, commit, and push the line; the release half tags it.
+    /// Preview by default.
+    Mint {
+        /// The line's `<major>.<minor>`.
+        line: String,
+
+        /// The line's tip the caller saw; the mint refuses when the remote
+        /// tip, the checkout's HEAD, or the working tree moved from it.
+        /// Required with --apply.
+        #[arg(long)]
+        expect: Option<String>,
+
+        /// Promote the newest candidate instead: write its stable version,
+        /// so the line's release request proposes it. Refuses while the
+        /// line holds a commit that candidate did not test.
+        #[arg(long)]
+        promote: bool,
+
+        /// The repository to act on; any of its worktrees names it.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
+
+        /// Commit and push the candidate's version; without it the intent
+        /// is reported and nothing is touched.
         #[arg(long)]
         apply: bool,
 

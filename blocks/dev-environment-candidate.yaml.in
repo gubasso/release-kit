@@ -1,0 +1,25 @@
+RK_DEV_SETUP_STEPS
+      # rk, release-plz, and the toolchain come from the project's development
+      # environment, through the prefix the project records, so the
+      # environment must carry rk. The binary issues the crates.io token
+      # itself over OIDC, from the job's own environment, which the prefix
+      # keeps.
+      - name: mint
+        env:
+          LINE: ${{ inputs.line }}
+          EXPECT: ${{ inputs.expect }}
+          PROMOTE: ${{ inputs.promote }}
+        run: |
+          set -eu
+          if [ "$PROMOTE" = "true" ]; then
+            RK_DEV_RUN rk lines mint "$LINE" --promote --expect "$EXPECT" --apply
+          else
+            RK_DEV_RUN rk lines mint "$LINE" --expect "$EXPECT" --apply
+          fi
+      - name: release the candidate
+        if: ${{ !inputs.promote }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -eu
+          RK_DEV_RUN release-plz release --git-token "$GITHUB_TOKEN" --config "$RUNNER_TEMP/release-plz-rc.toml" -o json

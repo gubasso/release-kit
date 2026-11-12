@@ -13610,8 +13610,10 @@ fn a_rendered_app_token_step_passes_the_identity_as_client_id() {
                     "{tech}/{integration} {name}: every app-token step passes client-id"
                 );
             }
-            // Two release halves, and the gate under local integration.
-            let expected = if integration == "local" { 3 } else { 2 };
+            // Two release halves, the gate under local integration, and the
+            // release-candidate job on the pair that wires one.
+            let candidate = usize::from(tech == "rust");
+            let expected = if integration == "local" { 3 } else { 2 } + candidate;
             assert_eq!(minted, expected, "{tech}/{integration}");
         }
     }
@@ -13656,7 +13658,10 @@ fn the_release_plz_version_agrees_with_the_registry() {
     )
     .expect("the workflow is text");
     let actions = github.matches("uses: release-plz/action@").count();
-    assert_eq!(actions, 2, "both halves run the action");
+    assert_eq!(
+        actions, 3,
+        "both halves and the release-candidate job run the action"
+    );
     assert_eq!(
         github
             .matches(&format!("uses: release-plz/action@{commit} "))
@@ -18462,6 +18467,16 @@ fn every_app_token_mint_scopes_its_permissions() {
             "release-plz-pr",
             vec!["contents: write", "pull-requests: write"],
         ),
+        // The candidate job pushes the line's version commit and tags the
+        // release; it opens no request.
+        // release-plz looks up the released commit's pull requests before
+        // it reads release_always, which needs the read on a private
+        // repository.
+        (
+            "rust/github/.github/workflows/release-plz.yml",
+            "release-candidate",
+            vec!["contents: write", "pull-requests: read"],
+        ),
     ];
     // Discovered, never listed: a new snippet workflow that mints a token
     // reaches this test on the day it lands.
@@ -18839,6 +18854,782 @@ fn lines_open_adopts_a_remote_only_line_at_its_tip() {
         shas.next(),
         shas.next(),
         "the local line tracks the remote tip, not the base"
+    );
+}
+
+/// A landed target with a published release line `release/1.4` cut from
+/// `v1.4.2`, checked out on the line, beside its bare origin: the fixture
+/// every `rk lines mint` test acts on.
+struct MintLine {
+    dir: tempfile::TempDir,
+    work: PathBuf,
+}
+
+impl MintLine {
+    fn new(tech: &str) -> Self {
+        let dir = tempfile::tempdir().expect("a scratch dir exists");
+        let work = dir.path().join("work");
+        std::fs::create_dir(&work).expect("the work tree exists");
+        git_in(&work, &["init", "-q", "-b", "master"]);
+        git_in(&work, &["config", "user.name", "t"]);
+        git_in(&work, &["config", "user.email", "t@invalid"]);
+        git_in(&work, &["config", "core.hooksPath", ".git/hooks"]);
+        rk().args(["init", "--tech", tech, "--forge", "github"])
+            .args(["--repo", "acme/widget", "--integration", "forge"])
+            .args(["--style", "lines", "--target"])
+            .arg(&work)
+            .arg("--apply")
+            .assert()
+            .success();
+        match tech {
+            "rust" => {
+                std::fs::write(
+                    work.join("Cargo.toml"),
+                    "[package]\nname = \"acme\"\nversion = \"1.4.2\" # kept\nedition = \"2021\"\n",
+                )
+                .expect("writes");
+                std::fs::create_dir(work.join("src")).expect("writes");
+                std::fs::write(work.join("src/lib.rs"), "pub fn f() {}\n").expect("writes");
+                std::fs::write(
+                    work.join("Cargo.lock"),
+                    "version = 4\n\n[[package]]\nname = \"acme\"\nversion = \"1.4.2\"\n\n[[package]]\nname = \"dep\"\nversion = \"1.4.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+                )
+                .expect("writes");
+            }
+            "python" => std::fs::write(
+                work.join("pyproject.toml"),
+                "[project]\nname = \"acme\"\nversion = \"1.4.2\"\n",
+            )
+            .expect("writes"),
+            _ => std::fs::write(work.join("VERSION"), "1.4.2\n").expect("writes"),
+        }
+        git_in(&work, &["add", "-A"]);
+        git_in(&work, &["commit", "-q", "-m", "chore: release v1.4.2"]);
+        git_in(&work, &["tag", "v1.4.2"]);
+        git_in(&work, &["branch", "release/1.4"]);
+        let origin = dir.path().join("origin.git");
+        git_in(dir.path(), &["init", "-q", "--bare", "origin.git"]);
+        git_in(
+            &work,
+            &["remote", "add", "origin", origin.to_str().expect("utf-8")],
+        );
+        git_in(
+            &work,
+            &["push", "-q", "origin", "master", "release/1.4", "v1.4.2"],
+        );
+        git_in(&work, &["checkout", "-q", "release/1.4"]);
+        Self { dir, work }
+    }
+
+    /// Tag the line's tip on the origin alone, so the clone holds a tag it
+    /// never fetched, as a release half that tagged in CI leaves it.
+    fn remote_tag(&self, tag: &str) {
+        git_in(&self.work, &["tag", tag]);
+        git_in(&self.work, &["push", "-q", "origin", tag]);
+        git_in(&self.work, &["tag", "-d", tag]);
+    }
+
+    /// Commit a change on the line and publish it.
+    fn advance(&self, message: &str) {
+        std::fs::write(self.work.join("note"), message).expect("writes");
+        git_in(&self.work, &["add", "note"]);
+        git_in(&self.work, &["commit", "-q", "-m", message]);
+        git_in(&self.work, &["push", "-q", "origin", "release/1.4"]);
+    }
+
+    fn head(&self) -> String {
+        git_out(&self.work, &["rev-parse", "HEAD"])
+    }
+
+    fn remote_refs(&self, pattern: &str) -> String {
+        git_out(&self.work, &["ls-remote", "origin", pattern])
+    }
+
+    fn read(&self, file: &str) -> String {
+        std::fs::read_to_string(self.work.join(file)).expect("reads")
+    }
+
+    /// A second clone of the origin, on the line, with its own identity.
+    fn other_clone(&self) -> PathBuf {
+        let other = self.dir.path().join("other");
+        git_in(
+            self.dir.path(),
+            &[
+                "clone",
+                "-q",
+                "-b",
+                "release/1.4",
+                self.dir.path().join("origin.git").to_str().expect("utf-8"),
+                "other",
+            ],
+        );
+        git_in(&other, &["config", "user.name", "o"]);
+        git_in(&other, &["config", "user.email", "o@invalid"]);
+        other
+    }
+
+    fn mint(&self, args: &[&str]) -> assert_cmd::assert::Assert {
+        rk().args(["lines", "mint"])
+            .args(args)
+            .arg("--target")
+            .arg(&self.work)
+            .assert()
+    }
+
+    fn mint_json(&self, args: &[&str]) -> serde_json::Value {
+        let mut all = args.to_vec();
+        all.push("--json");
+        let out = self.mint(&all).success().get_output().stdout.clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    }
+}
+
+/// SATISFIES release-candidates:a-mint-creates-no-tag: the mint reads the
+/// candidates from the remote, which the clone never fetched, writes the
+/// next number, pushes the line, and creates no tag.
+#[test]
+fn a_mint_takes_the_next_rc_from_the_remote_tags() {
+    let line = MintLine::new("rust");
+    line.remote_tag("v1.4.3-rc.1");
+    line.advance("fix: crossed");
+    line.remote_tag("v1.4.3-rc.2");
+    line.advance("fix: crossed again");
+    let tip = line.head();
+    let report = line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    assert_eq!(report["mode"], "minted");
+    assert_eq!(report["version"], "1.4.3-rc.3");
+    assert!(
+        line.read("Cargo.toml")
+            .contains("version = \"1.4.3-rc.3\" # kept")
+    );
+    let lock = line.read("Cargo.lock");
+    assert!(
+        lock.contains("name = \"acme\"\nversion = \"1.4.3-rc.3\""),
+        "{lock}"
+    );
+    assert!(
+        lock.contains("name = \"dep\"\nversion = \"1.4.2\""),
+        "a dependency keeps its version: {lock}"
+    );
+    let head = line.head();
+    assert_eq!(report["commit"], head.as_str());
+    assert!(
+        line.remote_refs("refs/heads/release/1.4")
+            .starts_with(&head)
+    );
+    assert_eq!(
+        git_out(&line.work, &["log", "-1", "--format=%s"]),
+        "chore(release): mint v1.4.3-rc.3"
+    );
+    assert!(
+        line.remote_refs("refs/tags/v1.4.3-rc.3").is_empty(),
+        "the mint creates no tag"
+    );
+    assert!(git_out(&line.work, &["tag", "-l", "v1.4.3-rc.3"]).is_empty());
+}
+
+/// A preview writes nothing, and the apply refuses without the tip the
+/// caller saw.
+#[test]
+fn a_mint_previews_and_needs_the_expected_tip_to_apply() {
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    line.mint(&["1.4"])
+        .success()
+        .stdout(predicate::str::contains("DRY RUN: would write 1.4.3-rc.1"))
+        .stdout(predicate::str::contains(format!("--expect {tip}")));
+    line.mint(&["1.4", "--apply"])
+        .code(64)
+        .stderr(predicate::str::contains("--expect"));
+    assert!(line.read("Cargo.toml").contains("\"1.4.2\""));
+    assert_eq!(line.head(), tip);
+}
+
+/// SATISFIES release-candidates:a-mint-acts-only-on-the-tip-its-caller-saw:
+/// a tip that moved since the caller read it refuses before any write.
+#[test]
+fn a_mint_refuses_a_moved_tip_before_writing() {
+    let line = MintLine::new("rust");
+    let seen = line.head();
+    let other = line.other_clone();
+    std::fs::write(other.join("note"), "x").expect("writes");
+    git_in(&other, &["add", "note"]);
+    git_in(&other, &["commit", "-q", "-m", "fix: elsewhere"]);
+    git_in(&other, &["push", "-q", "origin", "release/1.4"]);
+    let moved = git_out(&other, &["rev-parse", "HEAD"]);
+    line.mint(&["1.4", "--expect", &seen, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains(format!(
+            "is at {moved} on the remote"
+        )));
+    assert!(line.read("Cargo.toml").contains("\"1.4.2\""));
+    assert_eq!(line.head(), seen);
+    assert!(
+        line.remote_refs("refs/heads/release/1.4")
+            .starts_with(&moved)
+    );
+}
+
+/// SATISFIES release-candidates:a-lost-race-names-the-winning-tip: a push
+/// the remote rejects because the line moved while the mint ran is a typed
+/// refusal that names the tip that won.
+#[test]
+fn a_lost_mint_race_names_the_winning_tip() {
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    let other = line.other_clone();
+    std::fs::write(other.join("note"), "x").expect("writes");
+    git_in(&other, &["add", "note"]);
+    git_in(&other, &["commit", "-q", "-m", "fix: the winner"]);
+    let winner = git_out(&other, &["rev-parse", "HEAD"]);
+    // The race: the other clone pushes between the mint's read and its push.
+    let hook = line.work.join(".git/hooks/pre-push");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR\ngit -C '{}' push -q origin release/1.4 >/dev/null 2>&1\nexit 0\n",
+            other.display()
+        ),
+    )
+    .expect("writes");
+    let mut permissions = std::fs::metadata(&hook).expect("reads").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&hook, permissions).expect("the hook is executable");
+    line.mint(&["1.4", "--expect", &tip, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains(format!("moved to {winner}")))
+        .stderr(predicate::str::contains(format!("--expect {winner}")));
+    assert!(
+        line.remote_refs("refs/heads/release/1.4")
+            .starts_with(&winner)
+    );
+}
+
+/// A malformed line refuses as usage before anything is read.
+#[test]
+fn a_mint_refuses_a_ref_that_is_not_a_line() {
+    let line = MintLine::new("rust");
+    for bad in ["1", "1.x", "release/1.4", "1.4.2"] {
+        line.mint(&[bad]).code(64);
+    }
+}
+
+/// Each technology gets its own spelling, and the report names the one
+/// tag the release half creates.
+#[test]
+fn a_mint_writes_each_technology_spelling() {
+    for (tech, file, expected, spelled) in [
+        (
+            "rust",
+            "Cargo.toml",
+            "version = \"1.4.3-rc.3\"",
+            "1.4.3-rc.3",
+        ),
+        ("bash", "VERSION", "1.4.3-rc.3\n", "1.4.3-rc.3"),
+        (
+            "python",
+            "pyproject.toml",
+            "version = \"1.4.3rc3\"",
+            "1.4.3rc3",
+        ),
+    ] {
+        let line = MintLine::new(tech);
+        line.remote_tag("v1.4.3-rc.2");
+        let tip = line.head();
+        let report = line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+        assert_eq!(report["version"], spelled, "{tech}");
+        assert_eq!(report["tag"], "v1.4.3-rc.3", "{tech}");
+        assert!(
+            line.read(file).contains(expected),
+            "{tech}: {}",
+            line.read(file)
+        );
+    }
+}
+
+/// The mint edits exactly the tree of the requested line at the expected
+/// tip: another branch, an extra local commit, and a dirty tree refuse,
+/// and a detached checkout at the tip mints.
+#[test]
+fn a_mint_refuses_a_wrong_checkout() {
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    git_in(&line.work, &["checkout", "-q", "master"]);
+    git_in(
+        &line.work,
+        &["commit", "-q", "--allow-empty", "-m", "chore: trunk"],
+    );
+    line.mint(&["1.4", "--expect", &tip, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains("the checkout is at"));
+    git_in(&line.work, &["checkout", "-q", "release/1.4"]);
+    git_in(
+        &line.work,
+        &["commit", "-q", "--allow-empty", "-m", "chore: local only"],
+    );
+    line.mint(&["1.4", "--expect", &tip, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains("the checkout is at"));
+    git_in(&line.work, &["checkout", "-q", "--detach", &tip]);
+    std::fs::write(line.work.join("src/lib.rs"), "pub fn changed() {}\n").expect("writes");
+    line.mint(&["1.4", "--expect", &tip, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains("uncommitted"));
+    git_in(&line.work, &["checkout", "-q", "--", "src/lib.rs"]);
+    let report = line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    assert_eq!(report["mode"], "minted");
+    assert_eq!(report["version"], "1.4.3-rc.1");
+}
+
+/// SATISFIES release-candidates:a-line-derives-its-candidate
+/// SATISFIES release-candidates:a-pending-candidate-is-published-not-reminted
+/// The verb derives the stable base: the next patch after the line's
+/// newest release, the next base after a promotion released, and an
+/// untagged candidate of that base is pending, with nothing written.
+#[test]
+fn a_mint_takes_its_stable_base_as_settled() {
+    let line = MintLine::new("rust");
+    assert_eq!(line.mint_json(&["1.4"])["version"], "1.4.3-rc.1");
+    // A pending candidate: the manifest carries rc.1, and no tag exists.
+    let tip = line.head();
+    line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    let minted = line.head();
+    let report = line.mint_json(&["1.4", "--expect", &minted, "--apply"]);
+    assert_eq!(report["mode"], "pending");
+    assert_eq!(report["version"], "1.4.3-rc.1");
+    assert_eq!(line.head(), minted, "a pending mint writes nothing");
+    // The release half tags rc.1, then the promotion releases 1.4.3.
+    line.remote_tag("v1.4.3-rc.1");
+    let manifest = line.read("Cargo.toml").replace("1.4.3-rc.1", "1.4.3");
+    std::fs::write(line.work.join("Cargo.toml"), manifest).expect("writes");
+    git_in(
+        &line.work,
+        &["commit", "-q", "-am", "chore: release v1.4.3"],
+    );
+    git_in(&line.work, &["push", "-q", "origin", "release/1.4"]);
+    line.remote_tag("v1.4.3");
+    assert_eq!(line.mint_json(&["1.4"])["version"], "1.4.4-rc.1");
+}
+
+/// SATISFIES release-candidates:a-promotion-writes-only-tested-code: the
+/// promotion writes the newest candidate's stable version, keeps the
+/// lockfile in step, pushes, and creates no tag; the line's request then
+/// proposes it.
+#[test]
+fn a_promotion_writes_the_newest_candidates_stable_version() {
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    // The release half tags the candidate, annotated as a forge API would.
+    git_in(&line.work, &["tag", "-a", "v1.4.3-rc.1", "-m", "rc"]);
+    git_in(&line.work, &["push", "-q", "origin", "v1.4.3-rc.1"]);
+    git_in(&line.work, &["tag", "-d", "v1.4.3-rc.1"]);
+    let tested = line.head();
+    line.mint(&["1.4", "--promote"])
+        .success()
+        .stdout(predicate::str::contains(
+            "DRY RUN: would write 1.4.3 into Cargo.toml",
+        ));
+    let report = line.mint_json(&["1.4", "--promote", "--expect", &tested, "--apply"]);
+    assert_eq!(report["mode"], "promoted");
+    assert_eq!(report["version"], "1.4.3");
+    assert_eq!(report["tag"], "v1.4.3");
+    assert!(
+        line.read("Cargo.toml")
+            .contains("version = \"1.4.3\" # kept")
+    );
+    assert!(
+        line.read("Cargo.lock")
+            .contains("name = \"acme\"\nversion = \"1.4.3\"")
+    );
+    assert_eq!(
+        git_out(&line.work, &["log", "-1", "--format=%s"]),
+        "chore(release): promote v1.4.3-rc.1 to v1.4.3"
+    );
+    assert!(
+        line.remote_refs("refs/tags/v1.4.3").is_empty(),
+        "the promotion creates no tag"
+    );
+    // Promoted and not yet released: a second run writes nothing.
+    let promoted = line.head();
+    let again = line.mint_json(&["1.4", "--promote", "--expect", &promoted, "--apply"]);
+    assert_eq!(again["mode"], "pending");
+    assert_eq!(line.head(), promoted);
+}
+
+/// SATISFIES release-candidates:a-promotion-writes-only-tested-code: a line
+/// that holds a commit after its newest candidate refuses the promotion,
+/// names the commit, and writes nothing.
+#[test]
+fn a_promotion_refuses_a_commit_no_candidate_tested() {
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    line.remote_tag("v1.4.3-rc.1");
+    line.advance("fix: landed after the candidate");
+    let moved = line.head();
+    line.mint(&["1.4", "--promote", "--expect", &moved, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains("1 commit(s) after v1.4.3-rc.1"))
+        .stderr(predicate::str::contains("fix: landed after the candidate"));
+    assert!(line.read("Cargo.toml").contains("1.4.3-rc.1"));
+    assert_eq!(line.head(), moved);
+    // A line with no tagged candidate of its next release has nothing to
+    // promote.
+    let bare = MintLine::new("rust");
+    bare.mint(&["1.4", "--promote"])
+        .code(73)
+        .stderr(predicate::str::contains("no tagged candidate"));
+}
+
+/// The state a refused mint must leave exactly as it found it.
+fn mint_state(line: &MintLine) -> (String, String, String, String, String) {
+    (
+        line.read("Cargo.toml"),
+        std::fs::read_to_string(line.work.join("Cargo.lock")).unwrap_or_default(),
+        git_out(&line.work, &["diff", "--cached", "--name-only"]),
+        line.head(),
+        line.remote_refs("refs/heads/release/1.4"),
+    )
+}
+
+/// Promote rc.1 of a fresh line and return it, promoted and pushed.
+fn promoted_line() -> MintLine {
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    line.remote_tag("v1.4.3-rc.1");
+    let tested = line.head();
+    line.mint_json(&["1.4", "--promote", "--expect", &tested, "--apply"]);
+    line
+}
+
+/// SATISFIES release-candidates:a-promotion-writes-only-tested-code: after
+/// a promotion, a source change, a dependency change, or a lockfile change
+/// refuses the next promotion, and a manifest stabilized by hand with no
+/// other change is pending.
+#[test]
+fn a_promotion_after_a_promotion_still_refuses_untested_code() {
+    for (label, edit) in [
+        ("source", "src/lib.rs"),
+        ("dependency", "Cargo.toml"),
+        ("lockfile", "Cargo.lock"),
+    ] {
+        let line = promoted_line();
+        let path = line.work.join(edit);
+        let mut text = std::fs::read_to_string(&path).expect("reads");
+        match label {
+            "source" => text.push_str("pub fn untested() {}\n"),
+            "dependency" => text.push_str("\n[dependencies]\nserde = \"1\"\n"),
+            _ => text = text.replace("version = \"1.4.2\"\nsource", "version = \"1.4.9\"\nsource"),
+        }
+        std::fs::write(&path, text).expect("writes");
+        git_in(
+            &line.work,
+            &[
+                "commit",
+                "-q",
+                "-am",
+                &format!("chore: an untested {label} change"),
+            ],
+        );
+        git_in(&line.work, &["push", "-q", "origin", "release/1.4"]);
+        let tip = line.head();
+        line.mint(&["1.4", "--promote", "--expect", &tip, "--apply"])
+            .code(73)
+            .stderr(predicate::str::contains(format!(
+                "an untested {label} change"
+            )));
+    }
+    // A manifest stabilized by hand, with no other change, is pending.
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    line.remote_tag("v1.4.3-rc.1");
+    for file in ["Cargo.toml", "Cargo.lock"] {
+        let text = line
+            .read(file)
+            .replace("version = \"1.4.3-rc.1\"", "version = \"1.4.3\"");
+        std::fs::write(line.work.join(file), text).expect("writes");
+    }
+    git_in(
+        &line.work,
+        &["commit", "-q", "-am", "chore: stabilize by hand"],
+    );
+    git_in(&line.work, &["push", "-q", "origin", "release/1.4"]);
+    let tip = line.head();
+    let report = line.mint_json(&["1.4", "--promote", "--expect", &tip, "--apply"]);
+    assert_eq!(report["mode"], "pending");
+    assert_eq!(line.head(), tip);
+}
+
+/// The lockfile stays one cargo accepts as locked: the own entry and every
+/// reference qualified with its version move, and a same-name path crate
+/// keeps its version, after the mint and after the promotion.
+#[test]
+fn a_mint_keeps_a_cargo_generated_lockfile_locked() {
+    let line = MintLine::new("rust");
+    let work = &line.work;
+    std::fs::write(
+        work.join("Cargo.toml"),
+        "[package]\nname = \"acme\"\nversion = \"1.4.2\"\nedition = \"2021\"\n\n[workspace]\nmembers = [\"helper\"]\nexclude = [\"vendor\"]\n",
+    )
+    .expect("writes");
+    for dir in ["helper/src", "vendor/old/src"] {
+        std::fs::create_dir_all(work.join(dir)).expect("writes");
+    }
+    std::fs::write(
+        work.join("helper/Cargo.toml"),
+        "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[dependencies]\nacme = { path = \"..\" }\nacme_old = { package = \"acme\", path = \"../vendor/old\" }\n",
+    )
+    .expect("writes");
+    std::fs::write(work.join("helper/src/lib.rs"), "").expect("writes");
+    std::fs::write(
+        work.join("vendor/old/Cargo.toml"),
+        "[package]\nname = \"acme\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("writes");
+    std::fs::write(work.join("vendor/old/src/lib.rs"), "").expect("writes");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo_locked = || {
+        std::process::Command::new(&cargo)
+            .args(["metadata", "--locked", "--offline", "--format-version", "1"])
+            .current_dir(work)
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .expect("cargo runs")
+    };
+    let generated = std::process::Command::new(&cargo)
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(work)
+        .output()
+        .expect("cargo runs");
+    assert!(generated.status.success(), "{generated:?}");
+    assert!(
+        line.read("Cargo.lock").contains("\"acme 1.4.2\""),
+        "a qualified reference to the root"
+    );
+    git_in(work, &["add", "-A"]);
+    git_in(work, &["commit", "-q", "-m", "chore: a workspace"]);
+    git_in(work, &["push", "-q", "origin", "release/1.4"]);
+    let tip = line.head();
+    line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    let lock = line.read("Cargo.lock");
+    assert!(
+        lock.contains("\"acme 1.4.3-rc.1\"") && lock.contains("\"acme 0.1.0\""),
+        "{lock}"
+    );
+    assert!(cargo_locked().status.success(), "{:?}", cargo_locked());
+    line.remote_tag("v1.4.3-rc.1");
+    let tested = line.head();
+    line.mint_json(&["1.4", "--promote", "--expect", &tested, "--apply"]);
+    assert!(line.read("Cargo.lock").contains("\"acme 1.4.3\""));
+    assert!(cargo_locked().status.success(), "{:?}", cargo_locked());
+}
+
+/// An untracked file and a malformed lockfile both refuse, and the refusal
+/// leaves the version file, the lockfile, the index, HEAD, and the remote
+/// as they were.
+#[test]
+fn a_refused_mint_leaves_the_checkout_unchanged() {
+    let line = MintLine::new("rust");
+    git_in(&line.work, &["rm", "-q", "--cached", "Cargo.lock"]);
+    git_in(
+        &line.work,
+        &["commit", "-q", "-m", "chore: untrack the lockfile"],
+    );
+    git_in(&line.work, &["push", "-q", "origin", "release/1.4"]);
+    let before = mint_state(&line);
+    let tip = line.head();
+    line.mint(&["1.4", "--expect", &tip, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains("untracked"));
+    assert_eq!(mint_state(&line), before);
+
+    let broken = MintLine::new("rust");
+    std::fs::write(broken.work.join("Cargo.lock"), "not = [toml\n").expect("writes");
+    git_in(
+        &broken.work,
+        &["commit", "-q", "-am", "chore: break the lockfile"],
+    );
+    git_in(&broken.work, &["push", "-q", "origin", "release/1.4"]);
+    let before = mint_state(&broken);
+    let tip = broken.head();
+    broken
+        .mint(&["1.4", "--expect", &tip, "--apply"])
+        .code(73)
+        .stderr(predicate::str::contains("Cargo.lock does not parse"));
+    assert_eq!(mint_state(&broken), before);
+    assert!(git_out(&broken.work, &["status", "--porcelain"]).is_empty());
+}
+
+/// An ignored local lockfile is outside the update: the mint commits the
+/// version file alone, leaves the ignored file's bytes, and stages
+/// nothing else.
+#[test]
+fn a_mint_leaves_an_ignored_lockfile_alone() {
+    let line = MintLine::new("rust");
+    git_in(&line.work, &["rm", "-q", "--cached", "Cargo.lock"]);
+    let mut ignore = std::fs::read_to_string(line.work.join(".gitignore")).unwrap_or_default();
+    ignore.push_str("/Cargo.lock\n");
+    std::fs::write(line.work.join(".gitignore"), ignore).expect("writes");
+    git_in(&line.work, &["add", ".gitignore"]);
+    git_in(
+        &line.work,
+        &["commit", "-q", "-m", "chore: ignore the lockfile"],
+    );
+    git_in(&line.work, &["push", "-q", "origin", "release/1.4"]);
+    let ignored = line.read("Cargo.lock");
+    let tip = line.head();
+    let report = line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    assert_eq!(report["mode"], "minted");
+    assert_eq!(
+        git_out(&line.work, &["show", "--name-only", "--format=", "HEAD"]),
+        "Cargo.toml"
+    );
+    assert_eq!(line.read("Cargo.lock"), ignored);
+    assert!(git_out(&line.work, &["status", "--porcelain"]).is_empty());
+}
+
+/// A remote that refuses the push without moving the line is no race: the
+/// refusal keeps the server's own words and does not claim the line moved.
+#[test]
+fn a_policy_rejection_is_not_a_lost_race() {
+    let line = MintLine::new("rust");
+    let hook = line.dir.path().join("origin.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho 'policy: no direct pushes' >&2\nexit 1\n",
+    )
+    .expect("writes");
+    let mut permissions = std::fs::metadata(&hook).expect("reads").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&hook, permissions).expect("the hook is executable");
+    let tip = line.head();
+    line.mint(&["1.4", "--expect", &tip, "--apply"])
+        .code(70)
+        .stderr(predicate::str::contains("policy: no direct pushes"))
+        .stderr(predicate::str::contains("moved to").not());
+    assert!(line.remote_refs("refs/heads/release/1.4").starts_with(&tip));
+}
+
+/// With no candidate yet, `rc` names the mint verb on a pair that wires the
+/// path, and the plain gap on a pair that does not.
+#[test]
+fn an_empty_line_names_the_mint_or_the_gap_by_pair() {
+    let rust = MintLine::new("rust");
+    rk().args(["lines", "rc", "1.4", "--target"])
+        .arg(&rust.work)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rk lines mint previews the first one",
+        ));
+    for tech in ["bash", "python"] {
+        let line = MintLine::new(tech);
+        rk().args(["lines", "rc", "1.4", "--target"])
+            .arg(&line.work)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "this pair has no candidate path yet",
+            ))
+            .stdout(predicate::str::contains("rk lines mint").not());
+    }
+    // A checkout with no landing record claims no candidate job.
+    let bare = tempfile::tempdir().expect("a scratch checkout exists");
+    git_in(bare.path(), &["init", "-q", "-b", "master"]);
+    std::fs::write(bare.path().join("VERSION"), "1.4.2\n").expect("writes");
+    rk().args(["lines", "rc", "1.4", "--target"])
+        .arg(bare.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "the target records no release driver",
+        ))
+        .stdout(predicate::str::contains("candidate job").not());
+}
+
+/// The canon claims no candidate path a pair lacks: no text says a
+/// candidate publishes to no registry, conditions the path on a wiring
+/// that now exists, or names a verb that does not, and no text names an
+/// internal plan.
+#[test]
+fn the_canon_claims_no_candidate_path_it_lacks() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("the tree reads") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for dir in [
+        "method", "runbooks", "bindings", "forges", "skills", "src", "guidance",
+    ] {
+        walk(&root.join(dir), &mut files);
+    }
+    let stale = [
+        "rc tag on a line publishes to no registry",
+        "candidate publishes to no registry",
+        "where an rc path is wired",
+        "where one is wired",
+        "rk lines candidate",
+        "rc automation",
+        "candidate automation",
+        "release-engine",
+    ];
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for phrase in stale {
+            assert!(
+                !text.contains(phrase),
+                "{} still says {phrase:?}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// SATISFIES distribution:machine-output-declares-its-schema for the mint
+/// verb: one schema on every path, with the commit only where one was
+/// pushed.
+#[test]
+fn the_mint_report_holds_its_schema() {
+    let line = MintLine::new("rust");
+    let tip = line.head();
+    let keys = |report: &serde_json::Value| -> Vec<String> {
+        let mut keys: Vec<String> = report
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    let preview = line.mint_json(&["1.4"]);
+    assert_eq!(preview["schema"], "rk.lines-mint/1");
+    assert_eq!(preview["mode"], "preview");
+    assert_eq!(
+        keys(&preview),
+        [
+            "branch", "line", "mode", "package", "schema", "tag", "tip", "version"
+        ]
+    );
+    let minted = line.mint_json(&["1.4", "--expect", &tip, "--apply"]);
+    assert_eq!(minted["schema"], "rk.lines-mint/1");
+    assert_eq!(
+        keys(&minted),
+        [
+            "branch", "commit", "line", "mode", "package", "schema", "tag", "tip", "version"
+        ]
     );
 }
 
@@ -26466,13 +27257,32 @@ fn a_dev_environment_answer_renders_the_github_release_jobs_through_its_prefix()
         workflow
             .matches("nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19")
             .count(),
-        2,
+        3,
         "{workflow}"
     );
     let (release, request) = workflow
         .split_once("  release-plz-pr:")
         .expect("both halves render");
+    let (request, candidate) = request
+        .split_once("  release-candidate:")
+        .expect("the release-candidate job renders");
     assert!(!release.contains("magic-nix-cache-action"), "{release}");
+    // The candidate job publishes, so it takes the setup and never the
+    // cache, and it runs rk and release-plz through the prefix.
+    assert!(!candidate.contains("magic-nix-cache-action"), "{candidate}");
+    assert!(
+        !candidate.contains("release-kit-installer.sh"),
+        "{candidate}"
+    );
+    assert!(
+        candidate
+            .contains("nix develop --command rk lines mint \"$LINE\" --expect \"$EXPECT\" --apply"),
+        "{candidate}"
+    );
+    assert!(
+        candidate.contains("nix develop --command release-plz release --git-token \"$GITHUB_TOKEN\" --config \"$RUNNER_TEMP/release-plz-rc.toml\""),
+        "{candidate}"
+    );
     assert!(request.contains("magic-nix-cache-action"), "{request}");
     assert!(
         request.contains("          use-flakehub: false"),
@@ -29473,7 +30283,26 @@ fn candidate_signature_line(candidate: &release_kit::projection::Candidate, labe
     format!(
         "{label} {} {}",
         candidate.destination,
-        release_kit::digest::Digest::of(&candidate.bytes)
+        release_kit::digest::Digest::of(&version_free(&candidate.bytes))
+    )
+}
+
+/// A candidate's bytes with the rendering binary's own version set to
+/// `0.0.0`, the way the record row fixes it. A landed job installs `rk` at
+/// the version of the binary that landed it, so that pin moves with every
+/// release by design; signing it would make the fixture stale at each
+/// release request while no source changed.
+fn version_free(bytes: &[u8]) -> Vec<u8> {
+    let version = env!("CARGO_PKG_VERSION");
+    let pinned = format!("RK_VERSION: \"{version}\"");
+    let fetched = format!("/v{version}/release-kit-installer.sh");
+    std::str::from_utf8(bytes).map_or_else(
+        |_| bytes.to_vec(),
+        |text| {
+            text.replace(&pinned, "RK_VERSION: \"0.0.0\"")
+                .replace(&fetched, "/v0.0.0/release-kit-installer.sh")
+                .into_bytes()
+        },
     )
 }
 
@@ -29966,6 +30795,605 @@ fn release_workflow(driver: &str, integration: release_kit::landing::Integration
         .expect("the workflow is text")
 }
 
+/// One job of a rendered GitHub workflow: its header line through the line
+/// before the next job, or the end of the file.
+fn workflow_job<'a>(workflow: &'a str, job: &str) -> &'a str {
+    let header = format!("\n  {job}:\n");
+    let start = workflow
+        .find(&header)
+        .unwrap_or_else(|| panic!("the workflow has no job {job}: {workflow}"))
+        + 1;
+    let rest = &workflow[start + header.len() - 1..];
+    let end = rest
+        .match_indices("\n  ")
+        .find(|(at, _)| {
+            let next = &rest[at + 3..];
+            next.starts_with(|c: char| c.is_ascii_alphanumeric())
+        })
+        .map_or(rest.len(), |(at, _)| at + 1);
+    &workflow[start..start + header.len() - 1 + end]
+}
+
+/// The shell script of one named step of a job, unindented.
+fn step_script(job: &str, name: &str) -> String {
+    let header = format!("      - name: {name}\n");
+    let step = &job[job
+        .find(&header)
+        .unwrap_or_else(|| panic!("no step {name}: {job}"))..];
+    let run = &step[step
+        .find("        run: |\n")
+        .expect("the step runs a script")
+        + 15..];
+    run.lines()
+        .take_while(|line| line.is_empty() || line.starts_with("          "))
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Run a step's script with `sh` in `dir`, with the variables a runner sets.
+fn run_step(script: &str, dir: &Path, env: &[(&str, &str)]) -> std::process::Output {
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(script).current_dir(dir);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().expect("sh runs")
+}
+
+/// The release-candidate job runs on a dispatch alone, and both push jobs
+/// on a push alone, with and without the release gate.
+#[test]
+fn the_rust_github_rc_job_runs_only_on_dispatch() {
+    use release_kit::landing::Integration;
+    for integration in [Integration::Local, Integration::Forge] {
+        let workflow = release_workflow("rust", integration);
+        assert!(
+            workflow.contains("  workflow_dispatch:\n    inputs:\n      line:"),
+            "{workflow}"
+        );
+        for input in ["      expect:\n", "      promote:\n        description"] {
+            assert!(workflow.contains(input), "{input}");
+        }
+        assert!(
+            workflow_job(&workflow, "release-candidate")
+                .contains("if: github.repository_owner == 'acme' && github.event_name == 'workflow_dispatch'\n"),
+            "{workflow}"
+        );
+        for job in ["release-plz-release", "release-plz-pr"] {
+            assert!(
+                workflow_job(&workflow, job).contains("&& github.event_name == 'push'\n"),
+                "{job}: {workflow}"
+            );
+        }
+    }
+}
+
+/// The candidate's release names the derived config, and the push jobs
+/// never do: a push of a minted or promoted version is released only by a
+/// merged request, so the promotion's push publishes nothing.
+#[test]
+fn the_rust_github_rc_job_uses_the_rc_config() {
+    use release_kit::landing::Integration;
+    let workflow = release_workflow("rust", Integration::Forge);
+    let candidate = workflow_job(&workflow, "release-candidate");
+    assert!(
+        candidate.contains("          command: release\n          version: \"0.4.3\"\n          config: ${{ runner.temp }}/release-plz-rc.toml\n"),
+        "{candidate}"
+    );
+    assert_eq!(
+        candidate.matches("if: ${{ !inputs.promote }}").count(),
+        3,
+        "{candidate}"
+    );
+    for job in ["release-plz-release", "release-plz-pr"] {
+        assert!(
+            !workflow_job(&workflow, job).contains("release-plz-rc"),
+            "{job}"
+        );
+    }
+}
+
+/// The job checks the line out under the app token and sets the bot's
+/// identity before the mint, and the mint's step carries no token.
+#[test]
+fn the_rust_github_rc_job_sets_git_up_before_the_cut() {
+    use release_kit::landing::Integration;
+    let workflow = release_workflow("rust", Integration::Forge);
+    let candidate = workflow_job(&workflow, "release-candidate");
+    let at = |needle: &str| {
+        candidate
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {candidate}"))
+    };
+    assert!(at("create-github-app-token@") < at("actions/checkout@"));
+    assert!(at("ref: release/${{ inputs.line }}") > at("actions/checkout@"));
+    assert!(
+        at("token: ${{ steps.app-token.outputs.token }}")
+            < at("- name: configure git as the release app")
+    );
+    assert!(
+        at("git config user.email \"${uid}+${APP_SLUG}[bot]@users.noreply.github.com\"")
+            < at("- name: mint")
+    );
+    let mint = &candidate[at("- name: mint")..at("- uses: dtolnay/rust-toolchain")];
+    assert!(!mint.contains("token"), "{mint}");
+    assert!(
+        !step_script(candidate, "mint").contains("${{"),
+        "inputs reach the shell through env alone"
+    );
+}
+
+/// Under `registry = none` the candidate job requests no registry
+/// credential.
+#[test]
+fn the_rust_github_rc_job_follows_the_registry_answer() {
+    let target = land_registry_less("github");
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow landed");
+    let candidate = workflow_job(&workflow, "release-candidate");
+    assert!(!candidate.contains("id-token"), "{candidate}");
+    let target = land_pair("rust", "github");
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow landed");
+    assert!(workflow_job(&workflow, "release-candidate").contains("      id-token: write\n"));
+}
+
+/// The derived config differs from the seed in `release_always` alone,
+/// under both registry answers, and the derivation refuses a seed that
+/// does not carry `release_always = false` exactly once.
+#[test]
+fn the_rust_github_rc_config_differs_in_release_always_alone() {
+    for target in [land_pair("rust", "github"), land_registry_less("github")] {
+        let workflow =
+            std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+                .expect("the workflow landed");
+        let script = step_script(
+            workflow_job(&workflow, "release-candidate"),
+            "derive the candidate's release config",
+        );
+        let temp = tempfile::tempdir().expect("a runner temp exists");
+        let temp_path = temp.path().to_str().expect("utf-8");
+        let out = run_step(&script, target.path(), &[("RUNNER_TEMP", temp_path)]);
+        assert!(out.status.success(), "{out:?}");
+        let seed = std::fs::read_to_string(target.path().join("release-plz.toml")).expect("reads");
+        let derived =
+            std::fs::read_to_string(temp.path().join("release-plz-rc.toml")).expect("reads");
+        let changed: Vec<(&str, &str)> = seed
+            .lines()
+            .zip(derived.lines())
+            .filter(|(a, b)| a != b)
+            .collect();
+        assert_eq!(
+            changed,
+            [("release_always = false", "release_always = true")]
+        );
+        assert_eq!(seed.lines().count(), derived.lines().count());
+        // A seed that lost the key, or carries it twice, refuses.
+        for broken in [
+            seed.replace("release_always = false\n", ""),
+            seed.replace(
+                "release_always = false\n",
+                "release_always = false\nrelease_always = false\n",
+            ),
+        ] {
+            std::fs::write(target.path().join("release-plz.toml"), &broken).expect("writes");
+            let out = run_step(&script, target.path(), &[("RUNNER_TEMP", temp_path)]);
+            assert!(!out.status.success(), "{broken}");
+        }
+    }
+}
+
+/// The request half holds while a line carries a candidate's version, and
+/// runs again once the promotion writes the stable one. Cargo reads the
+/// version, so a commented header, an indented key, and an inherited
+/// workspace version all count; the trunk is never held, a dependency's
+/// version decides nothing, and a manifest cargo cannot read fails the
+/// step. The rendering with a recorded environment runs cargo through its
+/// prefix, after its setup.
+#[test]
+fn the_rust_github_request_waits_while_a_line_carries_a_candidate() {
+    use release_kit::landing::Integration;
+    let plain = release_workflow("rust", Integration::Forge);
+    // A recorded prefix the test can run: env, which runs the owned cargo.
+    let target = land_pair("rust", "github");
+    append_target_config(
+        target.path(),
+        &dev_environment_answer("github").replace("nix develop --command", "env"),
+    );
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let prefixed = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow landed");
+    let hold = "hold the request while the line carries a candidate";
+    let publish = "id: release-pr\n";
+    for workflow in [&plain, &prefixed] {
+        let request = workflow_job(workflow, "release-plz-pr");
+        let at = request.find(publish).expect("the request step renders");
+        assert!(
+            request[at + publish.len()..]
+                .starts_with("        if: steps.candidate.outputs.held != 'true'\n"),
+            "{request}"
+        );
+        assert!(
+            request.find(hold).expect("the hold renders") < at,
+            "{request}"
+        );
+    }
+    let plain_script = step_script(workflow_job(&plain, "release-plz-pr"), hold);
+    let prefixed_script = step_script(workflow_job(&prefixed, "release-plz-pr"), hold);
+    assert!(
+        prefixed_script.contains("env cargo metadata --no-deps"),
+        "{prefixed_script}"
+    );
+    let manifests = [
+        (
+            "candidate",
+            "[package]\nname = \"acme\"\nversion = \"1.4.3-rc.1\"\n",
+            Some("true"),
+        ),
+        (
+            "commented header",
+            "[package] # crate metadata\nname = \"acme\"\nversion = \"1.4.3-rc.1\"\n",
+            Some("true"),
+        ),
+        (
+            "indented key",
+            "[package]\nname = \"acme\"\n  version = \"1.4.3-rc.1\"\n",
+            Some("true"),
+        ),
+        (
+            "inherited",
+            "[workspace]\n[workspace.package]\nversion = \"1.4.3-rc.1\"\n\n[package]\nname = \"acme\"\nversion.workspace = true\n",
+            Some("true"),
+        ),
+        (
+            "stable",
+            "[package]\nname = \"acme\"\nversion = \"1.4.3\"\n\n[dependencies]\nserde = { version = \"1.0.0-beta.1\" }\n",
+            Some("false"),
+        ),
+        ("unreadable", "[package\nname = \"acme\"\n", None),
+        ("no package", "[workspace]\nmembers = []\n", None),
+    ];
+    for script in [&plain_script, &prefixed_script] {
+        for (label, manifest, held) in manifests {
+            for reference in ["release/1.4", "master"] {
+                let dir = tempfile::tempdir().expect("a checkout exists");
+                std::fs::write(dir.path().join("Cargo.toml"), manifest).expect("writes");
+                std::fs::create_dir(dir.path().join("src")).expect("writes");
+                std::fs::write(dir.path().join("src/lib.rs"), "").expect("writes");
+                let output = dir.path().join("output");
+                let out = run_step(
+                    script,
+                    dir.path(),
+                    &[
+                        ("REF", reference),
+                        ("GITHUB_OUTPUT", output.to_str().expect("utf-8")),
+                    ],
+                );
+                let written = std::fs::read_to_string(&output).unwrap_or_default();
+                match (reference, held) {
+                    ("master", _) => {
+                        assert_eq!(written, "held=false\n", "{label} on the trunk: {out:?}");
+                    }
+                    (_, Some(answer)) => {
+                        assert!(out.status.success(), "{label}: {out:?}");
+                        assert_eq!(written, format!("held={answer}\n"), "{label}");
+                    }
+                    (_, None) => {
+                        assert!(!out.status.success(), "{label} must fail the step: {out:?}");
+                        assert!(written.is_empty(), "{label} writes no answer");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// With no development environment, the job installs `rk` from the
+/// release of the binary that landed it.
+#[test]
+fn the_rust_github_rc_job_installs_the_landing_binary() {
+    use release_kit::landing::Integration;
+    let workflow = release_workflow("rust", Integration::Forge);
+    let candidate = workflow_job(&workflow, "release-candidate");
+    assert!(
+        candidate.contains(&format!("RK_VERSION: \"{}\"", env!("CARGO_PKG_VERSION"))),
+        "{candidate}"
+    );
+    assert!(
+        candidate.contains(&format!(
+            "\"{}/releases/download/v${{RK_VERSION}}/release-kit-installer.sh\"",
+            env!("CARGO_PKG_REPOSITORY")
+        )),
+        "{candidate}"
+    );
+    assert!(!workflow.contains("RK_SELF"), "{workflow}");
+}
+
+/// The rendered `.gitlab-ci.yml` of a rust target on GitLab: the default
+/// landing, or one with a recorded development environment whose prefix
+/// is `run`.
+fn rust_gitlab_pipeline(run: Option<&str>) -> String {
+    let target = land_pair("rust", "gitlab");
+    if let Some(run) = run {
+        append_target_config(
+            target.path(),
+            &dev_environment_answer("gitlab").replace("nix develop --command", run),
+        );
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+    }
+    std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("the pipeline landed")
+}
+
+/// One top-level job of a GitLab pipeline: its header through the line
+/// before the next column-zero key or comment.
+fn gitlab_job<'a>(pipeline: &'a str, job: &str) -> &'a str {
+    let header = format!("\n{job}:\n");
+    let start = pipeline
+        .find(&header)
+        .unwrap_or_else(|| panic!("no job {job}: {pipeline}"))
+        + 1;
+    let rest = &pipeline[start + header.len() - 1..];
+    let end = rest
+        .match_indices('\n')
+        .find(|(at, _)| {
+            rest[at + 1..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '#' || c == '.')
+        })
+        .map_or(rest.len(), |(at, _)| at + 1);
+    &pipeline[start..start + header.len() - 1 + end]
+}
+
+/// The literal-block script items of a GitLab job, unindented, in order.
+fn gitlab_blocks(job: &str) -> Vec<String> {
+    job.split("    - |\n")
+        .skip(1)
+        .map(|item| {
+            item.lines()
+                .take_while(|line| line.is_empty() || line.starts_with("      "))
+                .map(|line| line.strip_prefix("      ").unwrap_or(line))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect()
+}
+
+/// The cut job runs by hand on a line pipeline alone, and calls release-plz
+/// with the derived config, with and without a recorded environment, which
+/// takes rk from the environment rather than the installer.
+#[test]
+fn the_rust_gitlab_cut_job_runs_release_plz_with_the_rc_config() {
+    for run in [None, Some("nix develop --command")] {
+        let pipeline = rust_gitlab_pipeline(run);
+        let job = gitlab_job(&pipeline, "release-candidate");
+        assert!(
+            job.contains("  rules:\n    - if: '$CI_COMMIT_BRANCH =~ /^release\\//'\n      when: manual\n      allow_failure: true\n"),
+            "{job}"
+        );
+        let prefix = run.map_or(String::new(), |run| format!("{run} "));
+        assert!(
+            job.contains(&format!(
+                "{prefix}release-plz release --forge gitlab --git-token \"$RELEASE_BOT_TOKEN\" --config \"$rc_config\""
+            )),
+            "{job}"
+        );
+        assert!(
+            job.contains(&format!("{prefix}rk lines mint \"$LINE\" --expect")),
+            "{job}"
+        );
+        assert_eq!(
+            job.contains("release-kit-installer.sh"),
+            run.is_none(),
+            "{job}"
+        );
+        assert!(!job.contains("RK_"), "{job}");
+    }
+}
+
+/// The cut job sets the bot's identity and push URL before the mint, under
+/// both renderings, and no line prints the token.
+#[test]
+fn the_rust_gitlab_cut_job_sets_git_up_before_the_cut() {
+    for run in [None, Some("nix develop --command")] {
+        let pipeline = rust_gitlab_pipeline(run);
+        let job = gitlab_job(&pipeline, "release-candidate");
+        let at = |needle: &str| {
+            job.find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {job}"))
+        };
+        assert!(at("git config user.name \"release-bot\"") < at("lines mint"));
+        assert!(
+            at("git remote set-url origin \"https://release-bot:${RELEASE_BOT_TOKEN}@")
+                < at("lines mint")
+        );
+        for line in job
+            .lines()
+            .filter(|line| line.contains("RELEASE_BOT_TOKEN"))
+        {
+            assert!(
+                !line.contains("echo") && !line.contains("printf"),
+                "a line prints the token: {line}"
+            );
+        }
+    }
+}
+
+/// Under `registry = none` the cut job requests no registry credential, and
+/// the page names the install from the tag.
+#[test]
+fn the_rust_gitlab_cut_job_follows_the_registry_answer() {
+    let target = land_registry_less("gitlab");
+    let pipeline = std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("reads");
+    let job = gitlab_job(&pipeline, "release-candidate");
+    for gone in [
+        "id_tokens",
+        "CRATES_IO_ID_TOKEN",
+        "trusted_publishing",
+        "CARGO_REGISTRY_TOKEN",
+    ] {
+        assert!(!job.contains(gone), "{gone}: {job}");
+    }
+    assert!(
+        job.contains("install=\"cargo install --git $CI_PROJECT_URL --tag $tag\""),
+        "{job}"
+    );
+    let pipeline = rust_gitlab_pipeline(None);
+    let job = gitlab_job(&pipeline, "release-candidate");
+    assert!(
+        job.contains("    CRATES_IO_ID_TOKEN:\n      aud: crates.io\n"),
+        "{job}"
+    );
+    assert!(
+        job.contains("install=\"cargo install $package --version $version\""),
+        "{job}"
+    );
+}
+
+/// No job holds a resource group that two lines share.
+#[test]
+fn the_rust_gitlab_release_groups_are_per_line() {
+    let pipeline = rust_gitlab_pipeline(None);
+    let groups: Vec<&str> = pipeline
+        .lines()
+        .filter(|line| line.trim_start().starts_with("resource_group:"))
+        .collect();
+    assert_eq!(groups.len(), 3, "{groups:?}");
+    for group in groups {
+        assert!(group.ends_with("-$CI_COMMIT_REF_SLUG"), "{group}");
+    }
+}
+
+/// The request job holds while a line carries a candidate's version, under
+/// both renderings: cargo reads the root package's version, the trunk is
+/// never held, and a version cargo cannot read fails the job.
+#[test]
+fn the_rust_gitlab_request_waits_while_a_line_carries_a_candidate() {
+    for run in [None, Some("env")] {
+        let pipeline = rust_gitlab_pipeline(run);
+        let job = gitlab_job(&pipeline, "release-request");
+        let hold = gitlab_blocks(job)
+            .into_iter()
+            .next()
+            .expect("the hold renders first");
+        assert!(hold.contains("cargo read-manifest --offline"), "{hold}");
+        assert!(
+            job.find("cargo read-manifest").expect("hold")
+                < job.find("release-plz release-pr").expect("pr")
+        );
+        for (label, manifest, line_answer) in [
+            (
+                "candidate",
+                "[package]\nname = \"acme\"\nversion = \"1.4.3-rc.1\"\n",
+                Some(true),
+            ),
+            (
+                "misleading metadata",
+                "[package]\nname = \"acme\"\nversion = \"1.4.3\"\n\n[package.metadata.tool]\nname = \"x\"\nversion = \"9.0.0-rc.1\"\n",
+                Some(false),
+            ),
+            (
+                "commented header",
+                "[package] # crate\nname = \"acme\"\n  version = \"1.4.3-rc.1\"\n",
+                Some(true),
+            ),
+            (
+                "inherited",
+                "[workspace]\n[workspace.package]\nversion = \"1.4.3-rc.1\"\n\n[package]\nname = \"acme\"\nversion.workspace = true\n",
+                Some(true),
+            ),
+            (
+                "stable",
+                "[package]\nname = \"acme\"\nversion = \"1.4.3\"\n\n[dependencies]\nserde = { version = \"1.0.0-beta.1\" }\n",
+                Some(false),
+            ),
+            ("no package", "[workspace]\nmembers = []\n", None),
+        ] {
+            for branch in ["release/1.4", "master"] {
+                // Every case runs in a checkout whose path holds a space.
+                let scratch = tempfile::tempdir().expect("a checkout exists");
+                let checkout = scratch.path().join("with space");
+                std::fs::create_dir_all(checkout.join("src")).expect("writes");
+                std::fs::write(checkout.join("Cargo.toml"), manifest).expect("writes");
+                std::fs::write(checkout.join("src/lib.rs"), "").expect("writes");
+                // The job goes on to release-pr where the hold lets it; a
+                // marker line stands in for it.
+                let script = format!("{hold}\necho request-proceeds");
+                let out = run_step(&script, &checkout, &[("CI_COMMIT_BRANCH", branch)]);
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                match (branch, line_answer) {
+                    ("master", _) => assert!(
+                        stdout.contains("request-proceeds"),
+                        "{label} on the trunk: {out:?}"
+                    ),
+                    (_, Some(true)) => {
+                        assert!(out.status.success(), "{label}: {out:?}");
+                        assert!(
+                            !stdout.contains("request-proceeds"),
+                            "{label} must hold: {out:?}"
+                        );
+                    }
+                    (_, Some(false)) => {
+                        assert!(stdout.contains("request-proceeds"), "{label}: {out:?}");
+                    }
+                    (_, None) => {
+                        assert!(!out.status.success(), "{label} must fail the job: {out:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The cut job refuses a pipeline of another line before it touches git,
+/// and the report fields it reads parse from the verb's own report.
+#[test]
+fn the_rust_gitlab_cut_job_refuses_another_line_and_reads_the_report() {
+    let pipeline = rust_gitlab_pipeline(None);
+    let job = gitlab_job(&pipeline, "release-candidate");
+    let script = gitlab_blocks(job)
+        .into_iter()
+        .next()
+        .expect("the cut script renders");
+    let dir = tempfile::tempdir().expect("a checkout exists");
+    let out = run_step(
+        &script,
+        dir.path(),
+        &[("CI_COMMIT_BRANCH", "release/1.5"), ("LINE", "1.4")],
+    );
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("names release/1.4"),
+        "{out:?}"
+    );
+    let field = script
+        .lines()
+        .find(|line| line.starts_with("field() {"))
+        .expect("the field reader renders");
+    let line = MintLine::new("rust");
+    let report = line
+        .mint(&["1.4", "--json"])
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let probe = format!("{field}\nfield tag; field version; field package");
+    let out = run_step(
+        &probe,
+        &line.work,
+        &[("report", String::from_utf8_lossy(&report).as_ref())],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "v1.4.3-rc.1\n1.4.3-rc.1\nacme\n",
+        "{out:?}"
+    );
+}
+
 /// Under local integration the trunk keeps its strict required-check rule,
 /// and the landed release workflow merges its own request under the
 /// release App: it wakes on the recorded workflow completing and it no
@@ -30001,9 +31429,12 @@ fn a_forge_integrated_target_keeps_the_standing_arm() {
         assert!(!text.contains("release-gate:"), "{driver}");
         assert!(!text.contains("RK_GATE"), "{driver} leaks a marker");
         assert!(!text.contains("RK_PUSH_GUARD"), "{driver} leaks a token");
-        assert!(
-            !text.contains("github.event_name == 'push'"),
-            "{driver} guards a trigger it does not carry"
+        // The rust pair carries a release-candidate dispatch, so its push
+        // jobs keep the event guard under either integration.
+        assert_eq!(
+            text.contains("github.event_name == 'push'"),
+            driver == "rust",
+            "{driver} guards exactly the triggers it carries"
         );
     }
 }

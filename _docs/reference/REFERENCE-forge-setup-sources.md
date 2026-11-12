@@ -151,6 +151,17 @@ Unverified: whether an undocumented or newly added API for trusted-publisher con
 
 Bearing: the ordering in `method/02-setup.md`, which publishes by hand before registering the publisher, and the self-hosted detection the setup reports at its first step rather than letting it surface when the registration fails.
 
+## crates.io, on what a GitLab trusted publisher binds
+
+Verified on 2026-11-12 against the crates.io source at commit `c3ec2db78e2574b4c74b09bc973739d648bbf25a` and the GitLab ID token reference. The token exchange finds the publisher by the namespace and the project of the `project_path` claim, compares the `namespace_id` claim with the one it stored at the first exchange, and then compares the workflow file path, which it reads from the `ci_config_ref_uri` claim, the part between `//` and the last `@`. An environment the publisher names is compared with the `environment` claim. No job name, stage, or included file takes part. GitLab defines `ci_config_ref_uri` as "The ref path to the top-level pipeline definition", so every job of a pipeline that `.gitlab-ci.yml` defines carries the same value, whichever stage or included file declares it.
+
+- <https://github.com/rust-lang/crates.io/blob/c3ec2db78e2574b4c74b09bc973739d648bbf25a/crates/crates_io_trustpub/src/gitlab/claims.rs>
+- <https://github.com/rust-lang/crates.io/blob/c3ec2db78e2574b4c74b09bc973739d648bbf25a/crates/crates_io_trustpub/src/gitlab/workflows.rs>
+- <https://github.com/rust-lang/crates.io/blob/c3ec2db78e2574b4c74b09bc973739d648bbf25a/src/controllers/trustpub/tokens/exchange/mod.rs>
+- <https://docs.gitlab.com/ci/secrets/id_token_authentication/>
+
+Bearing: the rust/gitlab release-candidate job. It publishes under the publisher that already names `.gitlab-ci.yml`, from any stage of that pipeline, and like the release job it declares no environment, so a publisher that names one needs it on both jobs.
+
 ## What is scriptable, and what is not
 
 The classification the sources above produce, which is what `runbooks/setup.md` and `rk guide setup` route around.

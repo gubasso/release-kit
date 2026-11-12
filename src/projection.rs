@@ -1452,20 +1452,37 @@ pub const DEV_ENVIRONMENT_RELEASE: &str = "blocks/dev-environment-release.yaml.i
 /// The GitHub request half under a recorded development environment.
 pub const DEV_ENVIRONMENT_REQUEST: &str = "blocks/dev-environment-request.yaml.in";
 
+/// The GitHub release-candidate job's tool steps under a recorded
+/// development environment.
+pub const DEV_ENVIRONMENT_CANDIDATE: &str = "blocks/dev-environment-candidate.yaml.in";
+
+/// The version of the binary that renders, which a landed job installs
+/// `rk` at where the target records no development environment: the one
+/// version known to carry every verb that job calls.
+pub const SELF_VERSION_TOKEN: &[u8] = b"RK_SELF_VERSION";
+
+/// Where this binary's own releases download from, the repository the
+/// crate names. A landed job fetches the shell installer of one release
+/// there.
+pub const SELF_RELEASES_TOKEN: &[u8] = b"RK_SELF_RELEASES";
+
 /// The git identity step both GitHub halves take under a recorded
 /// development environment.
 pub const DEV_ENVIRONMENT_GIT_USER: &str = "blocks/dev-environment-git-user.yaml.in";
 
-/// The four replaceable spans a recorded development environment answers.
+/// The six replaceable spans a recorded development environment answers.
 ///
 /// Each is an ordered begin and end marker: the GitHub release half's
 /// tool steps, the GitHub request half's tool steps, the GitLab release
-/// template's image, and its tool download.
+/// template's image, its tool download, the GitHub release-candidate
+/// job's tool steps, and the GitLab release-candidate job's `rk` install,
+/// which a recorded environment drops because the environment carries
+/// `rk`.
 ///
 /// The markers are YAML comments at column zero carrying the newline in
 /// front of them, so a landing with no answer strips the pairs and leaves
 /// the authored bytes exactly.
-pub const DEV_ENVIRONMENT_SPANS: [(&[u8], &[u8]); 4] = [
+pub const DEV_ENVIRONMENT_SPANS: [(&[u8], &[u8]); 6] = [
     (
         b"\n# RK_DEV_ENV_RELEASE_BEGIN",
         b"\n# RK_DEV_ENV_RELEASE_END",
@@ -1476,6 +1493,11 @@ pub const DEV_ENVIRONMENT_SPANS: [(&[u8], &[u8]); 4] = [
     ),
     (b"\n# RK_DEV_ENV_IMAGE_BEGIN", b"\n# RK_DEV_ENV_IMAGE_END"),
     (b"\n# RK_DEV_ENV_SCRIPT_BEGIN", b"\n# RK_DEV_ENV_SCRIPT_END"),
+    (
+        b"\n# RK_DEV_ENV_CANDIDATE_BEGIN",
+        b"\n# RK_DEV_ENV_CANDIDATE_END",
+    ),
+    (b"\n# RK_DEV_ENV_RK_BEGIN", b"\n# RK_DEV_ENV_RK_END"),
 ];
 
 /// One recorded action step as workflow lines, each ending in a newline,
@@ -1512,9 +1534,9 @@ fn action_step_lines(step: &crate::config::dev_environment::ActionStep) -> Strin
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
-fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 4], RkError> {
+fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6], RkError> {
     let Some(answer) = params.dev_environment() else {
-        return Ok([None, None, None, None]);
+        return Ok([None, None, None, None, None, None]);
     };
     let git_user = embedded_block(DEV_ENVIRONMENT_GIT_USER)?.trim_end_matches('\n');
     let half = |block: &str, steps: &[&crate::config::dev_environment::ActionStep]| {
@@ -1550,6 +1572,10 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 4],
         Some(half(DEV_ENVIRONMENT_REQUEST, &request)?),
         image,
         Some(script),
+        // The candidate job publishes, so like the release half it takes
+        // the setup steps and never the cache.
+        Some(half(DEV_ENVIRONMENT_CANDIDATE, &release)?),
+        Some(Vec::new()),
     ])
 }
 
@@ -1777,6 +1803,13 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
         b""
     };
     out = substitute(&out, PUSH_GUARD_TOKEN, guard);
+    out = substitute(
+        &out,
+        SELF_VERSION_TOKEN,
+        env!("CARGO_PKG_VERSION").as_bytes(),
+    );
+    let releases = format!("{}/releases/download", env!("CARGO_PKG_REPOSITORY"));
+    out = substitute(&out, SELF_RELEASES_TOKEN, releases.as_bytes());
     out = substitute(&out, REPO_TOKEN, repo.as_bytes());
     // The run prefix substitutes last, so a recorded prefix that happens
     // to spell a token lands literally.
