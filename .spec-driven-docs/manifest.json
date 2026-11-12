@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.15.1",
+  "canon_version": "0.15.2",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -106,7 +106,7 @@
     {
       "source": "templates/TEMPLATE-tracking.yaml",
       "destination": "_docs/reference/tracking.yaml",
-      "sha256": "60f2a31427b1207ffd85ca10c8cc2fb4dba2013dc386d6f1a0f372a0979211c3",
+      "sha256": "1f102935affc632653293d3d884853a63f5b4fd79ac6bd0a6141a77c333549ef",
       "baseline_sha256": "6ac1da85ec63b1baedc927ba181cba6747da3afbf25899c971247a1a9f5931c3"
     },
     {
