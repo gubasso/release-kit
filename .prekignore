@@ -1,0 +1,5 @@
+# prek runs every .pre-commit-config.yaml it finds below the root as its own
+# project. The configurations under tests/fixtures are test inputs, the
+# landings of older releases, and never hooks of this repository. The root
+# hooks still check their files.
+tests/fixtures/
