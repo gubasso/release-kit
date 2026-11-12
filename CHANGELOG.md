@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.12](https://github.com/gubasso/release-kit/compare/v0.9.11...v0.9.12) - 2026-11-12
+
+### Added
+
+- *(integrate)* run the pre-integrate suite with prek when it is on PATH
+- *(bindings/rust)* take dist from a recorded dev environment
+
 ## [0.9.11](https://github.com/gubasso/release-kit/compare/v0.9.10...v0.9.11) - 2026-11-11
 
 ### Other
