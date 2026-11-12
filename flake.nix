@@ -135,6 +135,21 @@
               # PATH on the `run:` scripts of the workflows it reads.
               pkgs.shellcheck
               pkgs.jq
+              # The changelog test renders the landed cliff.toml seeds through
+              # the git-cliff the release pipelines install: the same release
+              # tarball at the pin versions.toml names, not the nixpkgs build,
+              # which moves with the lock.
+              (pkgs.stdenvNoCC.mkDerivation rec {
+                pname = "git-cliff";
+                version = "2.13.1";
+                src = pkgs.fetchurl {
+                  url = "https://github.com/orhun/git-cliff/releases/download/v${version}/git-cliff-${version}-x86_64-unknown-linux-musl.tar.gz";
+                  hash = "sha256-IA0lNdptlwPzvMik0VnDtV6s2wHPIUjFWz7undBNUkk=";
+                };
+                installPhase = ''
+                  install -Dm755 git-cliff $out/bin/git-cliff
+                '';
+              })
               # The release jobs run release-plz from this shell, as
               # .release-kit/config.toml records, so CI installs no release
               # tool of its own.

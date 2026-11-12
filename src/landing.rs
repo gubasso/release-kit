@@ -144,6 +144,43 @@ pub fn repo_unresolved() -> RkError {
     )
 }
 
+/// Hold every accepted-drift entry to its whole domain.
+///
+/// The domain is a whole rendered file the projection selects and the
+/// receipt records, because an entry accepts a deviation from bytes a
+/// landing wrote. Every verb that resolves the declaration calls this
+/// before it writes.
+///
+/// # Errors
+/// A `config-invalid` refusal naming the destination and the fault.
+///
+/// SATISFIES accepted-drift:an-accepted-drift-names-its-reason-and-its-bytes
+pub fn accepted_drift_faults(
+    projection: &crate::projection::Projection,
+    recorded: Option<&manifest::Manifest>,
+    config: Option<&crate::config::Config>,
+) -> Result<(), crate::error::RkError> {
+    let Some(config) = config else {
+        return Ok(());
+    };
+    for destination in config.landing.accepted_drift.keys() {
+        if let Some(fault) = projection.accepted_drift_fault(destination) {
+            return Err(crate::config::invalid(fault));
+        }
+        let recorded_whole = recorded
+            .and_then(|record| record.file(destination))
+            .is_some_and(|file| {
+                file.kind == Kind::Rendered && file.placement == manifest::Placement::Whole
+            });
+        if !recorded_whole {
+            return Err(crate::config::invalid(format!(
+                "landing.accepted_drift names {destination}, which no receipt records as a whole rendered file; an entry accepts a deviation from bytes a landing wrote"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -531,6 +568,7 @@ mod tests {
                                         style,
                                         line_prefix: prefix.clone(),
                                         registry: None,
+                                        build: None,
                                     },
                                 },
                                 git: GitWorkflow {
@@ -633,6 +671,8 @@ mod tests {
                 // GitLab refuses both answers, because it names no check.
                 required_check: (resolved.forge == "github").then_some("gate"),
                 required_workflow: (resolved.forge == "github").then_some("ci"),
+                build_command: None,
+                build_packages: None,
                 trunk: None,
                 checkout_mode: Some(checkout_mode),
                 integration: None,

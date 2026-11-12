@@ -44,6 +44,10 @@ struct Report {
     security: Security,
     /// The setup answers the release gate renders.
     setup: Setup,
+    /// The landing declaration: the rendered destinations the project
+    /// deliberately edits. Its own domain, never a profile fact or a
+    /// capability request.
+    landing: LandingDeclaration,
     /// The source of each value, keyed by its configuration path.
     sources: BTreeMap<&'static str, Source>,
     /// The category names the catalog does not know.
@@ -61,6 +65,13 @@ struct Report {
     collisions: Vec<Note>,
     /// What plausibly follows.
     next: Vec<String>,
+}
+
+/// The landing declaration, by destination.
+#[derive(Debug, Serialize)]
+struct LandingDeclaration {
+    /// Each accepted deviation, with its reason and accepted digest.
+    accepted_drift: BTreeMap<String, crate::config::AcceptedDrift>,
 }
 
 /// The three security answers.
@@ -83,6 +94,8 @@ struct Setup {
     /// The workflow whose completion wakes the release gate, empty where
     /// nothing answered it.
     required_workflow: String,
+    /// The bot identity's name, empty where the forge's default applies.
+    bot_name: String,
 }
 
 /// One line stating the three domains and the identity, for every human
@@ -199,6 +212,28 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
         params: params.clone(),
         evidence,
     })?;
+    // The landing declaration is a committed answer of class N: only the
+    // configuration states it, and it must name what this landing selects.
+    let accepted_drift = config
+        .as_ref()
+        .map(|config| config.landing.accepted_drift.clone())
+        .unwrap_or_default();
+    landing::accepted_drift_faults(&projection, record.as_ref(), config.as_ref())?;
+    let mut sources = resolved.sources.clone();
+    sources.insert(
+        "landing.accepted_drift",
+        if accepted_drift.is_empty() {
+            profile::Source::Default
+        } else {
+            profile::Source::Config
+        },
+    );
+    for (destination, entry) in &accepted_drift {
+        out.result_line(format!(
+            "landing declaration: accepted drift on {destination} ({}), from config",
+            entry.reason
+        ));
+    }
 
     out.result_line(format!(
         "profile: {}",
@@ -319,7 +354,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.profile/4",
+        schema: "rk.profile/5",
         target: args.target.to_string(),
         profile: params.profile().clone(),
         git: params.git().clone(),
@@ -333,8 +368,10 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
         setup: Setup {
             required_check: params.required_check().to_owned(),
             required_workflow: params.required_workflow().to_owned(),
+            bot_name: resolved.bot_name.clone(),
         },
-        sources: resolved.sources,
+        landing: LandingDeclaration { accepted_drift },
+        sources,
         unknown: resolved.unknown,
         proposal: resolved.proposal,
         selection,
@@ -354,11 +391,11 @@ mod tests {
     };
     use crate::stage::{CapabilityNote, Note};
 
-    /// The complete `rk.profile/4` shape, held by snapshot.
+    /// The complete `rk.profile/5` shape, held by snapshot.
     #[test]
     fn the_profile_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.profile/4",
+            schema: "rk.profile/5",
             target: "/tmp/t".into(),
             profile: ProfileSnapshot {
                 technologies: vec!["python".into(), "rust".into()],
@@ -369,6 +406,7 @@ mod tests {
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
                     registry: None,
+                    build: None,
                 },
             },
             git: GitWorkflow {
@@ -393,6 +431,10 @@ mod tests {
             setup: Setup {
                 required_check: String::new(),
                 required_workflow: String::new(),
+                bot_name: String::new(),
+            },
+            landing: super::LandingDeclaration {
+                accepted_drift: std::collections::BTreeMap::new(),
             },
             sources: std::iter::once(("profile.technologies", Source::Observation)).collect(),
             unknown: vec![],
@@ -416,7 +458,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.profile/4","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort","scope":""},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
+            r#"{"schema":"rk.profile/5","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort","scope":""},"setup":{"required_check":"","required_workflow":"","bot_name":""},"landing":{"accepted_drift":{}},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
         );
     }
 }

@@ -601,6 +601,7 @@ mod tests {
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
                     registry: None,
+                    build: None,
                 },
             },
             git: GitWorkflow {

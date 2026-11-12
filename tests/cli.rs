@@ -350,6 +350,7 @@ fn manifest_requesting(
                 style,
                 line_prefix: Some(release_kit::config::LINE_PREFIX_DEFAULT.to_owned()),
                 registry: None,
+                build: None,
             },
         },
         git: GitWorkflow {
@@ -4589,6 +4590,8 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
 fn every_setup_script_passes_the_static_battery() {
     let allowed = [
         "RK_REPO",
+        "RK_BOT_NAME",
+        "RK_GITLAB_COM",
         "RK_FORGE",
         "RK_TRUNK_BRANCH",
         "RK_REQUIRED_CHECK",
@@ -5456,7 +5459,58 @@ api)
     else
       echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1
     fi;;
-  "GET "*"/access_tokens") echo '[]';;
+  "GET "*"/access_tokens"*) cat "$STATE/access_tokens" 2>/dev/null || echo '[]';;
+  "POST "*"/access_tokens")
+    # The created token is what a listing then answers as active.
+    name=""
+    for f in "${fields[@]}"; do
+      case "$f" in name=*) name="${f#name=}";; esac
+    done
+    echo "[{\"id\":3,\"name\":\"$name\",\"active\":true,\"revoked\":false}]" > "$STATE/access_tokens"
+    echo "{\"id\":3,\"name\":\"$name\",\"token\":\"glpat-project-minted\"}";;
+  # The namespace a gitlab.com run reads for its tier, seeded per test.
+  "GET namespaces/"*)
+    if [[ -f "$STATE/namespace" ]]; then cat "$STATE/namespace"; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
+  # A group's service accounts: the listing answers what a create wrote,
+  # and a token mint answers a value the step must store from stdin.
+  # An account's tokens: what a mint on it recorded, with its marker.
+  "GET groups/"*"/personal_access_tokens"*)
+    uid="${path%/personal_access_tokens*}"; uid="${uid##*/}"
+    cat "$STATE/sa_tokens_$uid" 2>/dev/null || echo '[]';;
+  "GET groups/"*"/service_accounts"*) cat "$STATE/service_accounts" 2>/dev/null || echo '[]';;
+  "POST groups/"*"/personal_access_tokens")
+    uid="${path%/personal_access_tokens}"; uid="${uid##*/}"
+    described=""
+    for f in "${fields[@]}"; do
+      case "$f" in description=*) described="${f#description=}";; esac
+    done
+    echo "[{\"id\":5,\"name\":\"minted\",\"description\":\"$described\",\"active\":true,\"revoked\":false}]" > "$STATE/sa_tokens_$uid"
+    echo '{"id":5,"name":"minted","token":"glpat-service-minted"}';;
+  "POST groups/"*"/service_accounts")
+    user=""
+    for f in "${fields[@]}"; do
+      case "$f" in username=*) user="${f#username=}";; esac
+    done
+    echo "[{\"id\":99,\"username\":\"$user\",\"name\":\"$user\"}]" > "$STATE/service_accounts"
+    echo "{\"id\":99,\"username\":\"$user\",\"name\":\"$user\",\"email\":\"service_account_group_7_x@noreply.gitlab.com\"}";;
+  "POST projects/"*"/members")
+    uid=""; level=""
+    for f in "${fields[@]}"; do
+      case "$f" in user_id=*) uid="${f#user_id=}";; access_level=*) level="${f#access_level=}";; esac
+    done
+    echo "$level" > "$STATE/member_$uid"; echo '{}';;
+  # This project's members, by id, from what a grant or a seed wrote.
+  "GET projects/"*"/members/all?"*)
+    if [[ -f "$STATE/members_fail" ]]; then echo "glab: 500 Internal Server Error (HTTP 500)" >&2; exit 1; fi
+    out=""
+    for f in "$STATE"/member_*; do
+      [[ -f "$f" ]] || continue
+      uid="${f##*member_}"; out="$out{\"id\":$uid,\"access_level\":$(cat "$f")},"
+    done
+    echo "[${out%,}]";;
+  "GET projects/"*"/members/all/"*)
+    uid="${path##*/}"
+    if [[ -f "$STATE/member_$uid" ]]; then echo "{\"id\":$uid,\"access_level\":$(cat "$STATE/member_$uid")}"; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
   "GET version")
     v="$(cat "$STATE/gitlab_version" 2>/dev/null || echo '18.2.1-ee')"
     case "$v" in
@@ -5513,7 +5567,7 @@ api)
     merging="$(cat "$STATE/merge_method" 2>/dev/null || echo merge)"
     squashing="$(cat "$STATE/squash_option" 2>/dev/null || echo never)"
     template="$(cat "$STATE/squash_commit_template" 2>/dev/null || echo)"
-    echo "{\"issues_access_level\":\"$access\",\"issues_enabled\":$legacy,\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":$piped,\"merge_method\":\"$merging\",\"squash_option\":\"$squashing\",\"remove_source_branch_after_merge\":$removing,\"squash_commit_template\":\"$template\"}";;
+    echo "{\"issues_access_level\":\"$access\",\"issues_enabled\":$legacy,\"id\":$(cat "$STATE/project_id" 2>/dev/null || echo 1),\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":$piped,\"merge_method\":\"$merging\",\"squash_option\":\"$squashing\",\"remove_source_branch_after_merge\":$removing,\"squash_commit_template\":\"$template\"}";;
   *) echo '{}';;
   esac
   exit 0;;
@@ -5570,6 +5624,23 @@ case "$url" in
 esac
 "#;
 
+/// The make stand-in package-check reaches: `make -n <target>` resolves
+/// where the makefile in the working directory names that target, the way
+/// make answers, so no test depends on the host's make.
+const MOCK_MAKE: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf 'make %s\n' "$*" >> "$STATE/log"
+[[ "$1" == "-n" ]] && shift
+target="${1:-}"
+for file in GNUmakefile makefile Makefile; do
+  if [[ -f "$file" ]]; then
+    if [[ -z "$target" ]] || grep -q "^$target:" "$file"; then exit 0; fi
+    echo "make: *** No rule to make target '$target'.  Stop." >&2; exit 2
+  fi
+done
+echo "make: *** No targets specified and no makefile found.  Stop." >&2; exit 2
+"#;
+
 /// One mocked setup fixture: a scratch home, a scratch target, and a mock
 /// forge CLI recording every invocation and every stdin byte.
 struct ForgeFixture {
@@ -5592,6 +5663,7 @@ impl ForgeFixture {
             ("curl", MOCK_CURL),
             ("cargo", MOCK_CARGO),
             ("python3", MOCK_PYTHON3),
+            ("make", MOCK_MAKE),
         ] {
             let path = fixture.mock.path().join(name);
             std::fs::write(
@@ -5612,6 +5684,13 @@ impl ForgeFixture {
         fixture.seed("branch_develop", "abc123");
         fixture.seed("branch_main", "abc123");
         std::fs::write(fixture.target.path().join("VERSION"), "0.1.0\n").expect("VERSION writes");
+        // The default build command is make dist, so a bash target owes a
+        // makefile with that target; the package-check tests remove it.
+        std::fs::write(
+            fixture.target.path().join("Makefile"),
+            "dist:\n\tmkdir -p dist\n",
+        )
+        .expect("the Makefile writes");
         // A real repository, so the branch-reminder step has a hooks
         // directory to write into; it has no remote, so detection still
         // resolves nothing and every test passes --repo and --forge.
@@ -9623,7 +9702,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/14");
+    assert_eq!(report["schema"], "rk.status/15");
     assert_eq!(report["landed"], true);
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["profile"]["release"]["style"], "trunk");
@@ -11989,7 +12068,7 @@ fn bash_gitlab_job(name: &str) -> String {
 /// holds no signing identity.
 #[test]
 fn the_bash_gitlab_build_emits_metadata_and_an_isolated_job_signs_it() {
-    let build = bash_gitlab_job("tag-and-build");
+    let build = bash_gitlab_job("build");
     assert!(
         build.contains("RUNNER_GENERATE_ARTIFACTS_METADATA: \"true\""),
         "the build job must enable the runner's provenance metadata"
@@ -12062,7 +12141,7 @@ fn the_bash_gitlab_downstream_jobs_guard_on_the_release_marker() {
             }
         }
     }
-    let build = bash_gitlab_job("tag-and-build");
+    let build = bash_gitlab_job("build");
     let clear = build
         .find("rm -f release-version")
         .expect("the build job clears a stale or tracked marker");
@@ -27109,7 +27188,7 @@ fn the_profile_reports_the_scope_with_its_source() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/4");
+    assert_eq!(report["schema"], "rk.profile/5");
     assert_eq!(report["security"]["scope"], SCOPE_TEXT);
     assert_eq!(report["sources"]["security.scope"], "config");
 }
@@ -29553,6 +29632,7 @@ fn release_none_params(
         style: None,
         line_prefix: None,
         registry: None,
+        build: None,
     };
     record.git.merge_form = form;
     release_kit::landing::Params::from_record(&record)
@@ -33062,7 +33142,7 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
     for expected in [
         "rk.init/11",
         "rk.assess/4",
-        "rk.status/14",
+        "rk.status/15",
         "rk.upgrade/11",
         "rk.adopt/11",
     ] {
@@ -36009,7 +36089,7 @@ fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
         "rk profile writes nothing"
     );
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/4");
+    assert_eq!(report["schema"], "rk.profile/5");
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["git"]["checkout_mode"], "linked-worktree");
     assert_eq!(report["sources"]["profile.technologies"], "config");
@@ -43717,6 +43797,7 @@ fn release_less_gate_params(
         style: None,
         line_prefix: None,
         registry: None,
+        build: None,
     };
     record.git.merge_form = form;
     release_kit::landing::Params::from_record(&record)
@@ -44872,4 +44953,2086 @@ fn integrate_reports_an_unconfirmed_publication_as_published() {
             .is_some_and(|state| state.contains("published at") && state.contains("no rollback")),
         "{diagnostic}"
     );
+}
+
+/// A GitLab fixture on gitlab.com whose namespace reads as `namespace`.
+fn gitlab_com_fixture(namespace: &str) -> ForgeFixture {
+    let fixture = ForgeFixture::new();
+    git_in(
+        fixture.target.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.com/acme/widget.git",
+        ],
+    );
+    fixture.seed("namespace", namespace);
+    fixture
+}
+
+const FREE_GROUP: &str = r#"{"id":7,"kind":"group","plan":"free","trial":false}"#;
+const PAID_GROUP: &str = r#"{"id":7,"kind":"group","plan":"premium","trial":false}"#;
+
+/// One `install-bot` apply against the fixture's mocked forge.
+fn install_bot(fixture: &ForgeFixture, repo: &str) -> assert_cmd::assert::Assert {
+    fixture
+        .rk(&["setup", "step", "install-bot"])
+        .args(["--repo", repo, "--forge", "gitlab", "--apply"])
+        .assert()
+}
+
+/// The log lines that write to the forge.
+fn forge_writes(fixture: &ForgeFixture) -> Vec<String> {
+    fixture
+        .log()
+        .lines()
+        .filter(|line| line.contains("-X POST") || line.contains("-X DELETE"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A raw field sends a JSON string, so the scopes travel as one typed
+/// field the CLI serializes as an array.
+#[test]
+fn install_bot_sends_scopes_as_a_json_array() {
+    for namespace in [PAID_GROUP, FREE_GROUP] {
+        let fixture = gitlab_com_fixture(namespace);
+        install_bot(&fixture, "acme/widget").success();
+        let log = fixture.log();
+        assert!(
+            log.contains(r#"-F scopes=["api","write_repository"]"#),
+            "{log}"
+        );
+        assert!(!log.contains("scopes[]"), "{log}");
+    }
+}
+
+/// SATISFIES bot-identity:the-bot-identity-reaches-one-project
+/// A Free group takes a group service account: create it, grant it this
+/// project at Maintainer, mint its token, and store the value from stdin.
+#[test]
+fn install_bot_takes_the_service_account_path_on_a_free_group() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    install_bot(&fixture, "acme/widget")
+        .success()
+        .stdout(predicate::str::contains("plan free, kind group"))
+        .stdout(predicate::str::contains(
+            "created the service account release-bot-1",
+        ));
+    let writes = forge_writes(&fixture);
+    assert_eq!(writes.len(), 3, "{writes:?}");
+    assert!(
+        writes[0].contains(
+            "POST groups/7/service_accounts -f name=release-bot-1 -f username=release-bot-1"
+        ),
+        "{writes:?}"
+    );
+    assert!(!writes[0].contains("email"), "{writes:?}");
+    assert!(
+        writes[1].contains("POST projects/acme%2Fwidget/members -F user_id=99 -F access_level=40"),
+        "{writes:?}"
+    );
+    assert!(
+        writes[2].contains("POST groups/7/service_accounts/99/personal_access_tokens"),
+        "{writes:?}"
+    );
+    assert!(fixture.stdin_log().contains("glpat-service-minted"));
+    assert!(!fixture.log().contains("glpat-service-minted"));
+}
+
+/// A paid group keeps the project access token path.
+#[test]
+fn install_bot_keeps_the_token_path_on_a_paid_plan() {
+    let fixture = gitlab_com_fixture(PAID_GROUP);
+    install_bot(&fixture, "acme/widget").success();
+    let writes = forge_writes(&fixture);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert!(
+        writes[0].contains("POST projects/acme%2Fwidget/access_tokens -f name=release-bot"),
+        "{writes:?}"
+    );
+    assert!(!fixture.log().contains("service_accounts"));
+    assert!(fixture.stdin_log().contains("glpat-project-minted"));
+}
+
+/// A self-managed instance answers plan "default" whatever its license,
+/// so it takes the token path without reading the namespace.
+#[test]
+fn install_bot_takes_the_token_path_on_a_self_managed_instance() {
+    let fixture = ForgeFixture::new();
+    git_in(
+        fixture.target.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example.com/acme/widget.git",
+        ],
+    );
+    fixture.seed(
+        "namespace",
+        r#"{"id":7,"kind":"group","plan":"default","trial":false}"#,
+    );
+    install_bot(&fixture, "acme/widget")
+        .success()
+        .stdout(predicate::str::contains("self-managed or Dedicated"));
+    let writes = forge_writes(&fixture);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert!(writes[0].contains("/access_tokens"), "{writes:?}");
+    assert!(!fixture.log().contains("namespaces/"));
+    assert!(!fixture.log().contains("service_accounts"));
+}
+
+/// A trial follows its plan like any other namespace: a Free group on a
+/// trial takes the service account.
+#[test]
+fn install_bot_follows_the_plan_on_a_trial() {
+    let fixture = gitlab_com_fixture(r#"{"id":7,"kind":"group","plan":"free","trial":true}"#);
+    install_bot(&fixture, "acme/widget").success();
+    assert!(fixture.log().contains("-X POST groups/7/service_accounts "));
+    assert!(!fixture.log().contains("/access_tokens"));
+}
+
+/// A username is unique across the instance, so the default carries the
+/// project id: two projects sharing their last segment get two names.
+#[test]
+fn install_bot_defaults_to_a_project_unique_username() {
+    let mut names = Vec::new();
+    for (repo, id) in [
+        ("acme/frontend/widget", "11"),
+        ("acme/backend/widget", "12"),
+    ] {
+        let fixture = ForgeFixture::new();
+        git_in(
+            fixture.target.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("https://gitlab.com/{repo}.git"),
+            ],
+        );
+        fixture.seed("namespace", FREE_GROUP);
+        fixture.seed("project_id", id);
+        install_bot(&fixture, repo).success();
+        let create = forge_writes(&fixture)
+            .into_iter()
+            .find(|line| line.contains("POST groups/7/service_accounts "))
+            .expect("a create call");
+        names.push(create);
+    }
+    assert!(names[0].contains("username=release-bot-11"), "{names:?}");
+    assert!(names[1].contains("username=release-bot-12"), "{names:?}");
+}
+
+/// An account under the configured name that serves no member here is
+/// refused before any grant, because granting it could make one identity
+/// reach two projects.
+#[test]
+fn install_bot_refuses_an_account_that_is_not_a_member_here() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":99,"username":"release-bot-1","name":"release-bot-1"}]"#,
+    );
+    install_bot(&fixture, "acme/widget")
+        .failure()
+        .stderr(predicate::str::contains(
+            "the service account release-bot-1 exists in acme and is not a member of this project",
+        ));
+    assert!(forge_writes(&fixture).is_empty(), "{}", fixture.log());
+}
+
+/// A Free personal namespace has no group to own a service account and no
+/// project token on GitLab.com: the step refuses before any write, naming
+/// both exits.
+#[test]
+fn install_bot_refuses_a_free_personal_namespace_before_writing() {
+    let fixture = gitlab_com_fixture(r#"{"id":7,"kind":"user","plan":"free","trial":false}"#);
+    install_bot(&fixture, "acme/widget")
+        .failure()
+        .stderr(predicate::str::contains("move the project under a group"))
+        .stderr(predicate::str::contains("Premium or Ultimate"));
+    assert!(forge_writes(&fixture).is_empty(), "{}", fixture.log());
+    assert!(!fixture.log().contains("variable set"));
+}
+
+/// A second apply finds the account, its membership, and the variable,
+/// and makes no create call.
+#[test]
+fn install_bot_reruns_idempotently_on_the_service_account_path() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    install_bot(&fixture, "acme/widget").success();
+    let first = forge_writes(&fixture).len();
+    install_bot(&fixture, "acme/widget")
+        .success()
+        .stdout(predicate::str::contains("satisfied install-bot"));
+    assert_eq!(forge_writes(&fixture).len(), first, "{}", fixture.log());
+}
+
+/// An account that is a Maintainer here with no stored variable gets one
+/// new token on the account, stored from stdin, and no second account.
+#[test]
+fn install_bot_rotates_a_stranded_service_account_token() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":99,"username":"release-bot-1","name":"release-bot-1"}]"#,
+    );
+    fixture.seed("member_99", "40");
+    install_bot(&fixture, "acme/widget")
+        .success()
+        .stdout(predicate::str::contains(
+            "rotated: minted a new token on the service account release-bot-1",
+        ));
+    let writes = forge_writes(&fixture);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert!(
+        writes[0].contains("service_accounts/99/personal_access_tokens"),
+        "{writes:?}"
+    );
+    assert_eq!(
+        fixture
+            .log()
+            .matches("variable set RELEASE_BOT_TOKEN")
+            .count(),
+        1
+    );
+    assert!(fixture.stdin_log().contains("glpat-service-minted"));
+}
+
+/// A configured name over a live identity under the default name refuses
+/// and names both, because a rename would strand the first identity.
+#[test]
+fn install_bot_refuses_a_rename_over_a_live_identity() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":99,"username":"release-bot-1","name":"release-bot-1"}]"#,
+    );
+    fixture.seed("member_99", "40");
+    fixture.seed("var_RELEASE_BOT_TOKEN", "");
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[setup.bot]\nname = \"widget-bot\"\n",
+    )
+    .expect("the config writes");
+    install_bot(&fixture, "acme/widget").failure().stderr(
+        predicate::str::contains("release-bot-1").and(predicate::str::contains("widget-bot")),
+    );
+    assert!(forge_writes(&fixture).is_empty(), "{}", fixture.log());
+}
+
+/// A release-less GitLab target selects no release automation, so the
+/// step is not applicable and no namespace is read.
+#[test]
+fn install_bot_is_not_applicable_to_a_release_less_gitlab_target() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[profile.release]\nmode = \"none\"\n",
+    )
+    .expect("the config writes");
+    fixture
+        .rk(&["setup", "step", "install-bot"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "install-bot does not apply to this target",
+        ))
+        .stderr(predicate::str::contains(
+            "no release automation is selected",
+        ));
+    assert!(!fixture.log().contains("namespaces/"), "{}", fixture.log());
+    assert!(forge_writes(&fixture).is_empty());
+}
+
+/// The check reads the service-account form: membership at Maintainer
+/// with the variable stored is satisfied, and the variable missing is not.
+#[test]
+fn the_observer_reads_the_service_account_form() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":99,"username":"release-bot-1","name":"release-bot-1"}]"#,
+    );
+    fixture.seed("member_99", "40");
+    let line = |fixture: &ForgeFixture| -> String {
+        let out = fixture
+            .rk(&["setup", "check"])
+            .args(["--repo", "acme/widget", "--forge", "gitlab"])
+            .assert()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8_lossy(&out)
+            .lines()
+            .find(|line| line.contains("install-bot"))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let missing = line(&fixture);
+    assert!(missing.starts_with("unsatisfied install-bot"), "{missing}");
+    assert!(missing.contains("with no stored variable"), "{missing}");
+    fixture.seed("var_RELEASE_BOT_TOKEN", "");
+    let held = line(&fixture);
+    assert!(held.starts_with("ok install-bot"), "{held}");
+    assert!(
+        held.contains("a service account named release-bot-1 is a Maintainer of this project and its variable is stored"),
+        "{held}"
+    );
+}
+
+/// The name is a setup declaration: `rk profile` reports it with its
+/// source, the step creates the identity under it, and no landed byte
+/// carries any bot name.
+#[test]
+fn the_bot_name_is_a_setup_declaration_and_reaches_no_byte() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    rk().args([
+        "init",
+        "--tech",
+        "bash",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+        "--target",
+    ])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .success();
+    let pipeline = std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("lands");
+    assert!(!pipeline.contains("release-bot"), "{pipeline}");
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("reads");
+    assert!(text.contains("name = \"\""), "{text}");
+    std::fs::write(
+        &config,
+        text.replace("name = \"\"", "name = \"widget-bot\""),
+    )
+    .expect("writes");
+    let out = rk()
+        .args(["profile", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.profile/5");
+    assert_eq!(report["setup"]["bot_name"], "widget-bot");
+    assert_eq!(report["sources"]["setup.bot.name"], "config");
+
+    let fixture = gitlab_com_fixture(PAID_GROUP);
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[setup.bot]\nname = \"widget-bot\"\n",
+    )
+    .expect("the config writes");
+    install_bot(&fixture, "acme/widget").success();
+    assert!(
+        fixture.log().contains("access_tokens -f name=widget-bot"),
+        "{}",
+        fixture.log()
+    );
+}
+
+/// The release request reads its commit identity from the forge and pushes
+/// as `oauth2`, so the commit links to the bot's account.
+#[test]
+fn the_bash_gitlab_release_request_reads_its_identity_from_the_forge() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    rk().args([
+        "init",
+        "--tech",
+        "bash",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+        "--target",
+    ])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .success();
+    let pipeline = std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("lands");
+    assert!(
+        pipeline.contains(r#"me="$(api "$CI_API_V4_URL/user")""#),
+        "{pipeline}"
+    );
+    assert!(
+        pipeline.contains(r#"git config user.email "$email""#),
+        "{pipeline}"
+    );
+    assert!(
+        pipeline.contains("https://oauth2:${RELEASE_BOT_TOKEN}@"),
+        "{pipeline}"
+    );
+    assert!(!pipeline.contains("@invalid"), "{pipeline}");
+    assert!(
+        pipeline.contains("apk add --no-cache curl git jq tar make"),
+        "{pipeline}"
+    );
+}
+
+/// A proof committed before the name existed carries no `bot_name`, and a
+/// target that sets none still reads it compatible; setting the name moves
+/// the contract, so the proof reads stale naming it.
+#[test]
+fn an_unset_bot_name_leaves_the_setup_proof_compatible() {
+    let (fixture, key) = a_proven_setup();
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success();
+    let proof = std::fs::read_to_string(proof_path(&fixture)).expect("the proof reads");
+    assert!(!proof.contains("bot_name"), "{proof}");
+    let status = || -> serde_json::Value {
+        let out = fixture
+            .rk(&["setup", "status", "--json"])
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        serde_json::from_slice(&out.stdout).expect("one document")
+    };
+    let unset = status();
+    assert_eq!(unset["state"], "compatible", "{unset}");
+    let config = fixture.target.path().join(".release-kit/config.toml");
+    let text =
+        std::fs::read_to_string(&config).unwrap_or_else(|_| "schema_version = 2\n".to_owned());
+    let named = if text.contains("[setup.bot]") {
+        text.replace("[setup.bot]\n", "[setup.bot]\nname = \"widget-bot\"\n")
+    } else {
+        format!("{text}\n[setup.bot]\nname = \"widget-bot\"\n")
+    };
+    std::fs::create_dir_all(config.parent().expect("a parent")).expect("the dir");
+    std::fs::write(&config, named).expect("the config writes");
+    let stale = status();
+    assert_eq!(stale["state"], "stale", "{stale}");
+    assert_eq!(
+        stale["differences"],
+        serde_json::json!(["target.bot_name"]),
+        "{stale}"
+    );
+}
+
+/// On a Free group's service account, `bot-secrets` with no exported value
+/// mints a fresh token on the account where the stored variable is
+/// missing; a paid namespace's project token cannot be re-read, so there
+/// it still refuses and names install-bot.
+#[test]
+fn bot_secrets_mints_on_the_service_account_where_the_variable_is_missing() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":99,"username":"release-bot-1","name":"release-bot-1"}]"#,
+    );
+    fixture.seed("member_99", "40");
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "minted a new token on the service account release-bot-1",
+        ));
+    assert!(fixture.stdin_log().contains("glpat-service-minted"));
+    assert!(!fixture.log().contains("glpat-service-minted"));
+
+    let paid = gitlab_com_fixture(PAID_GROUP);
+    paid.rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("install-bot"));
+    assert!(forge_writes(&paid).is_empty(), "{}", paid.log());
+}
+
+/// The bot is found by what marks it, not by its default spelling: a
+/// rename from one configured name to another, or back to the default,
+/// refuses on both paths and names both identities.
+#[test]
+fn install_bot_refuses_a_custom_rename_over_a_live_identity() {
+    let configured = |fixture: &ForgeFixture, name: Option<&str>| {
+        std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+        let table = name.map_or_else(String::new, |name| {
+            format!("\n[setup.bot]\nname = \"{name}\"\n")
+        });
+        std::fs::write(
+            fixture.target.path().join(".release-kit/config.toml"),
+            format!("schema_version = 2\n{table}"),
+        )
+        .expect("the config writes");
+    };
+    for (requested, wanted) in [(Some("next-bot"), "next-bot"), (None, "release-bot")] {
+        let token = gitlab_com_fixture(PAID_GROUP);
+        token.seed(
+            "access_tokens",
+            r#"[{"id":5,"name":"first-bot","description":"release-kit bot identity","active":true,"revoked":false}]"#,
+        );
+        token.seed("var_RELEASE_BOT_TOKEN", "");
+        configured(&token, requested);
+        install_bot(&token, "acme/widget")
+            .failure()
+            .stderr(predicate::str::contains("first-bot").and(predicate::str::contains(wanted)));
+        assert!(forge_writes(&token).is_empty(), "{}", token.log());
+    }
+    for (requested, wanted) in [(Some("next-bot"), "next-bot"), (None, "release-bot-1")] {
+        let account = gitlab_com_fixture(FREE_GROUP);
+        account.seed(
+            "service_accounts",
+            r#"[{"id":77,"username":"first-bot","name":"first-bot"}]"#,
+        );
+        account.seed("member_77", "40");
+        account.seed(
+            "sa_tokens_77",
+            r#"[{"id":5,"name":"first-bot","description":"release-kit bot identity","active":true,"revoked":false}]"#,
+        );
+        account.seed("var_RELEASE_BOT_TOKEN", "");
+        configured(&account, requested);
+        install_bot(&account, "acme/widget")
+            .failure()
+            .stderr(predicate::str::contains("first-bot").and(predicate::str::contains(wanted)));
+        assert!(forge_writes(&account).is_empty(), "{}", account.log());
+    }
+}
+
+/// A name is matched literally: a dot is no wildcard, and a token whose
+/// name differs only by spaces is another token.
+#[test]
+fn install_bot_matches_names_exactly() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":77,"username":"widgetXbot","name":"widgetXbot"}]"#,
+    );
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[setup.bot]\nname = \"widget.bot\"\n",
+    )
+    .expect("the config writes");
+    install_bot(&fixture, "acme/widget").success();
+    let log = fixture.log();
+    assert!(
+        !log.contains("service_accounts/77/personal_access_tokens"),
+        "{log}"
+    );
+    assert!(log.contains("-f username=widget.bot"), "{log}");
+
+    let token = gitlab_com_fixture(PAID_GROUP);
+    token.seed(
+        "access_tokens",
+        r#"[{"id":5,"name":"Widget Release Bot","active":true,"revoked":false}]"#,
+    );
+    std::fs::create_dir_all(token.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        token.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[setup.bot]\nname = \"WidgetReleaseBot\"\n",
+    )
+    .expect("the config writes");
+    install_bot(&token, "acme/widget").success();
+    assert!(
+        token
+            .log()
+            .contains("access_tokens -f name=WidgetReleaseBot"),
+        "{}",
+        token.log()
+    );
+}
+
+/// A name GitLab cannot carry as a username refuses as configuration.
+#[test]
+fn a_bot_name_outside_the_username_shape_refuses() {
+    let fixture = gitlab_com_fixture(PAID_GROUP);
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[setup.bot]\nname = \"Widget Release Bot\"\n",
+    )
+    .expect("the config writes");
+    install_bot(&fixture, "acme/widget")
+        .failure()
+        .stderr(predicate::str::contains("setup.bot.name"));
+    assert!(forge_writes(&fixture).is_empty(), "{}", fixture.log());
+}
+
+/// Naming `bot-secrets` on a service account is the rotation request: it
+/// mints and stores a fresh token even while one is stored, where a full
+/// run leaves a stored token alone.
+#[test]
+fn bot_secrets_rotates_a_stored_service_account_token_when_named() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":99,"username":"release-bot-1","name":"release-bot-1"}]"#,
+    );
+    fixture.seed("member_99", "40");
+    fixture.seed("var_RELEASE_BOT_TOKEN", "");
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "minted a new token on the service account release-bot-1",
+        ));
+    assert!(
+        fixture.log().contains("variable update RELEASE_BOT_TOKEN"),
+        "{}",
+        fixture.log()
+    );
+    assert!(fixture.stdin_log().contains("glpat-service-minted"));
+}
+
+/// A service account that is a member here and carries no marked token is
+/// not the bot: the first bootstrap creates the release-kit account beside
+/// it, and every token it mints carries the marker.
+#[test]
+fn install_bot_bootstraps_beside_an_unrelated_service_account() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":55,"username":"deploy-bot","name":"deploy-bot"}]"#,
+    );
+    fixture.seed("member_55", "40");
+    install_bot(&fixture, "acme/widget")
+        .success()
+        .stdout(predicate::str::contains(
+            "created the service account release-bot-1",
+        ));
+    let log = fixture.log();
+    assert!(
+        !log.contains("service_accounts/55/personal_access_tokens -f"),
+        "{log}"
+    );
+    assert!(
+        log.contains("-f description=release-kit bot identity"),
+        "{log}"
+    );
+}
+
+/// The rename guard holds whether or not the requested identity already
+/// exists: with the live bot first-bot and an existing next-bot, a request
+/// for next-bot refuses on both paths, stored variable or not, and writes
+/// nothing.
+#[test]
+fn install_bot_refuses_a_rename_onto_an_existing_identity() {
+    for stored in [false, true] {
+        let token = gitlab_com_fixture(PAID_GROUP);
+        token.seed(
+            "access_tokens",
+            r#"[{"id":5,"name":"first-bot","description":"release-kit bot identity","active":true,"revoked":false},{"id":88,"name":"next-bot","active":true,"revoked":false}]"#,
+        );
+        let account = gitlab_com_fixture(FREE_GROUP);
+        account.seed(
+            "service_accounts",
+            r#"[{"id":77,"username":"first-bot","name":"first-bot"},{"id":88,"username":"next-bot","name":"next-bot"}]"#,
+        );
+        account.seed("member_77", "40");
+        account.seed("member_88", "40");
+        account.seed(
+            "sa_tokens_77",
+            r#"[{"id":5,"name":"first-bot","description":"release-kit bot identity","active":true,"revoked":false}]"#,
+        );
+        for fixture in [&token, &account] {
+            if stored {
+                fixture.seed("var_RELEASE_BOT_TOKEN", "");
+            }
+            std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+            std::fs::write(
+                fixture.target.path().join(".release-kit/config.toml"),
+                "schema_version = 2\n\n[setup.bot]\nname = \"next-bot\"\n",
+            )
+            .expect("the config writes");
+            install_bot(fixture, "acme/widget").failure().stderr(
+                predicate::str::contains("first-bot").and(predicate::str::contains("next-bot")),
+            );
+            assert!(
+                forge_writes(fixture).is_empty(),
+                "stored={stored}: {}",
+                fixture.log()
+            );
+            assert!(
+                !fixture.log().contains("variable "),
+                "stored={stored}: {}",
+                fixture.log()
+            );
+        }
+    }
+}
+
+/// Naming bot-secrets on a paid namespace with the token stored and no
+/// value exported stays satisfied: forced rotation is the service
+/// account's alone.
+#[test]
+fn bot_secrets_keeps_a_stored_project_token_when_named() {
+    let fixture = gitlab_com_fixture(PAID_GROUP);
+    fixture.seed("var_RELEASE_BOT_TOKEN", "");
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("satisfied bot-secrets"));
+    assert!(forge_writes(&fixture).is_empty(), "{}", fixture.log());
+    assert!(!fixture.log().contains("variable "), "{}", fixture.log());
+}
+
+/// A listing the bot recognition needs that fails is no absence: the
+/// script refuses before any write rather than create a second identity.
+#[test]
+fn install_bot_refuses_when_the_member_listing_fails() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":77,"username":"first-bot","name":"first-bot"}]"#,
+    );
+    fixture.seed("member_77", "40");
+    fixture.seed(
+        "sa_tokens_77",
+        r#"[{"id":5,"name":"first-bot","description":"release-kit bot identity","active":true,"revoked":false}]"#,
+    );
+    fixture.seed("members_fail", "");
+    // The script itself, as a run reaches it after an observation that
+    // succeeded: a read that fails between the two must not read as absence.
+    let out = std::process::Command::new("sh")
+        .arg(repo_path("setup/gitlab/install-bot"))
+        .env("RK_REPO", "acme/widget")
+        .env("RK_GITLAB_COM", "true")
+        .env("RK_BOT_NAME", "")
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fixture.mock.path().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .expect("the script runs");
+    assert!(
+        !out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("could not be"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(forge_writes(&fixture).is_empty(), "{}", fixture.log());
+    assert!(!fixture.log().contains("variable "), "{}", fixture.log());
+}
+
+/// A named rotation whose identity form cannot be read is not satisfied:
+/// it refuses with the reason and writes nothing.
+#[test]
+fn bot_secrets_refuses_a_named_rotation_it_cannot_classify() {
+    let fixture = ForgeFixture::new();
+    git_in(
+        fixture.target.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.com/acme/widget.git",
+        ],
+    );
+    fixture.seed("var_RELEASE_BOT_TOKEN", "");
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("namespace"));
+    assert!(forge_writes(&fixture).is_empty(), "{}", fixture.log());
+    assert!(!fixture.log().contains("variable "), "{}", fixture.log());
+}
+
+/// The landed bash pipeline for a forge, as text.
+fn landed_bash_pipeline(target: &Path, forge: &str) -> String {
+    let path = if forge == "gitlab" {
+        target.join(".gitlab-ci.yml")
+    } else {
+        target.join(".github/workflows/release.yml")
+    };
+    std::fs::read_to_string(path).expect("the pipeline landed")
+}
+
+/// The text of one GitHub workflow step, from its `- name:` line to the
+/// next step.
+fn workflow_step(workflow: &str, name: &str) -> String {
+    let start = workflow
+        .find(&format!("- name: {name}\n"))
+        .unwrap_or_else(|| panic!("no step named {name}"));
+    let rest = &workflow[start + 2..];
+    let end = rest.find("\n      - ").unwrap_or(rest.len());
+    rest[..end].to_owned()
+}
+
+/// SATISFIES project-profile:release-intent-has-three-modes
+/// The GitLab build job builds and creates no tag, and names the version
+/// to git-cliff, because no tag exists yet for it to read.
+#[test]
+fn the_bash_gitlab_build_job_creates_no_tag() {
+    let target = land_pair("bash", "gitlab");
+    let pipeline = landed_bash_pipeline(target.path(), "gitlab");
+    assert!(pipeline.contains("\nbuild:\n"), "{pipeline}");
+    assert!(!pipeline.contains("tag-and-build"), "{pipeline}");
+    let build = bash_gitlab_job("build");
+    assert!(!build.contains("repository/tags"), "{build}");
+    assert!(
+        build.contains(r#"git cliff --unreleased --tag "v$version""#),
+        "{build}"
+    );
+    assert!(!build.contains("--latest"), "{build}");
+}
+
+/// The GitLab attach job creates the tag and the release in one request,
+/// after every upload, and nothing else in the pipeline creates a tag.
+#[test]
+fn the_bash_gitlab_attach_creates_the_tag_with_the_release() {
+    let attach = bash_gitlab_job("attach");
+    let create = attach
+        .find(r#"api -X POST "$project/releases" \"#)
+        .expect("one release create");
+    assert!(attach.contains(r#"--arg ref "$CI_COMMIT_SHA""#), "{attach}");
+    assert!(attach.contains("ref: $ref"), "{attach}");
+    assert!(attach.contains("assets: {links: map("), "{attach}");
+    let last_upload = attach.rfind("upload \"$tarball").expect("the uploads");
+    assert!(last_upload < create, "{attach}");
+    let target = land_pair("bash", "gitlab");
+    let pipeline = landed_bash_pipeline(target.path(), "gitlab");
+    assert!(!pipeline.contains("repository/tags\" \\"), "{pipeline}");
+    assert!(
+        !pipeline.contains("-X POST \"$project/repository/tags"),
+        "{pipeline}"
+    );
+}
+
+/// The GitHub workflow builds, attests, and only then creates the tag and
+/// the release together, at the run's own commit.
+#[test]
+fn the_bash_github_release_attests_before_it_tags() {
+    let target = land_pair("bash", "github");
+    let workflow = landed_bash_pipeline(target.path(), "github");
+    let build = workflow_step(&workflow, "build");
+    assert!(!build.contains("git/refs"), "{build}");
+    assert!(
+        build.contains(r#"git cliff --unreleased --tag "v$version""#),
+        "{build}"
+    );
+    assert!(
+        !workflow.contains(r#"git fetch origin "refs/tags/"#),
+        "{workflow}"
+    );
+    let attest = workflow.find("actions/attest@").expect("the attest step");
+    let attach_at = workflow.find("- name: attach\n").expect("the attach step");
+    assert!(attest < attach_at, "{workflow}");
+    let attach = workflow_step(&workflow, "attach");
+    assert!(attach.contains("SHA: ${{ github.sha }}"), "{attach}");
+    assert!(
+        attach.contains("GH_REPO: ${{ github.repository }}"),
+        "{attach}"
+    );
+    assert!(attach.contains(r#"--target "$SHA""#), "{attach}");
+}
+
+/// A tag at another commit stops attach on both forges, naming the
+/// recovery section; a tag at the pipeline's own commit continues.
+#[test]
+fn the_bash_release_refuses_a_tag_at_another_commit_on_both_forges() {
+    for (forge, commit) in [("gitlab", "$CI_COMMIT_SHA"), ("github", "$SHA")] {
+        let target = land_pair("bash", forge);
+        let pipeline = landed_bash_pipeline(target.path(), forge);
+        assert!(
+            pipeline.contains("The tag exists and the release does not"),
+            "{forge}: {pipeline}"
+        );
+        assert!(
+            pipeline.contains(&format!(
+                r#"[ -n "$tagged" ] && [ "$tagged" != "{commit}" ]"#
+            )),
+            "{forge}: {pipeline}"
+        );
+    }
+}
+
+/// Both bump guards refuse the landing commit, the baseline, and a version
+/// the forge already published at another commit, read from the forge and
+/// never from a version order. The GitHub guard reads the draft flag, so a
+/// draft continues to attach.
+#[test]
+fn the_bash_release_refuses_the_baseline_on_both_forges() {
+    for forge in ["gitlab", "github"] {
+        let target = land_pair("bash", forge);
+        let pipeline = landed_bash_pipeline(target.path(), forge);
+        for guard in [
+            r#"if [ -z "$previous" ]; then"#,
+            r#"if [ "$version" = "0.0.0" ]; then"#,
+            "is already released at $at; nothing to release.",
+        ] {
+            assert!(pipeline.contains(guard), "{forge}: {guard}: {pipeline}");
+        }
+        assert!(!pipeline.contains("sort -V"), "{forge}: {pipeline}");
+    }
+    // Only a release published at another commit is skipped: a draft, and
+    // a release at the pipeline's own commit, continue to attach.
+    let gitlab = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
+    assert!(
+        gitlab.contains(r#"if [ -n "$at" ] && [ "$at" != "$CI_COMMIT_SHA" ]; then"#),
+        "{gitlab}"
+    );
+    let github = landed_bash_pipeline(land_pair("bash", "github").path(), "github");
+    assert!(github.contains("--json isDraft"), "{github}");
+    assert!(github.contains(r#"[ "$released" = "false" ]"#), "{github}");
+    assert!(
+        github.contains(r#"if [ -n "$at" ] && [ "$at" != "$SHA" ]; then"#),
+        "{github}"
+    );
+}
+
+/// A build answer resolves flag over configuration, reports its source,
+/// renders into both pipelines, and holds under the status check.
+#[test]
+fn a_build_parameter_resolves_by_precedence_and_renders() {
+    for forge in ["gitlab", "github"] {
+        let target = land_pair("bash", forge);
+        let config = target.path().join(".release-kit/config.toml");
+        let text = std::fs::read_to_string(&config).expect("reads");
+        std::fs::write(
+            &config,
+            format!("{text}\n[profile.release.build]\ncommand = \"make dist\"\n"),
+        )
+        .expect("writes");
+        let out = rk()
+            .args([
+                "profile",
+                "--json",
+                "--build-command",
+                "just dist",
+                "--target",
+            ])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(
+            report["sources"]["profile.release.build.command"], "flag",
+            "{report}"
+        );
+        assert_eq!(
+            report["profile"]["release"]["build"]["command"], "just dist",
+            "{report}"
+        );
+        rk().args([
+            "upgrade",
+            "--apply",
+            "--build-command",
+            "just dist",
+            "--build-packages",
+            "just",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success();
+        let pipeline = landed_bash_pipeline(target.path(), forge);
+        assert!(
+            pipeline.contains("\n      just dist\n")
+                || pipeline.contains("\n          just dist\n"),
+            "{forge}: {pipeline}"
+        );
+        assert!(!pipeline.contains("make dist"), "{forge}: {pipeline}");
+        assert!(
+            pipeline.contains(" just\n") || pipeline.contains(" just &&"),
+            "{forge}: {pipeline}"
+        );
+        let record = read_manifest(target.path());
+        assert_eq!(
+            record["profile"]["release"]["build"]["command"],
+            "just dist"
+        );
+        seed_setup_proof(target.path());
+        rk().args(["status", "--check", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+    }
+}
+
+/// The build table belongs to the bash driver alone.
+#[test]
+fn a_build_parameter_refuses_a_driver_that_is_not_bash() {
+    let target = land_pair("rust", "github");
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("reads");
+    std::fs::write(
+        &config,
+        format!("{text}\n[profile.release.build]\ncommand = \"make dist\"\n"),
+    )
+    .expect("writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("profile.release.build")
+                .and(predicate::str::contains("driver is rust")),
+        );
+}
+
+/// An unanswered build parameter is absent: the record carries no build
+/// key, the pipelines render make dist, and nothing reads as pending.
+#[test]
+fn a_record_without_build_parameters_reads_as_make_dist() {
+    for forge in ["gitlab", "github"] {
+        let target = land_pair("bash", forge);
+        let record = std::fs::read_to_string(target.path().join(".release-kit/manifest.json"))
+            .expect("reads");
+        assert!(!record.contains("\"build\""), "{record}");
+        let config =
+            std::fs::read_to_string(target.path().join(".release-kit/config.toml")).expect("reads");
+        assert!(!config.contains("[profile.release.build]"), "{config}");
+        assert!(landed_bash_pipeline(target.path(), forge).contains("make dist"));
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+        rk().args(["status", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("profile.release.build").not());
+    }
+    // A schema 1 configuration migrates with no build answer, renders make
+    // dist, and holds under the status check with a compatible proof.
+    let target = land_pair("bash", "gitlab");
+    std::fs::write(
+        target.path().join(".release-kit/config.toml"),
+        "schema_version = 1\n[project]\nrepo = 'acme/widget'\nforge = 'gitlab'\ntech = 'bash'\ntrunk = 'master'\n[landing]\nworkflow = 'worktree'\nstyle = 'trunk'\nnix = false\n",
+    )
+    .expect("the schema 1 config writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(landed_bash_pipeline(target.path(), "gitlab").contains("make dist"));
+    let record =
+        std::fs::read_to_string(target.path().join(".release-kit/manifest.json")).expect("reads");
+    assert!(!record.contains("\"build\""), "{record}");
+    seed_setup_proof(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// An empty build command refuses as configuration, naming the key.
+#[test]
+fn an_empty_build_command_refuses_by_name() {
+    let target = land_pair("bash", "gitlab");
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("reads");
+    std::fs::write(
+        &config,
+        format!("{text}\n[profile.release.build]\ncommand = \"  \"\n"),
+    )
+    .expect("writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("profile.release.build.command"));
+}
+
+/// Only the two bash pipelines carry the build tokens, and no landed file
+/// of any pair keeps one unrendered.
+#[test]
+fn only_the_bash_pipelines_carry_the_build_tokens() {
+    let mut carriers = Vec::new();
+    for entry in walkdir_files(&repo_path("snippets")) {
+        let text = std::fs::read_to_string(&entry).unwrap_or_default();
+        if text.contains("RK_BUILD_") {
+            carriers.push(
+                entry
+                    .strip_prefix(repo_path("snippets"))
+                    .expect("below")
+                    .to_owned(),
+            );
+        }
+    }
+    carriers.sort();
+    assert_eq!(
+        carriers,
+        [
+            PathBuf::from("bash/github/.github/workflows/release.yml"),
+            PathBuf::from("bash/gitlab/.gitlab-ci.yml"),
+        ],
+    );
+    for (tech, forge) in [
+        ("rust", "github"),
+        ("rust", "gitlab"),
+        ("python", "github"),
+        ("bash", "github"),
+        ("bash", "gitlab"),
+    ] {
+        let target = land_pair(tech, forge);
+        for file in walkdir_files(target.path()) {
+            let text = std::fs::read_to_string(&file).unwrap_or_default();
+            assert!(
+                !text.contains("RK_BUILD_"),
+                "({tech}, {forge}) {}",
+                file.display()
+            );
+        }
+    }
+}
+
+/// The default command needs a makefile: none reads unsatisfied, naming
+/// the file and the output contract.
+#[test]
+fn package_check_faults_a_make_command_with_no_makefile() {
+    let fixture = ForgeFixture::new();
+    std::fs::remove_file(fixture.target.path().join("Makefile")).expect("removes");
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("unsatisfied package-check"), "{line}");
+    assert!(line.contains("Makefile"), "{line}");
+    assert!(line.contains("dist/<name>.tar.gz"), "{line}");
+}
+
+/// A makefile whose dist target exists resolves under make -n, and the
+/// step reads ok with the tarball limitation; a missing target does not.
+#[test]
+fn package_check_resolves_a_make_target_where_make_exists() {
+    let fixture = ForgeFixture::new();
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("ok package-check"), "{line}");
+    assert!(line.contains("make dist resolves"), "{line}");
+    assert!(line.contains("tarball is not inspected"), "{line}");
+    assert!(fixture.log().contains("make -n dist"), "{}", fixture.log());
+    std::fs::write(fixture.target.path().join("Makefile"), "build:\n\ttrue\n").expect("writes");
+    let missing = package_check_line(&fixture);
+    assert!(
+        missing.starts_with("unsatisfied package-check"),
+        "{missing}"
+    );
+    assert!(missing.contains("make -n does not resolve"), "{missing}");
+}
+
+/// A command that is not make is the project's own: ok, with a limitation
+/// naming the command and the contract it owes.
+#[test]
+fn package_check_names_a_foreign_command_as_the_projects_own() {
+    let fixture = ForgeFixture::new();
+    std::fs::remove_file(fixture.target.path().join("Makefile")).expect("removes");
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[profile.release]\nmode = \"automatic\"\ndriver = \"bash\"\n\n[profile.release.build]\ncommand = \"just dist\"\n",
+    )
+    .expect("the config writes");
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("ok package-check"), "{line}");
+    assert!(
+        line.contains("just dist is the project's own build command"),
+        "{line}"
+    );
+    assert!(line.contains("dist/<name>.tar.gz"), "{line}");
+}
+
+/// The seeded changelog template renders a null version as unreleased
+/// rather than failing, and renders a named version, through the git-cliff
+/// the devshell carries; the test names the version it ran.
+#[test]
+fn the_cliff_seed_degrades_on_a_null_version() {
+    let version = std::process::Command::new("git-cliff")
+        .arg("--version")
+        .output()
+        .expect("git-cliff is in the devshell, which flake.nix owns");
+    let ran = String::from_utf8_lossy(&version.stdout).trim().to_owned();
+    println!("git-cliff: {ran}");
+    let registry: toml::Table = std::fs::read_to_string(repo_path("versions.toml"))
+        .expect("the registry reads")
+        .parse()
+        .expect("the registry parses");
+    let pin = registry["tool"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"].as_str() == Some("git-cliff"))
+        })
+        .and_then(|tool| tool["version"].as_str())
+        .expect("versions.toml pins git-cliff")
+        .to_owned();
+    assert_eq!(
+        ran,
+        format!("git-cliff {pin}"),
+        "the proof runs at the pin the pipelines install"
+    );
+    for forge in ["gitlab", "github"] {
+        let dir = tempfile::tempdir().expect("a scratch repository");
+        std::fs::copy(
+            repo_path(&format!("snippets/bash/{forge}/cliff.toml")),
+            dir.path().join("cliff.toml"),
+        )
+        .expect("the seed copies");
+        git_in(dir.path(), &["init", "-q", "-b", "master"]);
+        git_in(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "feat: first",
+            ],
+        );
+        let render = |args: &[&str]| -> String {
+            let mut command = std::process::Command::new("git-cliff");
+            for var in GIT_HOOK_VARS {
+                command.env_remove(var);
+            }
+            let out = command
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git-cliff runs");
+            assert!(
+                out.status.success(),
+                "{forge} {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert!(render(&[]).contains("## [unreleased]"), "{forge}");
+        assert!(
+            render(&["--unreleased", "--tag", "v0.1.0"]).contains("## [0.1.0]"),
+            "{forge}"
+        );
+    }
+}
+
+/// A table every one of whose keys is unanswered leaves the file, and the
+/// tables on either side stay one blank line apart, with no blank line
+/// doubled and none at the end, in a release and a release-less landing.
+#[test]
+fn a_dropped_table_leaves_one_blank_line_between_its_neighbours() {
+    for args in [
+        &["--tech", "rust", "--forge", "github"][..],
+        &["--release-mode", "none", "--forge", "github"][..],
+    ] {
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        rk().arg("init")
+            .args(args)
+            .args(["--repo", "acme/widget", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+        let text = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+            .expect("the config reads");
+        assert!(
+            !text.contains("[profile.release.build]"),
+            "{args:?}: {text}"
+        );
+        assert!(!text.contains("\n\n\n"), "{args:?}: {text}");
+        assert!(!text.ends_with("\n\n"), "{args:?}: {text}");
+        let lines: Vec<&str> = text.lines().collect();
+        for (at, line) in lines.iter().enumerate().skip(1) {
+            if line.starts_with('[') {
+                assert_eq!(
+                    lines[at - 1],
+                    "",
+                    "{args:?}: {line} follows a blank line: {text}"
+                );
+            }
+        }
+    }
+}
+
+/// A build command that names a file of the project is judged here: one
+/// that is absent, or present and not executable, refuses naming the
+/// command and the output contract, and an executable one reads ok.
+#[test]
+fn package_check_refuses_a_missing_or_unexecutable_local_command() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture = ForgeFixture::new();
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[profile.release]\nmode = \"automatic\"\ndriver = \"bash\"\n\n[profile.release.build]\ncommand = \"./build-dist release\"\n",
+    )
+    .expect("the config writes");
+    let absent = package_check_line(&fixture);
+    assert!(absent.starts_with("unsatisfied package-check"), "{absent}");
+    assert!(absent.contains("./build-dist"), "{absent}");
+    assert!(absent.contains("dist/<name>.tar.gz"), "{absent}");
+    let script = fixture.target.path().join("build-dist");
+    std::fs::write(&script, "#!/bin/sh\n").expect("the script writes");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).expect("mode");
+    let plain = package_check_line(&fixture);
+    assert!(plain.starts_with("unsatisfied package-check"), "{plain}");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    let runnable = package_check_line(&fixture);
+    assert!(runnable.starts_with("ok package-check"), "{runnable}");
+    assert!(
+        runnable.contains("./build-dist is executable here"),
+        "{runnable}"
+    );
+}
+
+/// The script of one job or step of a landed pipeline, as the runner
+/// would execute it: the literal block after `from`, its indentation
+/// removed.
+fn pipeline_script(text: &str, from: &str, indent: usize) -> String {
+    let start = text.find(from).unwrap_or_else(|| panic!("no {from}"));
+    let rest = &text[start..];
+    let open = rest.find("|\n").expect("a literal block") + 2;
+    let prefix = " ".repeat(indent);
+    rest[open..]
+        .lines()
+        .take_while(|line| line.is_empty() || line.starts_with(&prefix))
+        .map(|line| line.strip_prefix(&prefix).unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One attach script run with stub forge tools in a scratch workspace that
+/// holds the build's outputs, returning its status and the tools' log.
+fn run_attach(script: &str, tools: &[(&str, &str)], env: &[(&str, &str)]) -> (bool, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let work = tempfile::tempdir().expect("a scratch workspace");
+    let bin = work.path().join("bin");
+    std::fs::create_dir_all(work.path().join("dist")).expect("dist");
+    std::fs::create_dir_all(&bin).expect("bin");
+    for name in [
+        "dist/w-1.0.0.tar.gz",
+        "dist/w-1.0.0.tar.gz.sha256",
+        "notes.md",
+    ] {
+        std::fs::write(work.path().join(name), "x\n").expect("writes");
+    }
+    std::fs::write(work.path().join("release-version"), "1.0.0\n").expect("writes");
+    for (name, body) in tools {
+        let path = bin.join(name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\necho \"{name} $*\" >> \"$LOG\"\n{body}\n"),
+        )
+        .expect("writes");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    }
+    let log = work.path().join("log");
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(script)
+        .current_dir(work.path())
+        .env("LOG", &log)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let status = command.output().expect("the script runs").status.success();
+    (status, std::fs::read_to_string(&log).unwrap_or_default())
+}
+
+/// The GitHub attach step refuses a tag it could not read, refuses a tag at
+/// another commit, and points a draft at this run's commit before it
+/// publishes it.
+#[test]
+fn the_bash_github_attach_reads_the_tag_in_three_states() {
+    let workflow = landed_bash_pipeline(land_pair("bash", "github").path(), "github");
+    let script = pipeline_script(&workflow, "- name: attach\n", 10);
+    let env = [("GH_REPO", "acme/w"), ("SHA", "new"), ("VERSION", "1.0.0")];
+    let unreadable = r#"case "$*" in "api repos/acme/w/git/ref/tags/v1.0.0") echo "HTTP 500" >&2; exit 1;; esac; exit 0"#;
+    let (ok, log) = run_attach(&script, &[("gh", unreadable)], &env);
+    assert!(!ok, "{log}");
+    assert!(
+        !log.contains("release create") && !log.contains("release edit"),
+        "{log}"
+    );
+    let elsewhere =
+        r#"case "$*" in "api repos/acme/w/commits/v1.0.0 -q .sha") echo old;; esac; exit 0"#;
+    let (ok, log) = run_attach(&script, &[("gh", elsewhere)], &env);
+    assert!(!ok, "{log}");
+    assert!(
+        !log.contains("release create") && !log.contains("release edit"),
+        "{log}"
+    );
+    let draft = r#"case "$*" in "api repos/acme/w/git/ref/tags/v1.0.0") echo "HTTP 404" >&2; exit 1;; "release view v1.0.0 --json isDraft -q .isDraft") echo true;; esac; exit 0"#;
+    let (ok, log) = run_attach(&script, &[("gh", draft)], &env);
+    assert!(ok, "{log}");
+    assert!(
+        log.contains("release edit v1.0.0 --target new --draft=false"),
+        "{log}"
+    );
+}
+
+/// The GitLab attach job refuses a tag it could not read and a tag at
+/// another commit, and creates the tag with the release where none exists.
+#[test]
+fn the_bash_gitlab_attach_reads_the_tag_in_three_states() {
+    let target = land_pair("bash", "gitlab");
+    let pipeline = landed_bash_pipeline(target.path(), "gitlab");
+    let from = pipeline.find("\nattach:\n").expect("the attach job");
+    let script = pipeline_script(&pipeline[from..], "script:\n    - |", 6);
+    let env = [
+        ("CI_API_V4_URL", "https://gitlab.example/api/v4"),
+        ("CI_PROJECT_ID", "7"),
+        ("CI_COMMIT_SHA", "new"),
+        ("RELEASE_BOT_TOKEN", "t"),
+    ];
+    let curl = |tag: &str| {
+        format!(
+            r#"case "$*" in
+  *"http_code"*"repository/tags/v1.0.0"*) {tag};;
+  *"/packages?"*) echo '[]';;
+  *"-X POST"*"/releases"*) cat >/dev/null; echo '{{}}';;
+  *"/releases/v1.0.0"*) exit 22;;
+esac
+exit 0"#
+        )
+    };
+    let unreadable = curl("printf 500");
+    let (ok, log) = run_attach(&script, &[("curl", &unreadable)], &env);
+    assert!(!ok, "{log}");
+    assert!(
+        !log.contains("-X POST https://gitlab.example/api/v4/projects/7/releases"),
+        "{log}"
+    );
+    let elsewhere = curl(
+        r#"prev=""; for a in "$@"; do [ "$prev" = "-o" ] && echo '{"commit":{"id":"old"}}' > "$a"; prev="$a"; done; printf 200"#,
+    );
+    let (ok, log) = run_attach(&script, &[("curl", &elsewhere)], &env);
+    assert!(!ok, "{log}");
+    assert!(
+        !log.contains("-X POST https://gitlab.example/api/v4/projects/7/releases"),
+        "{log}"
+    );
+    let absent = curl("printf 404");
+    let (ok, log) = run_attach(&script, &[("curl", &absent)], &env);
+    assert!(ok, "{log}");
+    assert!(
+        log.contains("-X POST https://gitlab.example/api/v4/projects/7/releases"),
+        "{log}"
+    );
+}
+
+const ACCEPTED_REASON: &str = "the release image carries a tool the packages parameter cannot name";
+
+/// The SHA-256 of a target file, as the receipt and an entry write it.
+fn file_digest(path: &Path) -> String {
+    release_kit::digest::Digest::of(&std::fs::read(path).expect("the file reads")).to_string()
+}
+
+/// A landed bash GitLab target whose `.gitlab-ci.yml` carries one
+/// deliberate edit, accepted in its configuration with a reason and the
+/// digest of the edited bytes. Returns the target and the original bytes.
+fn accepted_drift_target() -> (tempfile::TempDir, Vec<u8>) {
+    let target = land_pair("bash", "gitlab");
+    let pipeline = target.path().join(".gitlab-ci.yml");
+    let original = std::fs::read(&pipeline).expect("the pipeline reads");
+    let mut edited = original.clone();
+    edited.extend_from_slice(b"# a deliberate local deviation\n");
+    std::fs::write(&pipeline, &edited).expect("the pipeline writes");
+    accept_drift(target.path(), &file_digest(&pipeline));
+    (target, original)
+}
+
+/// Replace the empty declaration with one entry for `.gitlab-ci.yml`.
+fn accept_drift(target: &Path, digest: &str) {
+    edit_target_config(
+        target,
+        "accepted_drift = {}",
+        &format!(
+            "accepted_drift = {{ \".gitlab-ci.yml\" = {{ reason = \"{ACCEPTED_REASON}\", sha256 = \"{digest}\" }} }}"
+        ),
+    );
+}
+
+/// SATISFIES accepted-drift:an-accepted-drift-names-its-reason-and-its-bytes
+/// An accepted edit reads clean under the check and is reported with its
+/// reason.
+#[test]
+fn status_check_reads_clean_on_accepted_drift() {
+    let (target, _) = accepted_drift_target();
+    seed_setup_proof(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "ACCEPTED .gitlab-ci.yml (rendered, accepted drift: {ACCEPTED_REASON})"
+        )));
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.status/15");
+    assert_eq!(report["accepted_drift"][0]["destination"], ".gitlab-ci.yml");
+    assert_eq!(report["drift"]["rendered"], 0, "{report}");
+}
+
+/// A further edit past the accepted bytes is rendered drift again, and the
+/// violation names the reason and prints the digest now on disk.
+#[test]
+fn status_check_faults_a_further_edit_under_accepted_drift() {
+    let (target, _) = accepted_drift_target();
+    seed_setup_proof(target.path());
+    let pipeline = target.path().join(".gitlab-ci.yml");
+    let mut bytes = std::fs::read(&pipeline).expect("reads");
+    bytes.extend_from_slice(b"# a second, unreviewed edit\n");
+    std::fs::write(&pipeline, &bytes).expect("writes");
+    let now = file_digest(&pipeline);
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(format!(
+            "edited past its accepted drift: {ACCEPTED_REASON}; sha256 now {now}"
+        )));
+}
+
+/// An entry whose file matches the receipt again is stale: informational,
+/// never a violation.
+#[test]
+fn status_reports_a_stale_accepted_drift_entry() {
+    let (target, original) = accepted_drift_target();
+    std::fs::write(target.path().join(".gitlab-ci.yml"), original).expect("restores");
+    seed_setup_proof(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "STALE landing.accepted_drift entry for .gitlab-ci.yml",
+        ));
+}
+
+/// One malformed entry, refused by a landing before any write, naming the
+/// destination and the fault.
+fn refused_entry(entry: &str, named: &[&str]) {
+    let target = land_pair("bash", "gitlab");
+    edit_target_config(
+        target.path(),
+        "accepted_drift = {}",
+        &format!("accepted_drift = {{ {entry} }}"),
+    );
+    let assertion = rk()
+        .args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
+    for part in named {
+        assert!(stderr.contains(part), "{part}: {stderr}");
+    }
+}
+
+#[test]
+fn accepted_drift_refuses_an_empty_reason() {
+    refused_entry(
+        &format!(
+            "\".gitlab-ci.yml\" = {{ reason = \" \", sha256 = \"{}\" }}",
+            "a".repeat(64)
+        ),
+        &[".gitlab-ci.yml", "no reason"],
+    );
+}
+
+#[test]
+fn accepted_drift_refuses_a_malformed_digest() {
+    refused_entry(
+        "\".gitlab-ci.yml\" = { reason = \"x\", sha256 = \"abc\" }",
+        &[".gitlab-ci.yml", "no SHA-256 digest"],
+    );
+}
+
+#[test]
+fn accepted_drift_refuses_a_block_destination() {
+    refused_entry(
+        &format!(
+            "\"AGENTS.md\" = {{ reason = \"x\", sha256 = \"{}\" }}",
+            "a".repeat(64)
+        ),
+        &["AGENTS.md", "marked block"],
+    );
+}
+
+#[test]
+fn accepted_drift_refuses_a_seeded_destination() {
+    refused_entry(
+        &format!(
+            "\"cliff.toml\" = {{ reason = \"x\", sha256 = \"{}\" }}",
+            "a".repeat(64)
+        ),
+        &["cliff.toml", "seeded file"],
+    );
+}
+
+#[test]
+fn accepted_drift_refuses_an_unselected_destination() {
+    refused_entry(
+        &format!(
+            "\"nothing.yml\" = {{ reason = \"x\", sha256 = \"{}\" }}",
+            "a".repeat(64)
+        ),
+        &["nothing.yml", "does not select"],
+    );
+}
+
+/// `rk profile` reports the declaration in its own domain, with its
+/// source, and never inside the profile or the capability requests.
+#[test]
+fn rk_profile_reports_the_landing_declaration_by_domain() {
+    let (target, _) = accepted_drift_target();
+    let out = rk()
+        .args(["profile", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["landing"]["accepted_drift"][".gitlab-ci.yml"]["reason"],
+        ACCEPTED_REASON
+    );
+    assert_eq!(report["sources"]["landing.accepted_drift"], "config");
+    assert!(
+        !report["profile"].to_string().contains("accepted"),
+        "{report}"
+    );
+    assert!(
+        !report["capabilities"].to_string().contains("accepted"),
+        "{report}"
+    );
+}
+
+/// The landing keeps the accepted bytes with no `--replace`, records the
+/// candidate's digest, and says the candidate did not move.
+#[test]
+fn an_upgrade_preserves_an_accepted_drift_file() {
+    let (target, original) = accepted_drift_target();
+    let pipeline = target.path().join(".gitlab-ci.yml");
+    let accepted = std::fs::read(&pipeline).expect("reads");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "preserved .gitlab-ci.yml (rendered, accepted drift: {ACCEPTED_REASON}; the candidate did not move since the last landing)"
+        )));
+    assert_eq!(std::fs::read(&pipeline).expect("reads"), accepted);
+    let record = read_manifest(target.path());
+    let entry = record["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .find(|file| file["destination"] == ".gitlab-ci.yml")
+        .expect("recorded")
+        .clone();
+    assert_eq!(
+        entry["sha256"],
+        release_kit::digest::Digest::of(&original).to_string()
+    );
+}
+
+/// Bytes past the accepted ones stay a conflict that only a named
+/// `--replace` passes.
+#[test]
+fn an_upgrade_refuses_a_further_edit_under_accepted_drift() {
+    let (target, _) = accepted_drift_target();
+    let pipeline = target.path().join(".gitlab-ci.yml");
+    let mut bytes = std::fs::read(&pipeline).expect("reads");
+    bytes.extend_from_slice(b"# a second, unreviewed edit\n");
+    std::fs::write(&pipeline, &bytes).expect("writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(".gitlab-ci.yml"));
+    rk().args([
+        "upgrade",
+        "--apply",
+        "--replace",
+        ".gitlab-ci.yml",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success();
+}
+
+/// Where the candidate for the accepted file changed since the last
+/// receipt, the landing says so, so the project can tell its deviation
+/// may be droppable.
+#[test]
+fn an_upgrade_reports_a_moved_candidate_under_accepted_drift() {
+    let (target, _) = accepted_drift_target();
+    rk().args([
+        "upgrade",
+        "--apply",
+        "--build-command",
+        "just dist",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "the candidate moved since the last landing",
+    ));
+}
+
+/// After the landing that preserved the file, status still reads it as
+/// accepted drift, with no parameter drift and no stale entry.
+#[test]
+fn status_reads_accepted_drift_after_an_upgrade() {
+    let (target, _) = accepted_drift_target();
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    seed_setup_proof(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("ACCEPTED .gitlab-ci.yml")
+                .and(predicate::str::contains("STALE").not())
+                .and(predicate::str::contains("recorded parameters do not render").not()),
+        );
+}
+
+/// A second landing finds the same state and preserves the file again.
+#[test]
+fn a_second_upgrade_preserves_an_accepted_drift_file() {
+    let (target, _) = accepted_drift_target();
+    let pipeline = target.path().join(".gitlab-ci.yml");
+    let accepted = std::fs::read(&pipeline).expect("reads");
+    for _ in 0..2 {
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("preserved .gitlab-ci.yml"));
+    }
+    assert_eq!(std::fs::read(&pipeline).expect("reads"), accepted);
+}
+
+/// With the entry gone, the edit is rendered drift and a landing conflict
+/// again, as for any edited rendered file.
+#[test]
+fn removing_the_entry_makes_the_file_rendered_drift_again() {
+    let (target, _) = accepted_drift_target();
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("reads");
+    let start = text.find("accepted_drift = {").expect("the entry");
+    let end = start + text[start..].find(" # N:").expect("the comment");
+    std::fs::write(
+        &config,
+        format!("{}accepted_drift = {{}}{}", &text[..start], &text[end..]),
+    )
+    .expect("writes");
+    seed_setup_proof(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "DRIFT .gitlab-ci.yml (rendered, release-kit-owned)",
+        ));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(".gitlab-ci.yml"));
+}
+
+/// The landed status hook passes on a repository that commits its
+/// deviation as a declaration, which removes the standing SKIP.
+#[test]
+fn the_status_hook_passes_on_a_repository_with_accepted_drift() {
+    assert!(
+        std::process::Command::new("pre-commit")
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success()),
+        "pre-commit is in the devshell, which flake.nix owns"
+    );
+    let (target, _) = accepted_drift_target();
+    seed_setup_proof(target.path());
+    git_in(target.path(), &["init", "-q", "-b", "master"]);
+    git_in(target.path(), &["add", "-A"]);
+    let bin = assert_cmd::cargo::cargo_bin("rk");
+    let bin_dir = bin.parent().expect("a directory");
+    let mut command = std::process::Command::new("pre-commit");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["run", "rk-status-check", "--all-files"])
+        .current_dir(target.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .expect("pre-commit runs");
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// An accepted file edited between validation and the first write is no
+/// longer the accepted bytes: the landing refuses with nothing written,
+/// while an unchanged accepted file still lands.
+#[test]
+fn an_upgrade_refuses_an_accepted_file_changed_mid_landing() {
+    let (target, _) = accepted_drift_target();
+    let before = tree_digests(target.path());
+    let paused = PausedLanding::start(target.path(), &["upgrade", "--build-command", "just dist"]);
+    let pipeline = target.path().join(".gitlab-ci.yml");
+    let mut bytes = std::fs::read(&pipeline).expect("reads");
+    bytes.extend_from_slice(b"# an edit after validation\n");
+    std::fs::write(&pipeline, &bytes).expect("writes");
+    let (code, diagnostic) = paused.proceed();
+    assert_eq!(code, Some(73), "{diagnostic}");
+    assert_eq!(diagnostic["reason"], "state-drift", "{diagnostic}");
+    let after: Vec<(String, String)> = tree_digests(target.path())
+        .into_iter()
+        .filter(|(path, _)| path != ".gitlab-ci.yml")
+        .collect();
+    let expected: Vec<(String, String)> = before
+        .into_iter()
+        .filter(|(path, _)| path != ".gitlab-ci.yml")
+        .collect();
+    assert_eq!(
+        after, expected,
+        "the configuration and the receipt stay as they were"
+    );
+
+    let (control, _) = accepted_drift_target();
+    let paused = PausedLanding::start(control.path(), &["upgrade"]);
+    let (code, diagnostic) = paused.proceed();
+    assert_eq!(code, Some(0), "{diagnostic}");
+}
+
+/// Every verb that resolves a declaration holds it to the whole domain: a
+/// selected rendered whole file the receipt records. A seeded entry
+/// refuses through staging, and an entry no receipt records refuses
+/// through the profile and a first landing, before any write.
+#[test]
+fn accepted_drift_refuses_an_ineligible_entry_through_every_verb() {
+    let target = land_pair("bash", "gitlab");
+    edit_target_config(
+        target.path(),
+        "accepted_drift = {}",
+        &format!(
+            "accepted_drift = {{ \"cliff.toml\" = {{ reason = \"x\", sha256 = \"{}\" }} }}",
+            "a".repeat(64)
+        ),
+    );
+    let stage = tempfile::tempdir().expect("a stage root");
+    rk().args(["stage", "--output"])
+        .arg(stage.path().join("s"))
+        .args(["--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cliff.toml"));
+    assert!(!stage.path().join("s/stage.json").exists());
+
+    let fresh = tempfile::tempdir().expect("a scratch target");
+    std::fs::create_dir_all(fresh.path().join(".release-kit")).expect("the dir");
+    std::fs::write(
+        fresh.path().join(".release-kit/config.toml"),
+        format!(
+            "schema_version = 2\n\n[landing]\naccepted_drift = {{ \".gitlab-ci.yml\" = {{ reason = \"x\", sha256 = \"{}\" }} }}\n",
+            "a".repeat(64)
+        ),
+    )
+    .expect("the config writes");
+    let args = [
+        "--tech",
+        "bash",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+        "--target",
+    ];
+    rk().arg("profile")
+        .args(args)
+        .arg(fresh.path())
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(".gitlab-ci.yml").and(predicate::str::contains("receipt")),
+        );
+    rk().arg("init")
+        .args(args)
+        .arg(fresh.path())
+        .arg("--apply")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(".gitlab-ci.yml").and(predicate::str::contains("receipt")),
+        );
+    assert!(!fresh.path().join(".release-kit/manifest.json").exists());
+}
+
+/// One `rk` command's stdout, which must succeed.
+fn rk_text(args: &[&str]) -> String {
+    let out = rk()
+        .args(args)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Step 5 of the release guide carries the queued-or-stuck check on both
+/// forges: the GraphQL `stuck` read on GitLab, and the runner labels on
+/// GitHub as evidence.
+#[test]
+fn the_release_runbook_carries_the_queued_or_stuck_check_on_both_forges() {
+    let guide = rk_text(&["guide", "release"]);
+    let step = &guide[guide
+        .find("## 5. Wait for the artifact build")
+        .expect("step 5")..];
+    let step = &step[..step.find("\n## 6.").unwrap_or(step.len())];
+    assert!(
+        step.contains("jobs(statuses: [PENDING]) { nodes { name status stuck } }"),
+        "{step}"
+    );
+    assert!(
+        step.contains("stuck true means no runner will take this job"),
+        "{step}"
+    );
+    assert!(step.contains("actions/runners"), "{step}");
+    assert!(step.contains("fails after 24 hours in the queue"), "{step}");
+}
+
+/// Step 3a of the setup guide carries the same check where the operator
+/// reads a merge request's first pipeline.
+#[test]
+fn the_setup_runbook_carries_the_queued_or_stuck_check() {
+    let guide = rk_text(&["guide", "setup"]);
+    let step = &guide[guide
+        .find("### 3a. Prove the required checks exist")
+        .expect("step 3a")..];
+    let step = &step[..step.find("\n### 3b.").unwrap_or(step.len())];
+    assert!(
+        step.contains("jobs(statuses: [PENDING]) { nodes { name status stuck } }"),
+        "{step}"
+    );
+    assert!(step.contains("actions/runners"), "{step}");
+}
+
+/// The recovery chapter carries the un-bump with its precondition and the
+/// GitLab routes, under the two headings release state names.
+#[test]
+fn the_recovery_chapter_carries_the_gitlab_routes_and_the_unbump_precondition() {
+    let chapter = rk_text(&["method", "recovery"]);
+    let section = |heading: &str| -> String {
+        let start = chapter
+            .find(&format!("## {heading}\n"))
+            .unwrap_or_else(|| panic!("{heading}"));
+        let rest = &chapter[start + 3..];
+        rest[..rest.find("\n## ").unwrap_or(rest.len())].to_owned()
+    };
+    let nothing = section("The release request merged and nothing published");
+    assert!(
+        nothing.contains("return `VERSION` to its previous value"),
+        "{nothing}"
+    );
+    assert!(
+        nothing.contains("no tag, no release, nothing published"),
+        "{nothing}"
+    );
+    let tag = section("The tag exists and the release does not");
+    assert!(
+        tag.contains("On GitLab, take the routes in the same order."),
+        "{tag}"
+    );
+    // A bash pipeline on GitHub starts no tag-push run: its one branch-push
+    // run builds, attests, and publishes, so that is the run to rerun.
+    assert!(
+        tag.contains("On GitHub, a bash pipeline starts no run on the tag push"),
+        "{tag}"
+    );
+    // Expired artifacts are rebuilt in producer order before attach.
+    assert!(
+        tag.contains("retry `build`, then `provenance` on that build, then `attach`"),
+        "{tag}"
+    );
+    assert!(
+        tag.contains("Never move or delete a protected tag, on either forge."),
+        "{tag}"
+    );
+}
+
+/// The GitLab forge document states the live run's evidence and names the
+/// two behaviours it did not reach.
+#[test]
+fn the_gitlab_forge_document_states_what_the_live_run_observed() {
+    let doc = rk_text(&["forge", "gitlab"]);
+    assert!(
+        !doc.contains("has not yet run against a live project"),
+        "{doc}"
+    );
+    assert!(
+        doc.contains("This tree ran against a live project on 2026-09-14"),
+        "{doc}"
+    );
+    assert!(
+        doc.contains("closes and replaces an open release request"),
+        "{doc}"
+    );
+    assert!(doc.contains("mirrors a child pipeline's status"), "{doc}");
 }

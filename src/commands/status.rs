@@ -294,7 +294,7 @@ const LEGACY_PLANS: &str = "plans";
 const LEGACY_RELEASE_CACHE: &str = "release";
 
 /// The status report's shape version.
-const SCHEMA: &str = "rk.status/14";
+const SCHEMA: &str = "rk.status/15";
 
 /// Configuration is informational, independent of every drift comparison.
 #[derive(Debug, serde::Serialize)]
@@ -391,6 +391,14 @@ struct Report {
     /// no files for the recorded pair and cannot answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pending: Option<usize>,
+    /// Rendered files edited on purpose, each under its accepted-drift
+    /// entry and reason: reported, never a violation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_drift: Option<Vec<AcceptedNote>>,
+    /// Accepted-drift entries whose file matches the receipt again: the
+    /// deviation is gone and the entry can go.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stale_accepted_drift: Option<Vec<String>>,
     /// Present only under `--check`: what the judgment failed on.
     #[serde(skip_serializing_if = "Option::is_none")]
     violations: Option<Vec<String>>,
@@ -508,6 +516,8 @@ fn report_absent(
         warnings: None,
         setup_proof: None,
         pending: None,
+        accepted_drift: None,
+        stale_accepted_drift: None,
         violations: args.check.then(|| vec!["no landing".to_owned()]),
         legacy_state: legacy,
         migration,
@@ -525,9 +535,28 @@ fn report_absent(
     Ok(())
 }
 
+/// A rendered file under its accepted-drift entry.
+#[derive(Debug, Clone, Serialize)]
+struct AcceptedNote {
+    /// The destination.
+    destination: String,
+    /// Why the project deviates.
+    reason: String,
+}
+
 /// What one pass over the record and the disk observed.
 struct Observed {
     drift_rendered: Vec<String>,
+    /// The current digest of each drifted rendered file, which the
+    /// remediation prints so an operator can accept it.
+    drift_digests: std::collections::BTreeMap<String, String>,
+    /// The reason of each drifted rendered file edited past its accepted
+    /// bytes, which the violation names.
+    drift_reasons: std::collections::BTreeMap<String, String>,
+    /// Rendered files whose bytes match their accepted-drift entry.
+    drift_accepted: Vec<AcceptedNote>,
+    /// Entries whose file matches the receipt again.
+    accepted_stale: Vec<String>,
     drift_seeded: Vec<String>,
     /// Recorded block destinations whose recorded digest the record's own
     /// parameters do not reproduce: the record was edited, not the file.
@@ -566,6 +595,10 @@ struct Observed {
 /// record's own failure taxonomy for an unreadable or unknown record, and
 /// [`RkError::CheckFailed`] under `--check` when the report holds a
 /// violation.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass reads the target, judges it, and emits the one report every reader takes"
+)]
 pub fn run(args: &StatusArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     if !args.target.is_dir() {
@@ -584,6 +617,10 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
     };
 
     let migration = open_migration(&args.target, config.as_ref());
+    let accepted = config
+        .as_ref()
+        .map(|config| config.landing.accepted_drift.clone())
+        .unwrap_or_default();
     let stated = Stated::of(config.as_ref(), &manifest);
     let config = config_state(config.as_ref(), Some(&manifest));
     out.result_line(format!("config: {}", config.state));
@@ -593,6 +630,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         ));
     }
     let mut observed = observe(args, &manifest, &stated)?;
+    accept(&mut observed, &manifest, &accepted)?;
     observed.setup_proof = setup_proof_of(&args.target, &manifest)?;
     let alignment = manifest::alignment(&manifest.rk_version, env!("CARGO_PKG_VERSION"));
     render_human(out, args, &manifest, alignment, &observed);
@@ -652,6 +690,8 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         warnings: Some(observed.warnings),
         setup_proof: observed.setup_proof.clone(),
         pending: observed.pending.as_ref().map(Vec::len),
+        accepted_drift: Some(observed.drift_accepted.clone()),
+        stale_accepted_drift: Some(observed.accepted_stale.clone()),
         violations: args.check.then(|| violations.clone()),
         legacy_state: legacy,
         migration,
@@ -692,6 +732,52 @@ fn render_context(out: Output, git_work_tree: bool, legacy: &[LegacyPath]) {
     }
 }
 
+/// Move each drifted rendered file whose bytes match its accepted-drift
+/// entry out of the violations, name the reason of one edited past it,
+/// and report an entry whose file matches the receipt again.
+///
+/// An entry must name a whole-file rendered destination the receipt
+/// records; any other refuses as configuration. Accepted drift exempts a
+/// file from the drift judgment alone: an invariant failure on it stays.
+///
+/// SATISFIES accepted-drift:an-accepted-drift-names-its-reason-and-its-bytes
+fn accept(
+    observed: &mut Observed,
+    manifest: &Manifest,
+    accepted: &std::collections::BTreeMap<String, crate::config::AcceptedDrift>,
+) -> Result<(), RkError> {
+    for (destination, entry) in accepted {
+        let Some(file) = manifest.file(destination) else {
+            return Err(crate::config::invalid(format!(
+                "landing.accepted_drift names {destination}, which the receipt does not record"
+            )));
+        };
+        if file.kind != Kind::Rendered || file.placement != manifest::Placement::Whole {
+            return Err(crate::config::invalid(format!(
+                "landing.accepted_drift names {destination}, which is not a whole rendered file: only such a file has bytes release-kit owns whole"
+            )));
+        }
+        if !observed.drift_rendered.contains(destination) {
+            if !observed.missing.contains(destination) {
+                observed.accepted_stale.push(destination.clone());
+            }
+            continue;
+        }
+        if observed.drift_digests.get(destination) == Some(&entry.sha256) {
+            observed.drift_rendered.retain(|path| path != destination);
+            observed.drift_accepted.push(AcceptedNote {
+                destination: destination.clone(),
+                reason: entry.reason.clone(),
+            });
+        } else {
+            observed
+                .drift_reasons
+                .insert(destination.clone(), entry.reason.clone());
+        }
+    }
+    Ok(())
+}
+
 /// The check-mode violation lines: rendered drift, missing recorded
 /// files, unresolved sentinels, and invariant failures — the closed set
 /// `landing:status-judges-only-under-check` names.
@@ -699,7 +785,17 @@ fn violations_of(observed: &Observed) -> Vec<String> {
     observed
         .drift_rendered
         .iter()
-        .map(|path| format!("rendered drift: {path}"))
+        .map(|path| {
+            let digest = observed.drift_digests.get(path).map_or("", String::as_str);
+            observed.drift_reasons.get(path).map_or_else(
+                || format!("rendered drift: {path}; its sha256 is {digest}"),
+                |reason| {
+                    format!(
+                        "rendered drift: {path}, edited past its accepted drift ({reason}); its sha256 is now {digest}"
+                    )
+                },
+            )
+        })
         .chain(
             observed
                 .parameter_drift
@@ -774,6 +870,10 @@ impl Stated {
 fn observe(args: &StatusArgs, manifest: &Manifest, stated: &Stated) -> Result<Observed, RkError> {
     let mut observed = Observed {
         drift_rendered: Vec::new(),
+        drift_digests: std::collections::BTreeMap::new(),
+        drift_reasons: std::collections::BTreeMap::new(),
+        drift_accepted: Vec::new(),
+        accepted_stale: Vec::new(),
         drift_seeded: Vec::new(),
         parameter_drift: Vec::new(),
         record_drift: Vec::new(),
@@ -806,7 +906,12 @@ fn observe(args: &StatusArgs, manifest: &Manifest, stated: &Stated) -> Result<Ob
         };
         if Digest::of(&bytes) != file.sha256 {
             match file.kind {
-                Kind::Rendered => observed.drift_rendered.push(file.destination.clone()),
+                Kind::Rendered => {
+                    observed.drift_rendered.push(file.destination.clone());
+                    observed
+                        .drift_digests
+                        .insert(file.destination.clone(), Digest::of(&bytes).to_string());
+                }
                 Kind::Seeded => observed.drift_seeded.push(file.destination.clone()),
                 Kind::State => {}
             }
@@ -1109,7 +1214,30 @@ fn render_human(
         }
     }
     for path in &observed.drift_rendered {
-        out.result_line(format!("DRIFT {path} (rendered, release-kit-owned)"));
+        let digest = observed.drift_digests.get(path).map_or("", String::as_str);
+        out.result_line(observed.drift_reasons.get(path).map_or_else(
+            || {
+                format!(
+                    "DRIFT {path} (rendered, release-kit-owned): sha256 {digest}; a deliberate edit is accepted under landing.accepted_drift with its reason and this digest"
+                )
+            },
+            |reason| {
+                format!(
+                    "DRIFT {path} (rendered, edited past its accepted drift: {reason}; sha256 now {digest})"
+                )
+            },
+        ));
+    }
+    for note in &observed.drift_accepted {
+        out.result_line(format!(
+            "ACCEPTED {} (rendered, accepted drift: {})",
+            note.destination, note.reason
+        ));
+    }
+    for path in &observed.accepted_stale {
+        out.result_line(format!(
+            "STALE landing.accepted_drift entry for {path}: the file matches the receipt, so the entry can go"
+        ));
     }
     for path in &observed.parameter_drift {
         out.result_line(format!(
@@ -1207,7 +1335,59 @@ mod tests {
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
 
-    /// The complete `rk.status/14` shape, held by snapshot in both the
+    /// Accepted drift exempts a file from the drift judgment alone: an
+    /// invariant failure on the same file stays a violation.
+    #[test]
+    fn accepted_drift_does_not_silence_an_invariant() {
+        let destination = ".gitlab-ci.yml".to_owned();
+        let digest = "a".repeat(64);
+        let mut observed = super::Observed {
+            drift_rendered: vec![destination.clone()],
+            drift_digests: std::iter::once((destination.clone(), digest.clone())).collect(),
+            drift_reasons: std::collections::BTreeMap::new(),
+            drift_accepted: Vec::new(),
+            accepted_stale: Vec::new(),
+            drift_seeded: Vec::new(),
+            parameter_drift: Vec::new(),
+            record_drift: Vec::new(),
+            missing: Vec::new(),
+            stale: Vec::new(),
+            sentinels: Vec::new(),
+            invariants: vec![crate::landing::invariants::InvariantFailure {
+                code: "an-invariant",
+                destination: destination.clone(),
+                reason: "the accepted bytes break it".to_owned(),
+                remediation: "restore it",
+            }],
+            warnings: Vec::new(),
+            setup_proof: None,
+            incompatible: Vec::new(),
+            pending: None,
+            selection: None,
+        };
+        let manifest: crate::landing::manifest::Manifest = serde_json::from_str(&format!(
+            r#"{{"schema_version":12,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["bash"],"forge":"gitlab","release":{{"mode":"automatic","driver":"bash","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"parameters":{{"repo":"acme/widget"}},"files":[{{"destination":".gitlab-ci.yml","kind":"rendered","sha256":"{}"}}],"pins":{{}}}}"#,
+            crate::digest::Digest::of(b"candidate")
+        ))
+        .expect("the record parses");
+        let accepted = std::iter::once((
+            destination,
+            crate::config::AcceptedDrift {
+                reason: "deliberate".to_owned(),
+                sha256: digest,
+            },
+        ))
+        .collect();
+        super::accept(&mut observed, &manifest, &accepted).expect("accepts");
+        assert!(observed.drift_rendered.is_empty());
+        let violations = super::violations_of(&observed);
+        assert!(
+            violations.iter().any(|line| line.contains("an-invariant")),
+            "{violations:?}"
+        );
+    }
+
+    /// The complete `rk.status/15` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     #[allow(
@@ -1233,6 +1413,7 @@ mod tests {
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
                     registry: None,
+                    build: None,
                 },
             }),
             git: Some(GitWorkflow {
@@ -1286,6 +1467,11 @@ mod tests {
                 detail: None,
             }),
             pending: Some(2),
+            accepted_drift: Some(vec![super::AcceptedNote {
+                destination: ".gitlab-ci.yml".into(),
+                reason: "the image carries a tool".into(),
+            }]),
+            stale_accepted_drift: Some(vec![]),
             violations: None,
             legacy_state: vec![LegacyPath {
                 path: "/state/release-kit/plans/0123456789abcdef".into(),
@@ -1302,7 +1488,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r##"{"schema":"rk.status/14","landed":true,"classification":"upgrade","git_work_tree":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"sentinel_locations":[{"file":"release-plz.toml","line":18,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"setup_proof":{"state":"stale","changed":["target.required_check"]},"pending":2,"legacy_state":[{"path":"/state/release-kit/plans/0123456789abcdef","kind":"plan","active":true}],"migration":{"id":"20261009T140205Z","workspace":"/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z","unfinished":2}}"##
+            r##"{"schema":"rk.status/15","landed":true,"classification":"upgrade","git_work_tree":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"sentinel_locations":[{"file":"release-plz.toml","line":18,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"setup_proof":{"state":"stale","changed":["target.required_check"]},"pending":2,"accepted_drift":[{"destination":".gitlab-ci.yml","reason":"the image carries a tool"}],"stale_accepted_drift":[],"legacy_state":[{"path":"/state/release-kit/plans/0123456789abcdef","kind":"plan","active":true}],"migration":{"id":"20261009T140205Z","workspace":"/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z","unfinished":2}}"##
         );
         let absent = Report {
             landed: false,
@@ -1329,6 +1515,8 @@ mod tests {
             warnings: None,
             setup_proof: None,
             pending: None,
+            accepted_drift: None,
+            stale_accepted_drift: None,
             violations: None,
             legacy_state: vec![],
             migration: None,
@@ -1336,7 +1524,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/14","landed":false,"classification":"setup","git_work_tree":false,"config":{"state":"absent","pending":[]},"legacy_state":[]}"#,
+            r#"{"schema":"rk.status/15","landed":false,"classification":"setup","git_work_tree":false,"config":{"state":"absent","pending":[]},"legacy_state":[]}"#,
             "an absent landing reports the fields a caller can branch on"
         );
         let newer = Report {

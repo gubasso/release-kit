@@ -229,10 +229,30 @@ gh run watch --repo <repo> --exit-status \
 # empty second id: the tag has not landed yet; rerun after a few seconds, and if it stays empty go to 6a, which names the failure
 ```
 
+""Where a job waits longer than the runner queue usually takes, tell a queued job from a stuck one before you wait more. [The GitHub forge document](../forges/github.md) states the same check.
+
+On github:
+
+A queued job is evidence, not a verdict:
+
+```bash
+gh run view <id> --repo <repo> --json jobs -q '.jobs[] | select(.status == "queued") | .name'
+gh api repos/<repo>/actions/runners -q '.runners[] | select(.status == "online") | {name, labels: [.labels[].name]}'
+# check: a job on a hosted label waits for capacity; a job on self-hosted labels needs one online runner that carries every label it requests
+# no such runner: the job stays queued until a matching runner comes online, and fails after 24 hours in the queue
+```
+
 On gitlab:
 
 ```bash
 glab ci status --wait
+```
+
+A `pending` job can be queued or stuck, and the REST job fields read the same for both. One GraphQL query decides it, on `pending` jobs alone, because a `created` job waits on an earlier stage or a `needs:` job and not on a runner:
+
+```bash
+glab api graphql -f query='{ project(fullPath: "<repo>") { jobs(statuses: [PENDING]) { nodes { name status stuck } } } }'
+# check: stuck false means the runner queue is slow and waiting is correct; stuck true means no runner will take this job, and the cause is runner configuration, not patience
 ```
 
 The `--event push` filter narrows the second watch to the tag push, which is the only event the artifact workflow runs on under the landed workflows, and it keeps the watch off the request runs a target that tuned the run mode still produces. The `(rust, gitlab)` pair has no artifact builder, so there is no dedicated build to wait for and no installers to expect on the release page; [the Rust binding](../bindings/rust.md) states it.
@@ -337,7 +357,7 @@ The pair declares no provenance surface — crates.io stores none, and the pair 
 
 ### 6f. Repair a failed tag push
 
-Anything but 6a's two identical SHAs means the tag push failed: rerun the publish workflow on the merge commit — never the artifact workflow, which only builds from a tag that already exists.
+Anything but 6a's two identical SHAs means the tag push failed: rerun the publish workflow on the merge commit — never the artifact workflow, which only builds from a tag that already exists. A rerun runs the configuration of its own commit, so it recovers a transient failure and never a defect a later commit fixed. Where the fix landed after the bump and no tag and no release exist, take the un-bump of [recovery](../method/04-recovery.md#the-release-request-merged-and-nothing-published) instead.
 
 On github:
 

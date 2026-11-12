@@ -100,6 +100,39 @@ impl RegistryAnswer {
     pub const DRIVER: &'static str = "rust";
 }
 
+/// How an automatic bash release builds its distribution.
+///
+/// The answer of `[profile.release.build]`. Each key absent reads as its
+/// default, so a target that never answered keeps its behavior and its
+/// record.
+///
+/// SATISFIES project-profile:release-intent-has-three-modes
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BuildAnswer {
+    /// The command that produces `dist/*.tar.gz` and its `.sha256`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The packages the release image installs before it runs the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packages: Option<String>,
+}
+
+impl BuildAnswer {
+    /// The one driver the answer is valid for.
+    pub const DRIVER: &'static str = "bash";
+    /// The command an unanswered target builds with.
+    pub const COMMAND: &'static str = "make dist";
+    /// The packages an unanswered target installs.
+    pub const PACKAGES: &'static str = "make";
+
+    /// Whether neither key is answered.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.command.is_none() && self.packages.is_none()
+    }
+}
+
 /// The release intent: the mode and, for an automatic release, its driver,
 /// style, and line prefix.
 ///
@@ -124,6 +157,11 @@ pub struct ReleaseIntent {
     /// crates.io.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<RegistryAnswer>,
+    /// How the distribution builds; answered for an automatic bash release
+    /// alone, and absent where nothing answered it, which reads as
+    /// `make dist` and `make`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildAnswer>,
 }
 
 /// What the project is, on the wire: values alone.
@@ -301,6 +339,10 @@ pub struct Inputs<'a> {
     /// The workflow whose completion wakes the release gate, overriding
     /// the configuration.
     pub required_workflow: Option<&'a str>,
+    /// The build command override, an automatic bash release alone.
+    pub build_command: Option<&'a str>,
+    /// The build packages override, an automatic bash release alone.
+    pub build_packages: Option<&'a str>,
     /// Nix packaging request override.
     pub nix: Option<bool>,
     /// Reporting policy request override.
@@ -340,6 +382,10 @@ pub struct Resolved {
     /// What the observation proposed for the release, where the mode was
     /// not answered above it.
     pub proposal: Option<Proposal>,
+    /// The bot identity's name, a setup declaration: empty takes the
+    /// forge's default. It is not a projection parameter, because no
+    /// landed byte depends on it.
+    pub bot_name: String,
 }
 
 /// The canonical form of a category name, or why it is refused.
@@ -513,6 +559,30 @@ impl Params {
                 .registry
                 .unwrap_or(RegistryAnswer::CratesIo)
         })
+    }
+
+    /// The command an automatic bash release builds with, the default where
+    /// nothing answered it.
+    #[must_use]
+    pub fn build_command(&self) -> &str {
+        self.profile
+            .release
+            .build
+            .as_ref()
+            .and_then(|build| build.command.as_deref())
+            .unwrap_or(BuildAnswer::COMMAND)
+    }
+
+    /// The packages an automatic bash release installs before it builds,
+    /// the default where nothing answered them.
+    #[must_use]
+    pub fn build_packages(&self) -> &str {
+        self.profile
+            .release
+            .build
+            .as_ref()
+            .and_then(|build| build.packages.as_deref())
+            .unwrap_or(BuildAnswer::PACKAGES)
     }
 
     /// Whether this landing requested the Nix capability.
@@ -755,6 +825,7 @@ impl Params {
                     style,
                     line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
                     registry: None,
+                    build: None,
                 },
             },
             git: GitWorkflow {
@@ -806,6 +877,7 @@ impl Params {
             style: None,
             line_prefix: None,
             registry: None,
+            build: None,
         };
         params.capabilities.reporting_policy = false;
         if forge.is_none() {
@@ -1147,6 +1219,42 @@ pub fn resolve(
         (Some(value), source)
     });
 
+    // How a bash release builds: each key by the same precedence, with no
+    // observation and an absent default, so a target that never answered
+    // keeps its record and every landed byte as they were.
+    let build_key = |flag: Option<&str>, read: fn(&BuildAnswer) -> Option<String>| {
+        answered([
+            (flag.map(str::to_owned), Source::Flag),
+            (
+                config.and_then(|c| c.profile.release.build.as_ref().and_then(read)),
+                Source::Config,
+            ),
+            (
+                record.and_then(|r| r.profile.release.build.as_ref().and_then(read)),
+                Source::Record,
+            ),
+            (None, Source::Observation),
+            (None, Source::Default),
+        ])
+        .map_or((None, Source::Default), |(value, source)| {
+            (Some(value), source)
+        })
+    };
+    let (build_command, command_source) =
+        build_key(flags.build_command, |build| build.command.clone());
+    let (build_packages, packages_source) =
+        build_key(flags.build_packages, |build| build.packages.clone());
+    if let Some(command) = &build_command {
+        crate::config::build_command_shape(command).map_err(crate::config::invalid)?;
+    }
+    if let Some(packages) = &build_packages {
+        crate::config::build_packages_shape(packages).map_err(crate::config::invalid)?;
+    }
+    let build = (build_command.is_some() || build_packages.is_some()).then_some(BuildAnswer {
+        command: build_command,
+        packages: build_packages,
+    });
+
     // A reporting purpose never refuses what it can state: `rk profile`
     // and every preview report an intent the target cannot yet take, and
     // the capability catalog says why. A purpose that writes refuses,
@@ -1208,11 +1316,18 @@ pub fn resolve(
             if registry.is_some() && (driver.is_some() || !reporting) {
                 catalog::registry_answer_fits(mode, driver.as_deref()).map_err(RkError::Usage)?;
             }
+            if build.is_some() && (driver.is_some() || !reporting) {
+                catalog::build_answer_fits(mode, driver.as_deref()).map_err(RkError::Usage)?;
+            }
             sources.insert("profile.release.driver", driver_source);
             sources.insert("profile.release.style", style_source);
             sources.insert("profile.release.line_prefix", prefix_source);
             if driver.as_deref() == Some(RegistryAnswer::DRIVER) {
                 sources.insert("profile.release.registry", registry_source);
+            }
+            if driver.as_deref() == Some(BuildAnswer::DRIVER) {
+                sources.insert("profile.release.build.command", command_source);
+                sources.insert("profile.release.build.packages", packages_source);
             }
             ReleaseIntent {
                 mode,
@@ -1222,6 +1337,7 @@ pub fn resolve(
                     line_prefix.unwrap_or_else(|| crate::config::LINE_PREFIX_DEFAULT.to_owned()),
                 ),
                 registry,
+                build,
             }
         }
         ReleaseMode::External | ReleaseMode::None => {
@@ -1244,6 +1360,16 @@ pub fn resolve(
                     registry.is_some(),
                     registry_source,
                 ),
+                (
+                    "profile.release.build.command",
+                    build.as_ref().is_some_and(|build| build.command.is_some()),
+                    command_source,
+                ),
+                (
+                    "profile.release.build.packages",
+                    build.as_ref().is_some_and(|build| build.packages.is_some()),
+                    packages_source,
+                ),
             ] {
                 if present
                     && matches!(value_source, Source::Flag | Source::Config)
@@ -1261,6 +1387,7 @@ pub fn resolve(
                 style: None,
                 line_prefix: None,
                 registry: None,
+                build: None,
             }
         }
     };
@@ -1596,6 +1723,16 @@ pub fn resolve(
         unknown.push(format!("forge {name}"));
     }
 
+    // The bot identity's name is a setup declaration of class N: only the
+    // configuration answers it, and no record carries it.
+    let (bot_name, source) = config
+        .map(|c| c.setup.bot.name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .map_or((String::new(), Source::Default), |name| {
+            (name, Source::Config)
+        });
+    sources.insert("setup.bot.name", source);
+
     Ok(Resolved {
         params: Params {
             profile: ProfileSnapshot {
@@ -1627,5 +1764,6 @@ pub fn resolve(
         sources,
         unknown,
         proposal,
+        bot_name,
     })
 }

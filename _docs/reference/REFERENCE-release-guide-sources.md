@@ -50,3 +50,36 @@ Bearing: the setup runbook's verified-email prerequisite, `cargo login` on stdin
 - <https://docs.gitlab.com/api/merge_requests/>
 
 Bearing: the release runbook's hold substep and its armed merge step, and the arming steps the landed workflows carry. The cancel endpoint keeping the old name is why the runbook's GitLab disarm goes through `glab api` rather than a dedicated verb.
+
+## The release create that makes the tag, on both forges
+
+Checked on 2026-11-12.
+
+- GitLab's `POST /projects/:id/releases`: where the tag named by `tag_name` does not exist, the release is created from `ref`, a commit SHA, a tag, or a branch, and tagged with `tag_name`; `ref` is required in that case. The page does not say what `ref` does for a tag that exists. `assets:links` is an array of hashes with `name` and `url`, sent as JSON. The release read answers a `commit` object with its `id`.
+- GitLab's `Releases::CreateService` creates the tag before it saves the release and does not remove the tag when the save fails.
+- `gh release create` with assets creates a draft release, uploads each asset, and then publishes it, in separate API requests that do not form one atomic operation. A tag that does not exist is created at `--target`, the default branch where none is given.
+
+- <https://docs.gitlab.com/api/releases/>
+- <https://github.com/gitlabhq/gitlabhq/blob/master/app/services/releases/create_service.rb>
+- <https://cli.github.com/manual/gh_release_create>
+- <https://cli.github.com/manual/gh_release_view>
+
+Bearing: the `attach` job of `snippets/bash/gitlab/.gitlab-ci.yml` and the `attach` step of `snippets/bash/github/.github/workflows/release.yml` create the tag with the release, last. A tag at another commit stops each one, because GitLab does not document `ref` for an existing tag and the method never moves a protected tag. A GitLab release save that fails leaves the tag at the pipeline's own commit, and a rerun creates the release on it. A GitHub draft left by a failed upload is finished with `gh release upload --clobber` and `gh release edit --draft=false`.
+
+## Queued or stuck, and the retried job
+
+Checked on 2026-11-12 against GitLab's source; the retry behaviour was observed on a live retry on 2026-09-14.
+
+- The GraphQL field `Project.jobs` takes `statuses: [CiJobStatus]`, and `CiJob.stuck` is a non-null Boolean, "Indicates the job is stuck". GitLab computes it as a pending job with no runner online, so a query for `PENDING` jobs reads it. The REST job fields carry no such field, and `DetailedStatus` has no `illustration` field, so `stuck` is the one to read.
+- A GitHub job on self-hosted labels needs one online runner that carries every label it requests, and fails after 24 hours in the queue.
+- A retried GitLab job uses the pipeline's original configuration, so a retry recovers a transient failure and never a defect a later commit fixed. A live retry's trace repeated the pre-fix failure.
+
+- <https://docs.gitlab.com/api/graphql/reference/>
+- <https://github.com/gitlabhq/gitlabhq/blob/master/app/graphql/resolvers/project_jobs_resolver.rb>
+- <https://github.com/gitlabhq/gitlabhq/blob/master/app/graphql/types/ci/job_type.rb>
+- <https://github.com/gitlabhq/gitlabhq/blob/master/app/models/ci/build.rb>
+- <https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow>
+- <https://docs.github.com/en/actions/reference/runners/self-hosted-runners>
+- <https://docs.gitlab.com/ci/jobs/>
+
+Bearing: step 5 of `runbooks/release.md` and step 3a of `runbooks/setup.md` read `stuck` for a pending GitLab job and the runner labels for a queued GitHub job, and the recovery chapter's un-bump rests on the retry running its own commit's configuration.

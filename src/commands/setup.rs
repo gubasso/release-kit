@@ -378,6 +378,9 @@ struct Engine {
     /// The run's snapshot directory, opened by the first step that saves
     /// a before-state.
     snapshot: Option<crate::snapshot::Snapshot>,
+    /// Whether the run names one step, as `rk setup step` does: a request
+    /// for that step's action, which a full run does not make.
+    named: bool,
 }
 
 impl Engine {
@@ -432,6 +435,7 @@ impl Engine {
             command,
             run_id,
             snapshot: None,
+            named: false,
         };
         let opening = Event::opening(
             engine.next_seq(),
@@ -646,8 +650,18 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             Some("rust") => "would run: cargo publish --dry-run --allow-dirty, then cargo metadata --no-deps --format-version 1, then cargo package --list --allow-dirty for a single default package rooted at the target, asserting it ships none of release-kit's own files; another workspace shape reports that as unproved".to_owned(),
             Some("python") if ctx.reporting_policy() => "would run: python3 -m build; sdist and wheel SECURITY.md inclusion stays unproved".to_owned(),
             Some("python") => "would run: python3 -m build".to_owned(),
-            Some("bash") if ctx.reporting_policy() => "nothing to run: no registry for this technology; the make dist tarball is not inspected".to_owned(),
-            Some("bash") => "nothing to run: no registry for this technology".to_owned(),
+            Some("bash") => {
+                let command = ctx
+                    .profile
+                    .release
+                    .build
+                    .as_ref()
+                    .and_then(|build| build.command.as_deref())
+                    .unwrap_or(crate::profile::BuildAnswer::COMMAND);
+                format!(
+                    "would judge the build command {command}, from profile.release.build.command: a make command needs a makefile and runs make -n; the tarball is not inspected"
+                )
+            }
             _ => "needs: a version file naming the technology".to_owned(),
         },
         "forge-version" => {
@@ -724,6 +738,7 @@ fn execute(
 ) -> Result<(), RkError> {
     guard_sh()?;
     let mut engine = Engine::open(out, ctx, command, true)?;
+    engine.named = steps.len() == 1;
     let mut done: Vec<(String, String)> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
         // A declared exclusion states the skip and runs nothing. A single
@@ -1113,7 +1128,37 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 Forge::Gitlab => secrets::value_of("RK_BOT_TOKEN").is_some(),
             };
             let state = observe_with(engine, step.name)?;
-            if !provided {
+            // On gitlab.com a Free group's bot is a service account, and
+            // the script mints a fresh token on it where the stored value
+            // is missing, or wherever the run names this step, which is the
+            // rotation request; a full run leaves a stored token alone. The
+            // script reads the tier itself, and refuses on the token path,
+            // whose value only install-bot can create.
+            let mints = adapter == Forge::Gitlab && engine.ctx.on_gitlab_com();
+            let rotates = if mints && engine.named && state.satisfied() && !provided {
+                let ctx = clone_ctx(&engine.ctx);
+                let mut runner = |exec: &Exec| engine.exec(exec, false);
+                match observe::gitlab_bot_is_a_service_account(&ctx, &mut runner)? {
+                    Ok(service_account) => service_account,
+                    // A rotation asked for by name whose form is unknown is
+                    // neither done nor satisfied: it stops before any write.
+                    Err(detail) => {
+                        return Err(RkError::refusal(
+                            Diagnostic::new(
+                                Reason::ObservationIncomplete,
+                                format!("bot-secrets cannot tell which bot identity to rotate: {detail}"),
+                            )
+                            .expected("the namespace's tier, read from gitlab.com")
+                            .action("check that glab is authenticated against gitlab.com and reads the namespace, then rerun rk setup step bot-secrets --apply".to_owned())
+                            .step(step.name),
+                        ));
+                    }
+                }
+            } else {
+                false
+            };
+            let runs = provided || rotates || (mints && !state.satisfied());
+            if !runs {
                 if state.satisfied() {
                     return Ok(Done::Satisfied(state_detail(&state)));
                 }

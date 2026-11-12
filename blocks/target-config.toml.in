@@ -19,6 +19,10 @@ style = RK_CONFIG_PROFILE_RELEASE_STYLE # P: trunk or lines; automatic alone
 line_prefix = RK_CONFIG_PROFILE_RELEASE_LINE_PREFIX # P: release-line branch prefix, rendered into the release triggers; automatic alone
 registry = RK_CONFIG_PROFILE_RELEASE_REGISTRY # P: crates-io or none, where the crate publishes, rust driver alone
 
+[profile.release.build]
+command = RK_CONFIG_PROFILE_RELEASE_BUILD_COMMAND # P: the command that produces dist/*.tar.gz and its .sha256; bash driver alone
+packages = RK_CONFIG_PROFILE_RELEASE_BUILD_PACKAGES # P: the packages the release image installs before it runs the command; bash driver alone
+
 [git]
 trunk = RK_CONFIG_GIT_TRUNK # P: the one permanent branch, rendered into every artifact naming it
 checkout_mode = RK_CONFIG_GIT_CHECKOUT_MODE # P: linked-worktree or main-worktree, where a topic branch opens
@@ -47,6 +51,10 @@ excluded_steps = RK_CONFIG_SETUP_EXCLUDED_STEPS # N: step = why this target does
 
 [setup.bot]
 app_id = RK_CONFIG_SETUP_BOT_APP_ID # N: public App identifier; private credentials stay outside this file
+name = RK_CONFIG_SETUP_BOT_NAME # N: bot identity name; empty takes the forge's default
+
+[landing]
+accepted_drift = RK_CONFIG_LANDING_ACCEPTED_DRIFT # N: destination = { reason, sha256 }; a deliberate edit to a rendered file, reported and not judged while its bytes match
 
 [protection]
 trunk_ruleset = RK_CONFIG_PROTECTION_TRUNK_RULESET # N: trunk ruleset name

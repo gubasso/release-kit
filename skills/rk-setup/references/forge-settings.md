@@ -22,6 +22,7 @@ Per step, in order from §0 to §3:
 3. Print `install-bot` and `bot-secrets` for the operator with the walkthrough of `rk forge <name>`, because the credentials stay the operator's. `install-bot` reads `unknown` on any host without the App key.
 4. Give a destructive step its own approval. `single-trunk` deletes branches, and a refusal from its ancestry guard is a stop, never an obstacle.
 5. Read the path each step names in its `snapshot` event: a step that removes or replaces forge state saves what it found first. A step that cannot read that state refuses, and that is a finding.
+6. Where `package-check` reports its limitation on a bash target, tell the operator to run the configured build command, `profile.release.build.command`, and list the tarball with `tar -tzf` before the first release, because no step inspects it.
 
 Never run the steps out of order, because each one names what the next depends on. Never propose a second request-reporting workflow as a gated check: the forge resolves a job's `needs` inside one file, which is the required-check decision of §3a and §3c.
 

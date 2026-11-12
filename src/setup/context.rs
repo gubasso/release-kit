@@ -341,6 +341,10 @@ pub struct Ctx {
     /// The bot App's public identifier where this target states one; the
     /// environment still wins over it, and no private credential is here.
     bot_app_id: Option<String>,
+    /// The bot identity's name where this target states one. Unset takes
+    /// the forge's default, which on a GitLab service account carries the
+    /// project id only the forge answers.
+    bot_name: Option<String>,
     /// The ruleset that protects the trunk, as this target names it.
     trunk_ruleset: String,
     /// The ruleset that keeps the trunk undeletable and unrewritable, as
@@ -456,6 +460,7 @@ impl Ctx {
         let required_workflow = Some(answers.required_workflow.clone())
             .filter(|name| !name.is_empty() && forge == Some(Forge::Github));
         let bot_app_id = Some(answers.bot.app_id.clone()).filter(|id| !id.is_empty());
+        let bot_name = Some(answers.bot.name.trim().to_owned()).filter(|name| !name.is_empty());
         let trunk = resolved.trunk().to_owned();
         let (integration, merge_form) = recorded_workflow(record.as_ref());
         let landed = record.as_ref().map(|held| {
@@ -501,6 +506,7 @@ impl Ctx {
             release_lines: answers.release_lines,
             excluded_steps: answers.excluded_steps,
             bot_app_id,
+            bot_name,
         })
     }
 
@@ -577,6 +583,7 @@ impl Ctx {
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
                     registry: None,
+                    build: None,
                 },
             },
             capabilities: CapabilityRequests {
@@ -597,6 +604,7 @@ impl Ctx {
             release_lines: false,
             excluded_steps: std::collections::BTreeMap::new(),
             bot_app_id: None,
+            bot_name: None,
             trunk_ruleset: format!("{}-protection", crate::config::TRUNK_DEFAULT),
             safety_ruleset: format!("{}-safety", crate::config::TRUNK_DEFAULT),
             tag_ruleset: defaults.tag_ruleset.clone(),
@@ -712,6 +720,12 @@ impl Ctx {
     #[must_use]
     pub fn bot_app_id(&self) -> Option<&str> {
         self.bot_app_id.as_deref()
+    }
+
+    /// The bot identity's name this target states, where it does.
+    #[must_use]
+    pub fn bot_name(&self) -> Option<&str> {
+        self.bot_name.as_deref()
     }
 
     /// The ruleset that protects the trunk.
@@ -839,6 +853,12 @@ impl Ctx {
             self.required_workflow.clone().unwrap_or_default(),
         );
         put("bot_app_id", self.bot_app_id.clone().unwrap_or_default());
+        // Only where it is set: a proof counts a key one side lacks as a
+        // change, so an always-present key would turn every proof committed
+        // before the name existed stale.
+        if let Some(name) = &self.bot_name {
+            put("bot_name", name.clone());
+        }
         put("trunk_ruleset", self.trunk_ruleset.clone());
         put("safety_ruleset", self.safety_ruleset.clone());
         put("tag_ruleset", self.tag_ruleset.clone());
@@ -889,6 +909,17 @@ impl Ctx {
                 self.forge.map_or("", Forge::as_str).into(),
             ),
             ("RK_REPO".into(), self.repo.clone().into()),
+            // The bot identity's configured name, empty where the forge's
+            // default applies, and whether the host is gitlab.com, where
+            // the identity form follows the namespace's tier.
+            (
+                "RK_BOT_NAME".into(),
+                self.bot_name.clone().unwrap_or_default().into(),
+            ),
+            (
+                "RK_GITLAB_COM".into(),
+                bool_word(self.on_gitlab_com()).into(),
+            ),
             ("RK_TRUNK_BRANCH".into(), self.trunk.clone().into()),
             ("RK_LINE_PREFIX".into(), self.line_prefix.clone().into()),
             ("RK_TRUNK_RULESET".into(), self.trunk_ruleset.clone().into()),

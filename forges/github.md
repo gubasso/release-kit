@@ -153,26 +153,27 @@ One caveat remains, on the write alone: adding a repository an existing installa
 
 ## Mapping
 
-| Purpose                              | Command                                                                           |
-| ------------------------------------ | --------------------------------------------------------------------------------- |
-| Raw API                              | `gh api`                                                                          |
-| Set the default branch               | `gh repo edit --default-branch`                                                   |
-| Delete a branch when its merge lands | `gh api -X PATCH /repos/{owner}/{repo}` with `delete_branch_on_merge`             |
-| Store a secret                       | `gh secret set NAME` with the value on stdin                                      |
-| List open release requests           | `gh pr list --base <branch> --state open`                                         |
-| Merge the release request            | `gh pr merge --squash --delete-branch`                                            |
-| Wait on checks                       | `gh pr checks --watch`                                                            |
-| Create the branch for an issue       | `gh issue develop <issue>`; `--checkout` seats it in the main checkout            |
-| List the branches an issue links     | `gh issue develop --list <issue>`                                                 |
-| Wait on a build                      | `gh run watch --exit-status`                                                      |
-| Find the merged request for a commit | `gh api /repos/{owner}/{repo}/commits/{sha}/pulls`                                |
-| Protect a branch                     | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`                          |
-| Require the trunk's checks           | a ruleset rule naming a status-check context                                      |
-| Restrict the merge method            | a ruleset `pull_request` rule listing `allowed_merge_methods`                     |
-| Make the title the squash message    | `gh api -X PATCH /repos/{owner}/{repo}` with `squash_merge_commit_title=PR_TITLE` |
-| Protect tags                         | a ruleset targeting `v*`                                                          |
-| Grant the bot access to a project    | `PUT /user/installations/{id}/repositories/{id}`                                  |
-| Find the bot identity                | `GET /repos/{owner}/{repo}/installation`, as the App                              |
+| Purpose                              | Command                                                                                                                                                               |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Raw API                              | `gh api`                                                                                                                                                              |
+| Set the default branch               | `gh repo edit --default-branch`                                                                                                                                       |
+| Delete a branch when its merge lands | `gh api -X PATCH /repos/{owner}/{repo}` with `delete_branch_on_merge`                                                                                                 |
+| Store a secret                       | `gh secret set NAME` with the value on stdin                                                                                                                          |
+| List open release requests           | `gh pr list --base <branch> --state open`                                                                                                                             |
+| Merge the release request            | `gh pr merge --squash --delete-branch`                                                                                                                                |
+| Wait on checks                       | `gh pr checks --watch`                                                                                                                                                |
+| Create the branch for an issue       | `gh issue develop <issue>`; `--checkout` seats it in the main checkout                                                                                                |
+| List the branches an issue links     | `gh issue develop --list <issue>`                                                                                                                                     |
+| Wait on a build                      | `gh run watch --exit-status`                                                                                                                                          |
+| Tell a queued job from a stuck one   | `gh run view <id> --json jobs`, then `gh api repos/<repo>/actions/runners`; evidence only: a self-hosted job needs one online runner carrying every label it requests |
+| Find the merged request for a commit | `gh api /repos/{owner}/{repo}/commits/{sha}/pulls`                                                                                                                    |
+| Protect a branch                     | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`                                                                                                              |
+| Require the trunk's checks           | a ruleset rule naming a status-check context                                                                                                                          |
+| Restrict the merge method            | a ruleset `pull_request` rule listing `allowed_merge_methods`                                                                                                         |
+| Make the title the squash message    | `gh api -X PATCH /repos/{owner}/{repo}` with `squash_merge_commit_title=PR_TITLE`                                                                                     |
+| Protect tags                         | a ruleset targeting `v*`                                                                                                                                              |
+| Grant the bot access to a project    | `PUT /user/installations/{id}/repositories/{id}`                                                                                                                      |
+| Find the bot identity                | `GET /repos/{owner}/{repo}/installation`, as the App                                                                                                                  |
 
 ## Limitations
 

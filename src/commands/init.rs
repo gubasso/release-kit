@@ -553,6 +553,18 @@ fn report_apply(
 
 /// The human line for one decision.
 pub(crate) fn describe(decision: &apply::Decision) -> String {
+    if let (Action::Preserved, Some(accepted)) = (decision.action, &decision.accepted) {
+        return format!(
+            "preserved {} (rendered, accepted drift: {}; the candidate {} since the last landing)",
+            decision.destination,
+            accepted.reason,
+            if accepted.candidate_moved {
+                "moved"
+            } else {
+                "did not move"
+            }
+        );
+    }
     match decision.action {
         Action::Preserved | Action::Drift => format!(
             "{} {} ({}, target-owned)",
@@ -650,6 +662,7 @@ mod tests {
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
                     registry: None,
+                    build: None,
                 },
             },
             git: GitWorkflow {

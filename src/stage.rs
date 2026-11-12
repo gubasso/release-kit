@@ -1005,6 +1005,7 @@ mod tests {
                     style: Some(Style::Trunk),
                     line_prefix: Some("release/".into()),
                     registry: None,
+                    build: None,
                 },
             },
             git: GitWorkflow {

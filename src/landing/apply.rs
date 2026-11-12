@@ -165,6 +165,20 @@ pub fn judge_adoption(target: &Held, candidate: &Candidate) -> Result<Adoption, 
     })
 }
 
+/// A rendered file the landing preserves under an accepted-drift entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Accepted {
+    /// Why the project deviates, from its entry.
+    pub reason: String,
+    /// Whether the candidate for the destination changed since the
+    /// previous receipt, which tells the project its deviation may be
+    /// droppable.
+    pub candidate_moved: bool,
+    /// The digest of the accepted bytes, which the landing checks again
+    /// through the held directory before its first write.
+    pub sha256: String,
+}
+
 /// One decided destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
@@ -175,6 +189,8 @@ pub struct Decision {
     pub kind: Kind,
     /// What happens to it.
     pub action: Action,
+    /// The accepted drift a preserved rendered file stays under.
+    pub accepted: Option<Accepted>,
 }
 
 /// One destination the landing refuses before any write.
@@ -331,7 +347,11 @@ pub fn prepare(
         params: params.clone(),
         evidence,
     })?;
-    let (decisions, collisions) = decide(target, recorded, &projection)?;
+    super::accepted_drift_faults(&projection, recorded, existing_config)?;
+    let accepted_drift = existing_config
+        .map(|config| config.landing.accepted_drift.clone())
+        .unwrap_or_default();
+    let (decisions, collisions) = decide(target, recorded, &projection, &accepted_drift)?;
     let config = config::Plan::new(
         target.base().as_std_path(),
         params,
@@ -386,6 +406,7 @@ pub fn name_replacements(prepared: &mut Prepared, replace: &[String]) -> Result<
             destination: path.clone(),
             kind,
             action: Action::Replaced,
+            accepted: None,
         });
         prepared.replacements.push(path.clone());
     }
@@ -422,6 +443,7 @@ pub fn decide(
     target: &Held,
     recorded: Option<&Manifest>,
     projection: &Projection,
+    accepted_drift: &std::collections::BTreeMap<String, config::AcceptedDrift>,
 ) -> Result<(Vec<Decision>, Vec<Collision>), RkError> {
     let root = &target.root;
     let mut decisions = Vec::new();
@@ -449,6 +471,7 @@ pub fn decide(
         };
         let present = matches!(located, Located::Present { .. });
         let current = || located.read();
+        let mut accepted = None;
         let action = match (candidate.placement, present, record) {
             (_, false, _) => Action::Created,
             // A recorded region someone edited is a conflict like an
@@ -502,10 +525,23 @@ pub fn decide(
                     // the record vouches for them or a landing stopped part
                     // way wrote them: the file is matched, so the report
                     // tells an untouched file from a rewritten one.
+                    let entry = accepted_drift
+                        .get(&candidate.destination)
+                        .filter(|entry| Digest::of(&bytes).to_string() == entry.sha256);
                     if bytes == candidate.bytes {
                         Action::Matched
                     } else if Digest::of(&bytes) == record.sha256 {
                         Action::Replaced
+                    } else if let Some(entry) = entry {
+                        // An accepted deviation stays on disk: the receipt
+                        // keeps the candidate's digest, so it still says
+                        // what the tool would write.
+                        accepted = Some(Accepted {
+                            reason: entry.reason.clone(),
+                            candidate_moved: Digest::of(&candidate.bytes) != record.sha256,
+                            sha256: entry.sha256.clone(),
+                        });
+                        Action::Preserved
                     } else {
                         collisions.push(Collision {
                             path: candidate.destination.clone(),
@@ -540,6 +576,7 @@ pub fn decide(
             destination: candidate.destination.clone(),
             kind: candidate.kind,
             action,
+            accepted,
         });
     }
     if let Some(record) = recorded {
@@ -553,6 +590,7 @@ pub fn decide(
                     destination: file.destination.clone(),
                     kind: file.kind,
                     action: Action::Released,
+                    accepted: None,
                 });
             }
         }
@@ -886,7 +924,14 @@ pub fn land(
     }
     let mut files = Vec::new();
     for candidate in &prepared.projection.candidates {
+        let accepted = prepared
+            .decision(&candidate.destination)
+            .is_some_and(|decision| decision.accepted.is_some());
         let sha256 = match unwritten.get(&candidate.destination) {
+            // The receipt of an accepted deviation keeps the candidate's
+            // digest, not the bytes on disk, so it goes on meaning what the
+            // tool would write and the next landing preserves it again.
+            Some(_) if accepted => candidate_digest(candidate),
             Some(digest) => digest.clone(),
             None => match action_of(prepared, origin, &candidate.destination) {
                 Some(Action::Created | Action::Replaced) => {
@@ -1026,6 +1071,19 @@ fn reverify(
             return Err(moved(
                 &candidate.destination,
                 "no longer holds the candidate's bytes",
+            ));
+        }
+        // An accepted deviation is preserved only while the bytes on disk
+        // are the ones its entry accepted.
+        let accepted = prepared
+            .decision(&candidate.destination)
+            .and_then(|decision| decision.accepted.as_ref());
+        if let Some(accepted) = accepted
+            && Digest::of(&current).to_string() != accepted.sha256
+        {
+            return Err(moved(
+                &candidate.destination,
+                "no longer holds the bytes its accepted drift entry names",
             ));
         }
         digests.insert(candidate.destination.clone(), Digest::of(&current));
@@ -1310,6 +1368,7 @@ mod tests {
                 evidence: TargetEvidence::gather(&target, Some(&record)).expect("gathers"),
             })
             .expect("projects"),
+            &std::collections::BTreeMap::new(),
         )
         .expect("decides");
         let released = decisions

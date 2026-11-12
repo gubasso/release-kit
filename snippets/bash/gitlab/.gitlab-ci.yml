@@ -6,13 +6,15 @@
 # when a project keeps older lines. The release-request job drives git-cliff
 # to maintain the one release merge request — VERSION plus the changelog —
 # against the pushed branch, and merging that request is the release: the
-# bump push is what makes tag-and-build tag the commit and build the tarball
-# with make dist, provenance sign the runner's SLSA statement over it, and
-# attach publish everything and create the GitLab release.
+# bump push is what makes build produce the tarball with the project's build
+# command, provenance sign the runner's SLSA statement over it, and attach
+# publish everything and create the tag and the GitLab release together, last.
 #
-# Every job authenticates with RELEASE_BOT_TOKEN, the project access token
-# the setup stores as a masked CI variable: a push made with the default CI
-# job token starts no pipeline, which would silently skip the release half.
+# Every job authenticates with RELEASE_BOT_TOKEN, the bot identity's token
+# the setup stores as a masked CI variable: a project access token, or the
+# token of a group service account on a GitLab.com Free group. A push made
+# with the default CI job token starts no pipeline, which would silently
+# skip the release half.
 
 include:
   - local: RK_GITLAB_GATE_FRAGMENT
@@ -62,7 +64,7 @@ project-jobs:
   variables:
     GIT_DEPTH: "0"
   before_script:
-    - apk add --no-cache curl git make tar
+    - apk add --no-cache curl git jq tar RK_BUILD_PACKAGES
     - curl -fsSL "https://github.com/orhun/git-cliff/releases/download/v2.13.1/git-cliff-2.13.1-x86_64-unknown-linux-musl.tar.gz" | tar -xz --strip-components 1 -C /usr/local/bin
 
 # The release request. git-cliff maintains no merge request on its own, so
@@ -95,11 +97,21 @@ release-request:
       git switch -c "$branch"
       printf '%s\n' "$next" > VERSION
       git cliff --bump -o CHANGELOG.md
-      git config user.name "release-bot"
-      git config user.email "release-bot@invalid"
+      # The commit is authored by the account the token belongs to, read
+      # from the forge, so it links to that account: GitLab links a commit
+      # by its email. Both identity forms carry a noreply address; where
+      # the account answers none, the username's noreply address stands in.
+      me="$(api "$CI_API_V4_URL/user")"
+      author="$(printf '%s' "$me" | jq -r '.name')"
+      email="$(printf '%s' "$me" | jq -r '.email // empty')"
+      if [ -z "$email" ]; then
+        email="$(printf '%s' "$me" | jq -r '.username')@noreply.$CI_SERVER_HOST"
+      fi
+      git config user.name "$author"
+      git config user.email "$email"
       git add VERSION CHANGELOG.md
       git commit -m "chore(release): v$next"
-      git push -f "https://release-bot:${RELEASE_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "HEAD:refs/heads/$branch"
+      git push -f "https://oauth2:${RELEASE_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "HEAD:refs/heads/$branch"
       open="$(api "$project/merge_requests?state=opened&source_branch=chore%2Frelease-v$next&target_branch=$CI_COMMIT_BRANCH" | grep -c '"iid"' || true)"
       if [ "$open" = "0" ]; then
         api -X POST "$project/merge_requests" \
@@ -135,14 +147,15 @@ release-request:
 
 # The release build. Only the push that lands the bot's own bump releases —
 # the VERSION comparison against the parent commit is the guard — so an
-# ordinary work merge tags nothing. Tag the bump commit and build the tarball
-# as a pure function of the tree; publishing belongs to the attach job, after
-# provenance exists. RUNNER_GENERATE_ARTIFACTS_METADATA makes the runner emit
-# its SLSA v1 provenance statement beside the exported artifacts, which is
-# what the provenance job signs. The release-version marker is what tells the
+# ordinary work merge builds nothing. Build the tarball as a pure function of
+# the tree, and create no tag: the tag comes last, from the release create in
+# attach, after the build and the provenance exist, so a failed build leaves
+# no tag behind. RUNNER_GENERATE_ARTIFACTS_METADATA makes the runner emit its
+# SLSA v1 provenance statement beside the exported artifacts, which is what
+# the provenance job signs. The release-version marker is what tells the
 # downstream jobs a release is in flight; a push that bumps nothing writes no
 # marker and they exit without acting.
-tag-and-build:
+build:
   extends: .tooling
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
@@ -164,13 +177,31 @@ tag-and-build:
         echo "this commit does not bump the version; nothing to release."
         exit 0
       fi
-      if ! api "$project/repository/tags/v$version" >/dev/null 2>&1; then
-        api -X POST "$project/repository/tags" \
-          --data-urlencode "tag_name=v$version" --data-urlencode "ref=$CI_COMMIT_SHA" >/dev/null
-        echo "tagged v$version at $CI_COMMIT_SHA."
+      # The commit that introduces VERSION is the landing, not a release.
+      if [ -z "$previous" ]; then
+        echo "this commit introduces VERSION; nothing to release."
+        exit 0
       fi
-      make dist
-      git cliff --latest -o notes.md
+      # The baseline is the unreleased state and never a release.
+      if [ "$version" = "0.0.0" ]; then
+        echo "0.0.0 is the unreleased baseline; nothing to release."
+        exit 0
+      fi
+      # A version the forge already published at another commit is an
+      # un-bump back to it, not a release. The forge decides, not a version
+      # order: a release at this very commit continues, so a rerun of the
+      # pipeline finishes it.
+      published="$(api "$project/releases/v$version" 2>/dev/null || true)"
+      if [ -n "$published" ]; then
+        at="$(printf '%s' "$published" | jq -r '.commit.id // empty')"
+        if [ -n "$at" ] && [ "$at" != "$CI_COMMIT_SHA" ]; then
+          echo "v$version is already released at $at; nothing to release."
+          exit 0
+        fi
+      fi
+      RK_BUILD_COMMAND
+      # The version is named, because no tag exists yet for git-cliff to read.
+      git cliff --unreleased --tag "v$version" -o notes.md
       printf '%s\n' "$version" > release-version
   artifacts:
     paths:
@@ -197,7 +228,7 @@ tag-and-build:
 # rather than failing a pipeline that cannot mint certificates.
 provenance:
   stage: provenance
-  needs: ["tag-and-build"]
+  needs: ["build"]
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   image: alpine:3
@@ -253,7 +284,14 @@ provenance:
     expire_in: 7d
 
 # Publication, last, so nothing publicly reachable exists before its
-# provenance does — the same ordering rule the GitHub pair holds. Every step
+# provenance does — the same ordering rule the GitHub pair holds. The tag is
+# created here and nowhere else: one release create names the commit as ref
+# and every asset link, and GitLab creates the tag from it. That request is
+# not atomic — GitLab creates the tag, then saves the release, and keeps the
+# tag when the save fails — so such a failure leaves the tag at this
+# pipeline's own commit, and a rerun of this job creates the release on it.
+# A tag at another commit stops the job: the method never moves a protected
+# tag, and GitLab ignores ref for a tag that exists. Every step
 # reconciles rather than skips: a rerun after a partial failure uploads
 # whichever files the package registry is missing, and adds whichever links
 # the existing release page lacks, instead of leaving a half-published
@@ -261,7 +299,7 @@ provenance:
 # does not exist and its upload and link are honestly absent.
 attach:
   stage: publish
-  needs: ["tag-and-build", "provenance"]
+  needs: ["build", "provenance"]
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   resource_group: release
@@ -306,12 +344,39 @@ attach:
       if [ -f "$tarball.sigstore.json" ]; then
         links="$links $file.sigstore.json"
       fi
+      # Three states, never two: a tag that exists, a tag the forge
+      # answers 404 for, and a read that failed, which refuses, because a
+      # tag nobody could read may name another commit.
+      status="$(curl -sS -o tag.json -w '%{http_code}' --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$project/repository/tags/v$version")" || status=000
+      case "$status" in
+        200)
+          tagged="$(jq -r '.commit.id // empty' tag.json)"
+          if [ -z "$tagged" ]; then
+            echo "the tag v$version answers no commit; refusing to publish." >&2
+            exit 1
+          fi
+          ;;
+        404) tagged="" ;;
+        *)
+          echo "the tag v$version could not be read (HTTP $status); refusing to publish." >&2
+          exit 1
+          ;;
+      esac
+      if [ -n "$tagged" ] && [ "$tagged" != "$CI_COMMIT_SHA" ]; then
+        echo "v$version already tags $tagged, not this pipeline's $CI_COMMIT_SHA; recover through the section The tag exists and the release does not (rk method recovery)." >&2
+        exit 1
+      fi
       if ! api "$project/releases/v$version" >/dev/null 2>&1; then
-        api -X POST "$project/releases" \
-          --data-urlencode "tag_name=v$version" \
-          --data-urlencode "name=v$version" \
-          --data-urlencode "description=$(cat notes.md)" >/dev/null
-        echo "released v$version."
+        # One JSON request, the shape the releases API documents for
+        # assets:links: the tag, its commit, the notes, and every link.
+        printf '%s\n' $links | jq -R . | jq -s \
+          --arg tag "v$version" --arg ref "$CI_COMMIT_SHA" \
+          --arg base "$package" --rawfile notes notes.md \
+          '{tag_name: $tag, ref: $ref, name: $tag, description: $notes,
+            assets: {links: map({name: ., url: ($base + "/" + .)})}}' \
+          | api -X POST "$project/releases" \
+            --header "Content-Type: application/json" --data @- >/dev/null
+        echo "tagged and released v$version at $CI_COMMIT_SHA."
       fi
       existing="$(api "$project/releases/v$version" | jq -r '.assets.links[].name')"
       for name in $links; do

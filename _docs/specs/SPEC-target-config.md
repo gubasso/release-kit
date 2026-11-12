@@ -26,7 +26,7 @@
 
 ## Purpose
 
-The committed answers in `.release-kit/config.toml`, their strict reader, comment-preserving writer, and policy floors. What the domains mean and how their values resolve belongs to [the project profile specification](./SPEC-project-profile.md) and [the Git specification](./SPEC-git.md); the landing record and the projection remain governed by [the landing specification](./SPEC-landing.md).
+The committed answers in `.release-kit/config.toml`, their strict reader, comment-preserving writer, and policy floors. What the landing declaration `[landing.accepted_drift]` changes is bound by [the accepted drift specification](./SPEC-accepted-drift.md). What the domains mean and how their values resolve belongs to [the project profile specification](./SPEC-project-profile.md) and [the Git specification](./SPEC-git.md); the landing record and the projection remain governed by [the landing specification](./SPEC-landing.md).
 
 ## Requirements
 
@@ -188,7 +188,7 @@ Verify: `cargo nextest run -E 'test(config) or test(the_trunk_branch_comes_from_
 
 ### `target-config:a-setup-fact-is-committed-once` — A setup fact is committed once
 
-A setup fact the operator would otherwise retype MUST resolve from the committed configuration where no flag answers it, and an invocation flag MUST override it. The release gate's two answers resolve this way on GitHub alone, because GitLab requires its whole pipeline through one project setting, names no individual check, and refuses either answer as a usage error; the release-line protection runs in a full apply where `setup.release_lines` asks for it; the retired long-lived branches come from `setup.retired_branches`; and the bot App's public identifier comes from `setup.bot.app_id` where the environment carries none.
+A setup fact the operator would otherwise retype MUST resolve from the committed configuration where no flag answers it, and an invocation flag MUST override it. The release gate's two answers resolve this way on GitHub alone, because GitLab requires its whole pipeline through one project setting, names no individual check, and refuses either answer as a usage error; the release-line protection runs in a full apply where `setup.release_lines` asks for it; the retired long-lived branches come from `setup.retired_branches`; the bot App's public identifier comes from `setup.bot.app_id` where the environment carries none; and the bot identity's name comes from `setup.bot.name`, a setup declaration of class N that no landed byte reads, whose empty value takes the forge's default, whose other values MUST hold to the shape of a GitLab username or refuse as `config-invalid`, and which the setup proof carries only where it is set.
 
 The two answers are class P landing parameters and MUST divide as follows. `setup.required_check` names the context the trunk ruleset requires in both integration modes and the context the rendered gate also judges under local integration. `setup.required_workflow` names the workflow whose completion wakes that gate, by the workflow's literal `name` and never by its filename, because a `workflow_run` trigger cannot name a check and cannot omit the workflow. One shape renders that gate: GitHub, an automatic release, the trunk style, and local integration together. Where no flag, configuration, or compatible record answers a key at that shape, the resolution MUST take this convention's own pair, `gate` and `ci`, so a landing renders a gate that names something rather than a hole no event can satisfy, and MUST write the resolved answer back to the configuration and record it, so the decision is visible and reproducible rather than compiled. Every other shape MUST resolve both to empty, except that under forge integration `setup.required_check` stays the context the trunk ruleset requires, which is the project's own answer, and `protect-trunk` keeps refusing until one is named. A setup check MUST fault where the workflow named by `setup.required_workflow` does not carry the one pull-request job reporting `setup.required_check`, because a gate that wakes on one workflow and judges a check another workflow reports either wakes too early or never wakes at all.
 
@@ -210,7 +210,7 @@ The two answers are class P landing parameters and MUST divide as follows. `setu
 - WHEN a landing verb applies
 - THEN it records `gate` and `ci`, writes both into the configuration, and a setup check faults where the target's own workflows do not carry that pair
 
-Verify: `cargo nextest run -E 'test(required_check) or test(release_gate) or test(the_release_lines_step_runs_when_the_config_asks) or test(retired_branches_come_from_the_config)'`
+Verify: `cargo nextest run -E 'test(required_check) or test(release_gate) or test(the_release_lines_step_runs_when_the_config_asks) or test(retired_branches_come_from_the_config) or test(the_bot_name_is_a_setup_declaration_and_reaches_no_byte) or test(an_unset_bot_name_leaves_the_setup_proof_compatible) or test(a_bot_name_outside_the_username_shape_refuses)'`
 
 ### `target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy
 
@@ -226,7 +226,7 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:an-unanswered-key-is-absent-and-not-empty` — An unanswered key is absent and not empty
 
-Where the resolved answers omit a class P key — the repository of a project with no forge, and the driver, style, and line prefix of a release that is not automatic — the writer MUST leave the key out of the file rather than write it empty, and MUST leave out a table every one of whose keys it omitted.
+Where the resolved answers omit a class P key — the repository of a project with no forge, the driver, style, and line prefix of a release that is not automatic, and an unanswered `profile.release.build.command` or `profile.release.build.packages` — the writer MUST leave the key out of the file rather than write it empty, and MUST leave out a table every one of whose keys it omitted, keeping one blank line between the tables on either side.
 
 #### Scenario: A release-less project with no forge lands
 
@@ -234,7 +234,7 @@ Where the resolved answers omit a class P key — the repository of a project wi
 - WHEN the landing writes the configuration
 - THEN the file carries no `repo`, no `driver`, no `style`, no `line_prefix`, and no empty `[project]` header
 
-Verify: `cargo nextest run -E 'test(the_landed_config_template_round_trips) or test(a_target_with_no_technology_and_no_forge_lands_the_guards) or test(a_committed_empty_forge_outranks_the_record_and_the_remote) or test(a_pruned_header_leaves_no_comment_behind) or test(a_retired_key_drops_the_template_comment_and_keeps_the_operators)'`
+Verify: `cargo nextest run -E 'test(the_landed_config_template_round_trips) or test(a_target_with_no_technology_and_no_forge_lands_the_guards) or test(a_committed_empty_forge_outranks_the_record_and_the_remote) or test(a_pruned_header_leaves_no_comment_behind) or test(a_retired_key_drops_the_template_comment_and_keeps_the_operators) or test(a_dropped_table_leaves_one_blank_line_between_its_neighbours)'`
 
 ### `target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged
 

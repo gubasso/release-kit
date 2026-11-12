@@ -5,8 +5,8 @@
 # project keeps older lines. The release-request job drives git-cliff to
 # maintain the one release pull request — VERSION plus the changelog — against
 # the pushed branch, and merging that request is the release: the bump push is
-# what makes tag-and-attach tag the commit, build the tarball with make dist,
-# and attach it. On a RK_LINE_PREFIX* line the same pair backports a patch and tags
+# what makes tag-and-attach build the tarball with the project's build command,
+# attest it, and create the tag and the release together, last. On a RK_LINE_PREFIX* line the same pair backports a patch and tags
 # it there.
 name: release
 
@@ -105,9 +105,10 @@ jobs:
 
   # The release itself. Only the push that lands the bot's own bump releases —
   # the VERSION comparison against the parent commit is the guard — so an
-  # ordinary work merge tags nothing. Tag the bump commit, build the tarball
-  # as a pure function of the tree, attest it, and only then attach it with
-  # its checksum: nothing is publicly reachable before its attestation exists.
+  # ordinary work merge tags nothing. Build the tarball as a pure function of
+  # the tree, attest it, and only then create the tag and the release together
+  # with its checksum: nothing is publicly reachable before its attestation
+  # exists, and a failed build or attestation leaves no tag behind.
   tag-and-attach:
     if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
     runs-on: ubuntu-latest
@@ -119,8 +120,8 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
-      # This half tags the bump commit and creates the release, and opens no
-      # pull request, so contents alone carries it. A target whose tag ruleset
+      # This half creates the release, whose publication creates the tag, and
+      # opens no pull request, so contents alone carries it. A target whose tag ruleset
       # blocks creation needs administration here too; the convention's ruleset
       # restricts deletion and update only.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -135,7 +136,9 @@ jobs:
           persist-credentials: false
       - name: install git-cliff
         run: pipx install git-cliff==2.13.1
-      - name: tag and build
+      - name: install the build packages
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends RK_BUILD_PACKAGES
+      - name: build
         id: build
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -149,14 +152,30 @@ jobs:
             echo "this commit does not bump the version; nothing to release."
             exit 0
           fi
-          if [ -z "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then
-            gh api -X POST "repos/$GH_REPO/git/refs" \
-              -f "ref=refs/tags/v$version" -f "sha=$SHA" >/dev/null
-            echo "tagged v$version at $SHA."
+          # The commit that introduces VERSION is the landing, not a release.
+          if [ -z "$previous" ]; then
+            echo "this commit introduces VERSION; nothing to release."
+            exit 0
           fi
-          git fetch origin "refs/tags/v$version:refs/tags/v$version"
-          make dist
-          git cliff --latest -o notes.md
+          # The baseline is the unreleased state and never a release.
+          if [ "$version" = "0.0.0" ]; then
+            echo "0.0.0 is the unreleased baseline; nothing to release."
+            exit 0
+          fi
+          # A version the forge already published at another commit is an
+          # un-bump back to it, not a release. The forge decides, not a
+          # version order: a draft, or a release at this very commit,
+          # continues so attach can finish it.
+          if released="$(gh release view "v$version" --json isDraft -q .isDraft 2>/dev/null)" && [ "$released" = "false" ]; then
+            at="$(gh api "repos/$GH_REPO/commits/v$version" -q .sha 2>/dev/null || true)"
+            if [ -n "$at" ] && [ "$at" != "$SHA" ]; then
+              echo "v$version is already released at $at; nothing to release."
+              exit 0
+            fi
+          fi
+          RK_BUILD_COMMAND
+          # The version is named, because no tag exists yet for git-cliff to read.
+          git cliff --unreleased --tag "v$version" -o notes.md
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "built=true" >> "$GITHUB_OUTPUT"
 
@@ -167,25 +186,61 @@ jobs:
       # identity that signs. The order is the rule, not a detail: the
       # attestation exists before the release page does, so no public release
       # ever points at an unattested tarball, not even between the steps of a
-      # failed run. A rerun rebuilds the identical tarball from the tag and
-      # re-attests it before touching the page.
+      # failed run. A rerun rebuilds the identical tarball from the same
+      # commit and re-attests it before touching the page.
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         if: steps.build.outputs.built == 'true'
         with:
           subject-path: dist/*.tar.gz
 
+      # The tag is created here and nowhere else: gh release create with
+      # assets makes a draft, uploads each asset, and publishes it, and the
+      # publication creates the tag at --target. A draft left by a failed
+      # upload is finished rather than duplicated. A tag at another commit
+      # stops the job: the method never moves a protected tag.
       - name: attach
         if: steps.build.outputs.built == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
           VERSION: ${{ steps.build.outputs.version }}
         run: |
           set -eu
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "the release page already exists; leaving it as it is."
+          # Three states, never two: a tag that exists, a tag the forge
+          # answers 404 for, and a read that failed, which refuses, because
+          # a tag nobody could read may name another commit.
+          err="$(mktemp)"
+          tagged=""
+          if gh api "repos/$GH_REPO/git/ref/tags/v$VERSION" >/dev/null 2>"$err"; then
+            if ! tagged="$(gh api "repos/$GH_REPO/commits/v$VERSION" -q .sha)" || [ -z "$tagged" ]; then
+              echo "the commit v$VERSION tags could not be read; refusing to publish." >&2
+              exit 1
+            fi
+          elif ! grep -q "HTTP 404" "$err"; then
+            echo "the tag v$VERSION could not be read: $(cat "$err"); refusing to publish." >&2
+            exit 1
+          fi
+          if [ -n "$tagged" ] && [ "$tagged" != "$SHA" ]; then
+            echo "v$VERSION already tags $tagged, not this run's $SHA; recover through the section The tag exists and the release does not (rk method recovery)." >&2
+            exit 1
+          fi
+          if draft="$(gh release view "v$VERSION" --json isDraft -q .isDraft 2>/dev/null)"; then
+            if [ "$draft" = "true" ]; then
+              gh release upload "v$VERSION" dist/*.tar.gz dist/*.sha256 --clobber
+              # A draft keeps whatever target it was made with, and its
+              # publication creates the tag there: point it at this run's
+              # commit first, which the guard above proved the tag names
+              # where one exists.
+              gh release edit "v$VERSION" --target "$SHA" --draft=false
+              echo "finished the draft release v$VERSION."
+            else
+              echo "the release page already exists; leaving it as it is."
+            fi
             exit 0
           fi
           gh release create "v$VERSION" dist/*.tar.gz dist/*.sha256 \
-            --title "v$VERSION" --notes-file notes.md
+            --target "$SHA" --title "v$VERSION" --notes-file notes.md
+          echo "tagged and released v$VERSION at $SHA."
 # RK_GATE_JOB_BEGIN
 # RK_GATE_JOB_END

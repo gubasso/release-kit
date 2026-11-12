@@ -31,7 +31,7 @@ Setting `RUNNER_GENERATE_ARTIFACTS_METADATA: "true"` makes the runner emit artif
 
 - <https://docs.gitlab.com/ci/runners/configure_runners/>
 
-Bearing: the `tag-and-build` job in `snippets/bash/gitlab/.gitlab-ci.yml`, and the falseness of the retired claim that the channel offers no provenance.
+Bearing: the `build` job in `snippets/bash/gitlab/.gitlab-ci.yml`, and the falseness of the retired claim that the channel offers no provenance.
 
 ## GitLab, on the SLSA component and the exact cosign forms
 

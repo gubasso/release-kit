@@ -12,6 +12,8 @@ The tag stays. It names what was published, and release-tag immutability exists 
 
 The release job fires on the push that lands the version bump. When a transient failure — a rate limit, a network error — leaves the bump merged but no tag pushed and nothing published, re-run the release job from the CI interface on that same trunk commit. The job is idempotent: it checks whether the tag and the published version already exist and does only what is missing.
 
+This applies to a target whose release intent is `automatic`. A rerun runs the configuration of its own commit, so it recovers a transient failure and never a defect that a later commit fixed. Where the fix landed after the bump, and no tag and no release exist, return `VERSION` to its previous value and remove the changelog entry through an ordinary pull request or merge request. The bash pipelines' bump guard finds the restored version already released at an earlier commit and releases nothing, and the bot proposes the failed version again against the current pipeline. This holds for a first release and for a later one. The precondition is the fork: no tag, no release, nothing published. Where a tag or a release exists, the un-bump rewrites something public and is wrong, and the next section applies. In the bash pipelines a failed build, provenance, or upload leaves no tag on either forge, because only the final release-create request creates it, so this fork is the recovery for every failure before that request.
+
 ## The tag exists and the release does not
 
 `rk release status` reports `tag-without-release` for a release tag whose page is missing, or carries no artifact where the pair builds artifacts, when no complete release of its line is newer. First make sure that the tag names the merged release commit, the bump the release request landed. Then take the routes on GitHub in this order:
@@ -19,7 +21,15 @@ The release job fires on the push that lands the version bump. When a transient 
 1. Where the cause was transient, such as a cancelled runner or a network error, re-run the failed jobs of the `release.yml` run that the tag push started. The run attaches the artifacts and mints their provenance.
 2. Where the cause was in the code, such as a target that does not build, fix it on the trunk and release the next version. Record the gap where the project keeps its known issues: the version shipped without its release page. Once a newer release of the line is complete, the symptom drops out.
 
-Never move or delete a protected tag. The gated `dist-build` job of the Rust binding is the prevention: it builds every target before the merge, so a target the code cannot build fails the request instead of the release.
+On GitHub, a bash pipeline starts no run on the tag push: its release workflow runs on the branch push alone, and that one run at the bump commit builds, attests, and publishes. Where the cause was transient, re-run the failed `tag-and-attach` job of that branch-push run; where it was in the code, take route 2.
+
+On GitLab, take the routes in the same order. A bash pipeline reaches this state when a release save failed after GitLab created the tag, when a pipeline ran before the tag moved to the release create, or when the tag names another commit and `attach` refuses it.
+
+1. Where the tag names the pipeline's own commit, a rerun of `attach` creates the release on it.
+2. Where the tag names the bump commit and the cause was transient, retry the failed job of the tag's pipeline on the same commit while the artifacts of `build` and `provenance` persist, because `attach` uploads what the package registry lacks and links what the release page lacks. `attach` needs both jobs' artifacts, so where they expired, retry `build`, then `provenance` on that build, then `attach`, all on the same commit.
+3. Where the cause was in the pipeline or the code, or the tag names another commit, fix it on the trunk and release the next version, as on GitHub.
+
+Never move or delete a protected tag, on either forge. The gated `dist-build` job of the Rust binding is the prevention: it builds every target before the merge, so a target the code cannot build fails the request instead of the release.
 
 ## A clone holds a stale release tag
 

@@ -52,6 +52,33 @@ pub struct Config {
     pub acquisition: Option<Acquisition>,
     /// How a command runs in the project's own development environment.
     pub dev_environment: Option<dev_environment::DevEnvironment>,
+    /// The landing declaration: the rendered destinations the project
+    /// deliberately edits, and why.
+    pub landing: Landing,
+}
+
+/// The `landing` table: the landing declaration.
+///
+/// It is the landing-side twin of the setup declaration. Schema 2 gives the
+/// name this one meaning; the schema 1 catch-all that once carried it is
+/// read by the migration alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Landing {
+    /// N: destination = { reason, sha256 }; a deliberate edit to a
+    /// rendered file, reported and not judged while its bytes match.
+    pub accepted_drift: BTreeMap<String, AcceptedDrift>,
+}
+
+/// One deliberate edit to a rendered whole file: why, and the digest of
+/// the exact bytes accepted, so a further edit still faults.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedDrift {
+    /// Why the project must deviate, which status reports beside the file.
+    pub reason: String,
+    /// The SHA-256 of the accepted bytes, 64 lowercase hex characters.
+    pub sha256: String,
 }
 
 impl Default for Config {
@@ -68,6 +95,7 @@ impl Default for Config {
             protection: Protection::default(),
             acquisition: None,
             dev_environment: None,
+            landing: Landing::default(),
         }
     }
 }
@@ -170,6 +198,9 @@ pub struct Release {
     /// P: where the crate publishes, `crates-io` or `none`; an automatic
     /// rust release alone. Absent reads as crates.io.
     pub registry: Option<crate::profile::RegistryAnswer>,
+    /// P: how the distribution builds, `command` and `packages`; an
+    /// automatic bash release alone. Absent reads as `make dist` and `make`.
+    pub build: Option<crate::profile::BuildAnswer>,
 }
 
 /// The `git` table: the Git workflow parameters.
@@ -314,6 +345,32 @@ pub fn canonical_scope(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_owned())
 }
 
+/// Whether a bot name has the shape a GitLab username takes, or why not.
+///
+/// The name is a service account's username on one path, so it holds to
+/// that shape everywhere: a letter or a digit, then letters, digits, `.`,
+/// `_`, or `-`. The shape also keeps a quote or a backslash out of the
+/// literal patterns the setup scripts match the name with. Empty takes the
+/// forge's default.
+///
+/// # Errors
+/// The refusal text, naming the key and the shape.
+pub fn bot_name_shape(raw: &str) -> Result<(), String> {
+    let name = raw.trim();
+    let mut chars = name.chars();
+    let shaped = chars.next().is_none_or(|first| {
+        first.is_ascii_alphanumeric()
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    });
+    if shaped && name.len() <= 255 {
+        Ok(())
+    } else {
+        Err(format!(
+            "setup.bot.name must be empty or a username: a letter or a digit, then letters, digits, '.', '_', or '-', at most 255 characters; found {name:?}"
+        ))
+    }
+}
+
 /// The canonical form of a response stance, or why it is refused.
 ///
 /// Either `best-effort` or a plural-correct day count: `1 day`, `<n> days`,
@@ -398,6 +455,9 @@ impl Default for Setup {
 pub struct Bot {
     /// N: public App identifier; private credentials stay outside this file.
     pub app_id: String,
+    /// N: the bot identity's name on a forge that names it; empty takes
+    /// the forge's default. No landed byte depends on it.
+    pub name: String,
     /// Accepted and ignored. Version 0.3.13 wrote this key, so a target
     /// landed by it must still parse; nothing reads the value and no new
     /// configuration carries it. Removing it outright would refuse every
@@ -639,6 +699,71 @@ fn release_vocabulary(raw: &toml::Value) -> Result<(), RkError> {
     }
 }
 
+/// Whether a build command can stand in a pipeline script: one line, no
+/// control character, and not empty, because the pipelines run it as the
+/// one line their build step names.
+///
+/// # Errors
+/// The refusal text, naming the key and what it accepts.
+pub fn build_command_shape(raw: &str) -> Result<(), String> {
+    if raw.trim().is_empty() {
+        return Err("profile.release.build.command is empty; it names the command that produces dist/*.tar.gz and its .sha256, such as make dist".to_owned());
+    }
+    if raw.chars().any(char::is_control) {
+        return Err(format!(
+            "profile.release.build.command is one line with no control character; found {raw:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a package list can stand on a package manager's command line:
+/// names of letters, digits, and `.+_:-`, separated by spaces.
+///
+/// # Errors
+/// The refusal text, naming the key and what it accepts.
+pub fn build_packages_shape(raw: &str) -> Result<(), String> {
+    let shaped = raw.split(' ').filter(|word| !word.is_empty()).all(|word| {
+        word.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '_' | ':' | '-'))
+    });
+    if shaped {
+        Ok(())
+    } else {
+        Err(format!(
+            "profile.release.build.packages is package names separated by spaces, each of letters, digits, '.', '+', '_', ':', or '-'; found {raw:?}"
+        ))
+    }
+}
+
+/// Refuse a build answer under a mode or a driver the configuration names,
+/// and a value outside its shape; a driver the resolution derives settles
+/// the fit there.
+fn build_fit(release: &Release) -> Result<(), RkError> {
+    let Some(build) = &release.build else {
+        return Ok(());
+    };
+    if let Some(command) = &build.command {
+        build_command_shape(command).map_err(invalid)?;
+    }
+    if let Some(packages) = &build.packages {
+        build_packages_shape(packages).map_err(invalid)?;
+    }
+    if release.driver.is_some()
+        || matches!(
+            release.mode,
+            Some(ReleaseMode::External | ReleaseMode::None)
+        )
+    {
+        crate::profile::catalog::build_answer_fits(
+            release.mode.unwrap_or(ReleaseMode::Automatic),
+            release.driver.as_deref(),
+        )
+        .map_err(invalid)?;
+    }
+    Ok(())
+}
+
 /// Refuse a registry answer under a mode or a driver the configuration
 /// names; a driver the resolution derives settles the fit there.
 fn registry_fit(release: &Release) -> Result<(), RkError> {
@@ -728,6 +853,7 @@ fn parse(text: &str) -> Result<Config, RkError> {
         }
     }
     registry_fit(&config.profile.release)?;
+    build_fit(&config.profile.release)?;
     if let Some(contact) = &config.security.contact {
         canonical_contact(contact).map_err(invalid)?;
     }
@@ -737,7 +863,9 @@ fn parse(text: &str) -> Result<Config, RkError> {
     if let Some(scope) = &config.security.scope {
         canonical_scope(scope).map_err(invalid)?;
     }
+    bot_name_shape(&config.setup.bot.name).map_err(invalid)?;
     exclusions(&config.setup.excluded_steps)?;
+    accepted_drift(&config.landing.accepted_drift)?;
     if let Some(acquisition) = &config.acquisition
         && !is_release_version(&acquisition.minimum)
     {
@@ -786,6 +914,33 @@ fn exclusions(excluded: &BTreeMap<String, String>) -> Result<(), RkError> {
         if reason.trim().is_empty() {
             return Err(invalid(format!(
                 "setup.excluded_steps names {name} with no reason; an excluded step is reported with why it is out of scope"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse an accepted-drift entry with an empty reason or a digest that
+/// is not one: the entry is the audit trail of a deliberate edit, and its
+/// digest is what keeps a further edit a fault.
+///
+/// SATISFIES accepted-drift:an-accepted-drift-names-its-reason-and-its-bytes
+fn accepted_drift(entries: &BTreeMap<String, AcceptedDrift>) -> Result<(), RkError> {
+    for (destination, entry) in entries {
+        if entry.reason.trim().is_empty() {
+            return Err(invalid(format!(
+                "landing.accepted_drift names {destination} with no reason; an accepted deviation is reported with why the project must make it"
+            )));
+        }
+        let hex = entry.sha256.len() == 64
+            && entry
+                .sha256
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+        if !hex {
+            return Err(invalid(format!(
+                "landing.accepted_drift names {destination} with sha256 {:?}, which is no SHA-256 digest; write the 64 lowercase hex characters rk status prints for the file",
+                entry.sha256
             )));
         }
     }
@@ -843,6 +998,18 @@ fn array(values: &[String]) -> toml_edit::Value {
 /// landing writes an empty one; an operator who wants several may turn it
 /// into a `[setup.excluded_steps]` table, which this reader parses the
 /// same way.
+/// The accepted-drift entries as one inline table of inline tables.
+fn accepted_inline(entries: &BTreeMap<String, AcceptedDrift>) -> toml_edit::Value {
+    let mut table = toml_edit::InlineTable::new();
+    for (destination, entry) in entries {
+        let mut row = toml_edit::InlineTable::new();
+        row.insert("reason", entry.reason.clone().into());
+        row.insert("sha256", entry.sha256.clone().into());
+        table.insert(destination, toml_edit::Value::InlineTable(row));
+    }
+    toml_edit::Value::InlineTable(table)
+}
+
 fn inline(values: &BTreeMap<String, String>) -> toml_edit::Value {
     let mut table = toml_edit::InlineTable::new();
     for (key, value) in values {
@@ -928,6 +1095,26 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
                 .release
                 .registry
                 .map(|answer| answer.as_str().into()),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_BUILD_COMMAND",
+            config
+                .profile
+                .release
+                .build
+                .as_ref()
+                .and_then(|build| build.command.clone())
+                .map(toml_edit::Value::from),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_BUILD_PACKAGES",
+            config
+                .profile
+                .release
+                .build
+                .as_ref()
+                .and_then(|build| build.packages.clone())
+                .map(toml_edit::Value::from),
         ),
         ("RK_CONFIG_GIT_TRUNK", Some(trunk.clone().into())),
         (
@@ -1058,8 +1245,16 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             Some(inline(&config.setup.excluded_steps)),
         ),
         (
+            "RK_CONFIG_LANDING_ACCEPTED_DRIFT",
+            Some(accepted_inline(&config.landing.accepted_drift)),
+        ),
+        (
             "RK_CONFIG_SETUP_BOT_APP_ID",
             Some(config.setup.bot.app_id.clone().into()),
+        ),
+        (
+            "RK_CONFIG_SETUP_BOT_NAME",
+            Some(config.setup.bot.name.clone().into()),
         ),
         (
             "RK_CONFIG_ACQUISITION_SOURCE",
@@ -1100,15 +1295,16 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
 }
 
 /// The template tokens only a release reads: the tag protection keys and
-/// the bot's App identifier. A configuration whose release mode is `none`
-/// leaves each one out.
+/// the bot's App identifier and name. A configuration whose release mode is
+/// `none` leaves each one out.
 ///
 /// SATISFIES target-config:a-release-less-template-carries-no-release-table
-const RELEASE_ONLY_TOKENS: [&str; 4] = [
+const RELEASE_ONLY_TOKENS: [&str; 5] = [
     "RK_CONFIG_PROTECTION_TAG_RULESET",
     "RK_CONFIG_PROTECTION_TAG_PATTERN",
     "RK_CONFIG_PROTECTION_LINES_RULESET",
     "RK_CONFIG_SETUP_BOT_APP_ID",
+    "RK_CONFIG_SETUP_BOT_NAME",
 ];
 
 /// The `[security]` table's tokens, which a release-less configuration
@@ -1157,12 +1353,17 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
                 end += 1;
             }
             if !keeps {
-                // The header, its lines, and the blank line that opened it.
-                while bytes.last() == Some(&b'\n')
-                    && bytes.len() >= 2
-                    && bytes[bytes.len() - 2] == b'\n'
-                {
-                    bytes.pop();
+                // The header and its lines, the blank line that closes it
+                // among them, so the blank line that opened it now
+                // separates the tables on either side. A table that ends
+                // the file takes that opening blank line with it.
+                if end == lines.len() {
+                    while bytes.last() == Some(&b'\n')
+                        && bytes.len() >= 2
+                        && bytes[bytes.len() - 2] == b'\n'
+                    {
+                        bytes.pop();
+                    }
                 }
                 at = end;
                 continue;
@@ -1295,7 +1496,7 @@ const DERIVED_POLICY_KEYS: [&str; 5] = [
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 28] = [
+const PARAMETER_KEYS: [&str; 30] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -1304,6 +1505,8 @@ const PARAMETER_KEYS: [&str; 28] = [
     "profile.release.style",
     "profile.release.line_prefix",
     "profile.release.registry",
+    "profile.release.build.command",
+    "profile.release.build.packages",
     "git.trunk",
     "git.checkout_mode",
     "git.integration",
@@ -1955,6 +2158,7 @@ impl Plan {
                 style: params.style(),
                 line_prefix: params.profile().release.line_prefix.clone(),
                 registry: params.profile().release.registry,
+                build: params.profile().release.build.clone(),
             },
         };
         resolved.git = Git {
@@ -2082,6 +2286,19 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
                 .release
                 .registry
                 .map(|answer| answer.as_str().into()),
+        ));
+        let build = config.profile.release.build.as_ref();
+        values.push((
+            "profile.release.build.command",
+            build
+                .and_then(|build| build.command.clone())
+                .map(toml_edit::Value::from),
+        ));
+        values.push((
+            "profile.release.build.packages",
+            build
+                .and_then(|build| build.packages.clone())
+                .map(toml_edit::Value::from),
         ));
     }
     if let Some(trunk) = config.git.trunk.clone() {
@@ -2370,6 +2587,7 @@ mod tests {
                     style: Some(Style::Trunk),
                     line_prefix: Some(super::LINE_PREFIX_DEFAULT.into()),
                     registry: None,
+                    build: None,
                 },
             },
             git: super::Git {
@@ -2579,6 +2797,7 @@ mod tests {
             style: Some(Style::Lines),
             line_prefix: Some("stable/".into()),
             registry: None,
+            build: None,
         };
         config.git.trunk = Some("main".into());
         config.git.checkout_mode = Some(CheckoutMode::MainWorktree);
@@ -2646,6 +2865,7 @@ mod tests {
             style: None,
             line_prefix: None,
             registry: None,
+            build: None,
         };
         release_less.capabilities.reporting_policy = Some(false);
         // A release-less target with no reporting policy states no

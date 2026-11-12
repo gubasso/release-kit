@@ -497,6 +497,9 @@ pub struct FileRecord {
     pub kind: Kind,
     /// The digest of what the destination holds: the bytes now present
     /// for a whole file, the marked region alone for a region destination.
+    /// One exception: a rendered file preserved under an accepted-drift
+    /// entry records the candidate's digest, not the accepted bytes on
+    /// disk, so the receipt goes on saying what the tool would write.
     pub sha256: Digest,
     /// How the landing occupies the destination: the whole file, which
     /// the record omits, or one marked region inside a document the
@@ -879,6 +882,10 @@ mod tests {
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "two whole records, built field by field, are what the snapshot holds"
+    )]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
             schema_version: super::SCHEMA_VERSION,
@@ -894,6 +901,7 @@ mod tests {
                     style: Some(Style::Trunk),
                     line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
                     registry: None,
+                    build: None,
                 },
             },
             git: GitWorkflow {
@@ -955,6 +963,7 @@ mod tests {
                     style: None,
                     line_prefix: None,
                     registry: None,
+                    build: None,
                 },
             },
             capabilities: CapabilityRequests {

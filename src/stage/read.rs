@@ -93,6 +93,14 @@ pub fn inputs(parameters: &Parameters) -> Inputs<'_> {
             .then_some(parameters.required_check.as_str()),
         required_workflow: (!parameters.required_workflow.is_empty())
             .then_some(parameters.required_workflow.as_str()),
+        build_command: release
+            .build
+            .as_ref()
+            .and_then(|build| build.command.as_deref()),
+        build_packages: release
+            .build
+            .as_ref()
+            .and_then(|build| build.packages.as_deref()),
         nix: Some(parameters.capabilities.nix_packaging),
         reporting_policy: Some(parameters.capabilities.reporting_policy),
         scorecard: Some(parameters.capabilities.scorecard),

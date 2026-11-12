@@ -167,6 +167,7 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
         params: params.clone(),
         evidence,
     })?;
+    landing::accepted_drift_faults(&projection, record.as_ref(), config.as_ref())?;
     let (output, source) = stage::resolve_output(args.output.as_deref(), target.as_std_path())?;
     let prepared = stage::prepare(&output, source, target.as_std_path())?;
     let composed = stage::compose(
@@ -336,6 +337,7 @@ mod tests {
                         style: None,
                         line_prefix: Some("release/".into()),
                         registry: None,
+                        build: None,
                     },
                 },
                 git: crate::profile::GitWorkflow {

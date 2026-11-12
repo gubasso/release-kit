@@ -61,8 +61,11 @@ Default to the trunk. Cut the first release branch the day someone actually need
 | capability requests | Which optional release-kit products does the target request?             | `[capabilities]`                 |
 | security policy     | Where do reports go, and what response does the project promise?         | `[security]`                     |
 | setup declaration   | Which otherwise applicable setup steps does the target exclude, and why? | `[setup]`                        |
+| landing declaration | Which rendered destinations does the project deliberately edit, and why? | `[landing.accepted_drift]`       |
 | protection policy   | Which protected branch and tag patterns apply?                           | `[protection]`                   |
 | landing state       | What did release-kit resolve and write?                                  | `.release-kit/manifest.json`     |
+
+The landing declaration is the landing-side twin of the setup declaration: one excuses a step the project does not run, the other a rendered file the project must change.
 
 The Git workflow domain carries three answers: the trunk's name, the checkout mode that says where a topic branch opens, and the integration mode that says which authority carries it onto the trunk. [Worktrees](./08-worktrees.md) owns the second and [integration](./12-integration.md) owns the third.
 

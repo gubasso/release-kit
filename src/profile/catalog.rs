@@ -353,6 +353,31 @@ pub fn registry_answer_fits(mode: ReleaseMode, driver: Option<&str>) -> Result<(
     }
 }
 
+/// Whether a build answer fits the release intent: an automatic bash
+/// release alone calls a project-supplied build command.
+///
+/// # Errors
+/// The refusal text, naming the key, what it found, and the shape it needs.
+pub fn build_answer_fits(mode: ReleaseMode, driver: Option<&str>) -> Result<(), String> {
+    let shape = format!(
+        "profile.release.build names the command and the packages of a release whose pipeline builds the distribution, under profile.release.mode = \"automatic\" with profile.release.driver = \"{}\" alone",
+        crate::profile::BuildAnswer::DRIVER
+    );
+    match (mode, driver) {
+        (ReleaseMode::Automatic, Some(crate::profile::BuildAnswer::DRIVER)) => Ok(()),
+        (ReleaseMode::Automatic, Some(other)) => Err(format!(
+            "profile.release.build is set while profile.release.driver is {other}; {shape}"
+        )),
+        (ReleaseMode::Automatic, None) => Err(format!(
+            "profile.release.build is set while no profile.release.driver is named; {shape}"
+        )),
+        (mode, _) => Err(format!(
+            "profile.release.build is set while profile.release.mode is {}; {shape}",
+            mode.as_str()
+        )),
+    }
+}
+
 /// Whether `name` is a forge this binary has an adapter for.
 fn known_forge(name: &str) -> bool {
     Forge::parse(name).is_some()

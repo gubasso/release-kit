@@ -1272,6 +1272,14 @@ pub const SQUASH_ON_MERGE_TOKEN: &[u8] = b"RK_SQUASH_ON_MERGE";
 /// landed release workflow, `lines` leaves every request unarmed.
 pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 
+/// The build command a bash release pipeline runs, from
+/// `profile.release.build.command`; only the two bash pipelines carry it.
+pub const BUILD_COMMAND_TOKEN: &[u8] = b"RK_BUILD_COMMAND";
+
+/// The packages a bash release pipeline installs before it builds, from
+/// `profile.release.build.packages`; only the two bash pipelines carry it.
+pub const BUILD_PACKAGES_TOKEN: &[u8] = b"RK_BUILD_PACKAGES";
+
 /// The one permanent branch. A landed release trigger, ref guard, and
 /// branch guard each name it, so a target whose trunk is not `master`
 /// needs its own answer in its own bytes.
@@ -1545,6 +1553,41 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 4],
     ])
 }
 
+impl Projection {
+    /// Why an accepted-drift entry names a destination it may not, or
+    /// `None` where it names a whole-file rendered destination this landing
+    /// selects. A marked block is refused because only its marked lines are
+    /// the tool's; a seeded or state file may drift freely already; and a
+    /// destination nothing selects has nothing to deviate from.
+    ///
+    /// SATISFIES accepted-drift:an-accepted-drift-names-its-reason-and-its-bytes
+    #[must_use]
+    pub fn accepted_drift_fault(&self, destination: &str) -> Option<String> {
+        let Some(candidate) = self
+            .candidates
+            .iter()
+            .find(|candidate| candidate.destination == destination)
+        else {
+            return Some(self.omissions.iter().find(|omission| omission.destination == destination).map_or_else(
+                || format!("landing.accepted_drift names {destination}, which this landing does not select"),
+                |omission| format!("landing.accepted_drift names {destination}, which this landing omits: {}", omission.reason),
+            ));
+        };
+        if candidate.kind != Kind::Rendered {
+            return Some(format!(
+                "landing.accepted_drift names {destination}, a {} file, which may drift freely already",
+                candidate.kind.as_str()
+            ));
+        }
+        if matches!(candidate.placement, Placement::Region { .. }) {
+            return Some(format!(
+                "landing.accepted_drift names {destination}, a marked block: only its marked lines are release-kit's, and every line outside them is already the project's"
+            ));
+        }
+        None
+    }
+}
+
 /// The four replaceable spans of a landed security policy, each as its
 /// ordered begin and end marker.
 ///
@@ -1742,6 +1785,14 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
         .map(|answer| format!("{} ", answer.run))
         .unwrap_or_default();
     out = substitute(&out, DEV_RUN_TOKEN, run.as_bytes());
+    // The build answers substitute after every other token, so a command
+    // that happens to spell a token lands literally.
+    out = substitute(
+        &out,
+        BUILD_PACKAGES_TOKEN,
+        params.build_packages().as_bytes(),
+    );
+    out = substitute(&out, BUILD_COMMAND_TOKEN, params.build_command().as_bytes());
     out
 }
 

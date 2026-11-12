@@ -57,7 +57,7 @@ The registry account is signed in at crates.io with a verified email, and `cargo
 
 Which steps apply is the target configuration's answer before it is the operator's. A forge step applies where `profile.forge` names a forge this release drives; the release half applies where `profile.release.mode` is `automatic`; the packaging gate applies where that release names a driver; the tag protection applies where `profile.release.mode` is not `none`; the reporting channel applies where `capabilities.reporting_policy` asks for the landed policy. `rk profile --target .` reports those values, and every run prints the step's stance before it acts.
 
-A project that runs part of what still applies declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. An exclusion declared for a step that does not apply here reports as redundant. The file needs no landing to be read, so a project that lands no file still declares its model.
+A project that runs part of what still applies declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. An exclusion declared for a step that does not apply here reports as redundant. The file needs no landing to be read, so a project that lands no file still declares its model. The landing-side twin is `landing.accepted_drift`: a rendered file the project must change carries an entry with the reason and the SHA-256 of the accepted bytes, which `rk status` prints for the drifted file, and status then reports the edit rather than judging it, while a further edit still faults. Where a parameter reaches the change, set it and land again instead.
 
 ## 0. Gate the package metadata
 
@@ -188,7 +188,7 @@ Creating the bot App needs a browser, because the manifest flow redirects throug
 
 On gitlab:
 
-Nothing is manual: creating the project access token also creates its bot user, so 2c does the whole bootstrap. `rk forge gitlab` states the role and scopes the token carries and why.
+Nothing is manual: 2c does the whole bootstrap. It reads the namespace's tier on GitLab.com and prints it as a `note:` line, then creates a project access token, or on a Free group a group service account that is a member of this project alone. Run it as a project Maintainer for a token, and as the top-level group Owner for a service account. `rk forge gitlab` states the two forms, the role each needs, and the scopes the token carries.
 
 ### 2c. Grant the bot this repository
 
@@ -199,6 +199,7 @@ rk setup step install-bot --target . --apply
 # check: reports the bot covering this repository with the permissions its release automation needs
 # unsatisfied naming a permission: approve the App's updated permissions on the installation's own settings page; no token this run holds can grant them
 # refused on github: the grant write needs a user token; rk forge github walks the one it takes
+# refused on gitlab naming a personal namespace: a Free personal namespace has no bot identity; move the project under a group, or use a paid tier
 ```
 
 ### 2d. Store the bot credentials
@@ -267,6 +268,26 @@ test -n "$CHILD" && echo "$CHILD"
 # empty: the file is absent, or its exists: guard did not match, so the bridge stayed out of the pipeline
 glab api --paginate "projects/:id/pipelines/$CHILD/jobs" --jq '.[].name'
 # check: the child pipeline holds the jobs .gitlab/ci/project.yml declares, and nothing this convention owns
+```
+
+Where the merge request's pipeline waits longer than the runner queue usually takes, tell a queued job from a stuck one before you wait more.
+
+A `pending` job can be queued or stuck, and the REST job fields read the same for both. One GraphQL query decides it, on `pending` jobs alone, because a `created` job waits on an earlier stage or a `needs:` job and not on a runner:
+
+```bash
+glab api graphql -f query='{ project(fullPath: "<repo>") { jobs(statuses: [PENDING]) { nodes { name status stuck } } } }'
+# check: stuck false means the runner queue is slow and waiting is correct; stuck true means no runner will take this job, and the cause is runner configuration, not patience
+```
+
+On github, the same question has evidence and no verdict:
+
+A queued job is evidence, not a verdict:
+
+```bash
+gh run view <id> --repo <repo> --json jobs -q '.jobs[] | select(.status == "queued") | .name'
+gh api repos/<repo>/actions/runners -q '.runners[] | select(.status == "online") | {name, labels: [.labels[].name]}'
+# check: a job on a hosted label waits for capacity; a job on self-hosted labels needs one online runner that carries every label it requests
+# no such runner: the job stays queued until a matching runner comes online, and fails after 24 hours in the queue
 ```
 
 Every list call paginates, because these endpoints answer twenty rows a page and a project with more jobs than that would otherwise read as complete. The trigger-job endpoint is `bridges` on an instance at the 18.2 floor; GitLab 19.2 renames it `trigger_jobs` and keeps `bridges` as a deprecated alias.

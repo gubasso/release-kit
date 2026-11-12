@@ -104,6 +104,28 @@ Protected branches expose `GET`, `POST`, `PATCH /projects/:id/protected_branches
 
 Bearing: a protected branch updates in place, so its step is atomic on rerun; a protected tag has no update endpoint, so its step is delete-then-create and briefly not atomic, which `forges/gitlab.md` states rather than smooths over. The single-call bootstrap is the asymmetry with GitHub worth stating in both forge documents: the GitLab bot is fully scriptable per project, and the GitHub one is not.
 
+## GitLab bot identity by tier
+
+Checked on 2026-11-11 against the pages below. A live GitLab.com Free group carried the service-account path end to end on 2026-09-14.
+
+- On GitLab.com, project access tokens require a Premium or Ultimate subscription, and a trial is limited to one. On GitLab Self-Managed and GitLab Dedicated they are available with any license.
+- Service accounts are available on the Free tier, generally available since GitLab 18.11. On GitLab.com a Free top-level group holds up to 100. They are available on trials, and on GitLab.com the top-level group Owner must verify their identity first. On GitLab.com only top-level group Owners create them. With no email, GitLab generates a no-reply address prefixed `service_account_group_`.
+- `POST /groups/:id/service_accounts` takes `name` and `username`, `GET /groups/:id/service_accounts` lists `id`, `username`, `name`, and `email` with no documented username filter, and `POST /groups/:id/service_accounts/:user_id/personal_access_tokens` takes `name`, the `scopes` array, and `expires_at`. `POST .../personal_access_tokens/:token_id/rotate` revokes a token and creates one with the same name and scopes.
+- The namespace response carries `plan` (for example `free` or `ultimate`), `trial`, and `kind`, which is `user` or `group`. The page's examples show `default` as a plan value and do not say when it applies, so the step reads the namespace on gitlab.com alone.
+- The least-privilege guidance prefers service accounts with limited permissions, and group or project access tokens, over personal tokens for automation.
+- A personal access token expires at most 365 days out by default. Git over HTTPS takes any non-empty username with the token as the password, and the documented example uses `oauth2`.
+- `glab api --raw-field` sends a JSON string and does not parse arrays. `--field` parses a value that starts with `[` or `{` as JSON.
+
+- <https://docs.gitlab.com/user/project/settings/project_access_tokens/>
+- <https://docs.gitlab.com/user/profile/service_accounts/>
+- <https://docs.gitlab.com/api/service_accounts/>
+- <https://docs.gitlab.com/api/namespaces/>
+- <https://docs.gitlab.com/auth/auth_practices/>
+- <https://docs.gitlab.com/user/profile/personal_access_tokens/>
+- <https://docs.gitlab.com/cli/api/>
+
+Bearing: the identity form is a fact of the account when the step runs, so `install-bot` reads the tier on every run and records it nowhere. The scopes travel through `--field`, because a raw field would send the array as a string and GitLab rejects the create. The pipeline pushes as `oauth2`, so no landed byte names the bot.
+
 ## Deleting the merged branch
 
 `PATCH /repos/{owner}/{repo}` takes `delete_branch_on_merge`, a boolean defaulting to false, documented as "Either true to allow automatically deleting head branches when pull requests are merged, or false to prevent automatic deletion". The same field is read back on `GET /repos/{owner}/{repo}`, so one endpoint serves the write and the observation.
@@ -137,7 +159,7 @@ The classification the sources above produce, which is what `runbooks/setup.md` 
 | -------------------------------------- | ------------------------------ | ---------------- |
 | Create the bot identity on GitHub      | no, browser redirect           | once per account |
 | Add a project to a GitHub installation | yes, write needs a classic PAT | per project      |
-| Create the bot identity on GitLab      | yes                            | per project      |
+| Create the bot identity on GitLab      | yes, by tier                   | per project      |
 | Store credentials on the project       | yes                            | per project      |
 | Create the bootstrap registry token    | no, web UI                     | once per package |
 | First publish                          | yes                            | once per package |

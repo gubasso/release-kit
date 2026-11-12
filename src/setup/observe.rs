@@ -164,7 +164,108 @@ const PYTHON_LIMITATION: &str = "sdist and wheel policy inclusion is unproved: P
 
 /// What Bash's check cannot answer. Its binding builds the tarball with
 /// `git archive`, where an `export-ignore` attribute drops a tracked file.
-const BASH_LIMITATION: &str = "the make dist tarball is not inspected: git archive honours export-ignore, so SECURITY.md inclusion is unproved; inspect the generated tarball before publishing";
+/// The output contract a bash release's build command owes the pipeline.
+const BUILD_CONTRACT: &str = "dist/<name>.tar.gz and dist/<name>.tar.gz.sha256";
+
+/// What no setup step proves about a bash release's tarball.
+fn bash_limitation(command: &str) -> String {
+    format!(
+        "the {command} tarball is not inspected: its contents, SECURITY.md inclusion among them, are unproved; run {command} and list the tarball before the first release"
+    )
+}
+
+/// Whether a bash release's build command can run before the first
+/// release: a make command needs a makefile in the target, and a make
+/// target that resolves where make is on this host; another command needs
+/// its first word to resolve where this host can tell. The tarball itself
+/// is never inspected, so the limitation names the command every time.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+fn bash_build_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    let command = ctx
+        .profile
+        .release
+        .build
+        .as_ref()
+        .and_then(|build| build.command.as_deref())
+        .unwrap_or(crate::profile::BuildAnswer::COMMAND);
+    let mut words = command.split_whitespace();
+    let program = words.next().unwrap_or_default();
+    let limitation = bash_limitation(command);
+    let env = ctx.child_env("package-check");
+    // A file this host would run: present, and executable by someone.
+    let runnable = |path: &std::path::Path| {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    };
+    let on_path = |name: &str| {
+        env.iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.clone())
+            .or_else(|| std::env::var_os("PATH"))
+            .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| runnable(&dir.join(name))))
+    };
+    if program == "make" {
+        let makefile = ["GNUmakefile", "makefile", "Makefile"]
+            .iter()
+            .any(|name| ctx.target.join(name).is_file());
+        if !makefile {
+            return Ok(StepState::not(format!(
+                "the build command is {command}, and the target holds no Makefile, GNUmakefile, or makefile; write one whose target produces {BUILD_CONTRACT}, or set profile.release.build.command to the command that does"
+            )));
+        }
+        if !on_path("make") {
+            return Ok(StepState::ok_with_limitation(
+                format!(
+                    "{command} has its makefile; make is not on this host, so the target was not resolved"
+                ),
+                limitation,
+            ));
+        }
+        let mut args: Vec<&str> = vec!["-n"];
+        args.extend(words);
+        let outcome = run(&cargo_exec(ctx, "make", &args))?;
+        if !outcome.success() {
+            return Ok(StepState::not(format!(
+                "make -n does not resolve the build command {command}: {}; give the makefile the target that produces {BUILD_CONTRACT}, or set profile.release.build.command",
+                last_line(&outcome.stderr)
+            )));
+        }
+        return Ok(StepState::ok_with_limitation(
+            format!("{command} resolves in the target's makefile"),
+            limitation,
+        ));
+    }
+    // A path is the project's own file, which this host can judge: one that
+    // is absent or not executable cannot run in any image.
+    if program.contains('/') {
+        if !runnable(ctx.target.join(program).as_std_path()) {
+            return Ok(StepState::not(format!(
+                "the build command is {command}, and {program} is not an executable file in the target; make it one that produces {BUILD_CONTRACT}, or set profile.release.build.command"
+            )));
+        }
+        return Ok(StepState::ok_with_limitation(
+            format!(
+                "{command} is the project's own build command, and {program} is executable here; it owes {BUILD_CONTRACT}"
+            ),
+            limitation,
+        ));
+    }
+    let resolves = on_path(program);
+    Ok(StepState::ok_with_limitation(
+        if resolves {
+            format!(
+                "{command} is the project's own build command, and {program} resolves here; it owes {BUILD_CONTRACT}"
+            )
+        } else {
+            format!(
+                "{command} is the project's own build command, and {program} does not resolve on this host, where profile.release.build.packages need not be installed; it owes {BUILD_CONTRACT}"
+            )
+        },
+        limitation,
+    ))
+}
 
 /// §0: the technology's own no-credential packaging check; the one step that
 /// reads its command from the binding rather than from a forge tree.
@@ -186,14 +287,7 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     let (program, args): (&str, &[&str]) = match ctx.tech {
         Some("rust") => ("cargo", &["publish", "--dry-run", "--allow-dirty"]),
         Some("python") => ("python3", &["-m", "build"]),
-        Some("bash") => {
-            let built = "no registry for this technology; there is nothing to package";
-            return Ok(if policy {
-                StepState::ok_with_limitation(built, BASH_LIMITATION)
-            } else {
-                StepState::ok(built)
-            });
-        }
+        Some("bash") => return bash_build_check(ctx, run),
         Some(other) => {
             return Ok(StepState::unknown(format!(
                 "no packaging check is defined for {other}"
@@ -1424,6 +1518,315 @@ fn pipeline_fault(forge_gate: bool, observed: Option<bool>) -> Option<String> {
 const GITLAB_COMMIT_LIMITATION: &str =
     "the commit gate stops accident, not authority: a merge request runs its own CI configuration";
 
+/// The bot identity form a GitLab run takes: a project access token, or a
+/// service account of the top-level group whose id this carries.
+enum GitlabIdentity {
+    Token,
+    ServiceAccount(u64),
+}
+
+/// The identity form the forge and the tier allow today, read the way the
+/// `install-bot` script reads it: gitlab.com reads the namespace's plan and
+/// kind, and every other instance takes a token with any license. `Err`
+/// carries the state that ends the observation.
+fn gitlab_identity_form(
+    ctx: &Ctx,
+    run: &mut Runner,
+) -> Result<Result<GitlabIdentity, StepState>, RkError> {
+    if !ctx.on_gitlab_com() {
+        return Ok(Ok(GitlabIdentity::Token));
+    }
+    let root = ctx.repo.split('/').next().unwrap_or_default();
+    let namespace = match api_get(ctx, run, &format!("namespaces/{root}"))? {
+        Api::Ok(body) => body,
+        Api::Missing => {
+            return Ok(Err(StepState::not(format!(
+                "the forge does not know the namespace {root}"
+            ))));
+        }
+        Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+    };
+    let plan = namespace["plan"].as_str().unwrap_or_default();
+    let kind = namespace["kind"].as_str().unwrap_or_default();
+    let paid = ["premium", "ultimate", "silver", "gold"]
+        .iter()
+        .any(|tier| plan.starts_with(tier))
+        || plan == "opensource";
+    Ok(match (plan, kind) {
+        _ if paid => Ok(GitlabIdentity::Token),
+        ("free", "group") => namespace["id"].as_u64().map_or_else(
+            || {
+                Err(StepState::unknown(format!(
+                    "the namespace {root} answers no id"
+                )))
+            },
+            |id| Ok(GitlabIdentity::ServiceAccount(id)),
+        ),
+        ("free", "user") => Err(StepState::not(format!(
+            "the personal namespace {root} has no bot identity form on GitLab.com Free; move the project under a group, or use a Premium or Ultimate tier"
+        ))),
+        _ => Err(StepState::unknown(format!(
+            "the namespace {root} reads plan {plan:?} and kind {kind:?}, which name no identity form"
+        ))),
+    })
+}
+
+/// Whether the bot identity a GitLab run takes today is a service account,
+/// or why the form could not be read.
+///
+/// A failed reading is never taken for the token form: a caller that
+/// forces an action on a service account must stop on it.
+///
+/// # Errors
+/// A runner failure.
+pub fn gitlab_bot_is_a_service_account(
+    ctx: &Ctx,
+    run: &mut Runner,
+) -> Result<Result<bool, String>, RkError> {
+    Ok(match gitlab_identity_form(ctx, run)? {
+        Ok(form) => Ok(matches!(form, GitlabIdentity::ServiceAccount(_))),
+        Err(state) => Err(state.detail().to_owned()),
+    })
+}
+
+/// Whether the bot's variable is stored, as the last half of either form.
+fn gitlab_bot_variable(
+    ctx: &Ctx,
+    run: &mut Runner,
+    project: &str,
+    holds: &str,
+) -> Result<StepState, RkError> {
+    Ok(
+        match api_get(
+            ctx,
+            run,
+            &format!("projects/{project}/variables/RELEASE_BOT_TOKEN"),
+        )? {
+            Api::Ok(_) => StepState::ok(format!("{holds} and its variable is stored")),
+            Api::Missing => StepState::not(format!(
+                "{holds} with no stored variable; a rerun replaces its token"
+            )),
+            Api::Failed(err) => StepState::unknown(err),
+        },
+    )
+}
+
+/// One paginated listing, read until a short page proves it exhausted, or
+/// until `found` holds. `None` is a bound reached on a full page, which
+/// decides nothing.
+fn gitlab_listing(
+    ctx: &Ctx,
+    run: &mut Runner,
+    path: &str,
+    found: impl Fn(&serde_json::Value) -> bool,
+) -> Result<Result<Option<serde_json::Value>, StepState>, RkError> {
+    for page in 1..=10u32 {
+        let list = match api_get(ctx, run, &format!("{path}&per_page=100&page={page}"))? {
+            Api::Ok(body) => body.as_array().cloned().unwrap_or_default(),
+            Api::Missing => Vec::new(),
+            Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+        };
+        if let Some(hit) = list.iter().find(|entry| found(entry)) {
+            return Ok(Ok(Some(hit.clone())));
+        }
+        if list.len() < 100 {
+            return Ok(Ok(None));
+        }
+    }
+    Ok(Err(StepState::unknown(
+        "the listing did not exhaust within ten pages; nothing was decided",
+    )))
+}
+
+/// Every entry of one paginated listing, read until a short page proves
+/// it exhausted. A bound reached on a full page decides nothing.
+fn gitlab_all(
+    ctx: &Ctx,
+    run: &mut Runner,
+    path: &str,
+) -> Result<Result<Vec<serde_json::Value>, StepState>, RkError> {
+    let mut all = Vec::new();
+    for page in 1..=10u32 {
+        let list = match api_get(ctx, run, &format!("{path}&per_page=100&page={page}"))? {
+            Api::Ok(body) => body.as_array().cloned().unwrap_or_default(),
+            Api::Missing => Vec::new(),
+            Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+        };
+        let short = list.len() < 100;
+        all.extend(list);
+        if short {
+            return Ok(Ok(all));
+        }
+    }
+    Ok(Err(StepState::unknown(
+        "the listing did not exhaust within ten pages; nothing was decided",
+    )))
+}
+
+/// The description every token `install-bot` mints carries, so the live
+/// bot is found by what marks it rather than by a default's spelling.
+const BOT_MARKER: &str = "release-kit bot identity";
+
+/// The state a configured name that is not the live bot's takes: a rename
+/// would strand the identity that serves the project.
+fn gitlab_rename(live: &str, name: &str) -> StepState {
+    StepState::not(format!(
+        "the release-kit bot {live} serves this project, and setup.bot.name asks for {name}; a rename strands the first identity, so revoke it by hand or set the name back"
+    ))
+}
+
+/// The state of a service account that already serves this project under
+/// another name than the configured one, `None` where there is none: an account of the group that is a member
+/// here and either holds a marked token or carries the default username
+/// from before the marker existed. An unrelated member is neither.
+fn gitlab_live_account(
+    ctx: &Ctx,
+    run: &mut Runner,
+    project: &str,
+    group: u64,
+    default: &str,
+    name: &str,
+) -> Result<Option<StepState>, RkError> {
+    let accounts = match gitlab_all(
+        ctx,
+        run,
+        &format!("groups/{group}/service_accounts?order_by=id"),
+    )? {
+        Ok(accounts) => accounts,
+        Err(state) => return Ok(Some(state)),
+    };
+    let members = match gitlab_all(
+        ctx,
+        run,
+        &format!("projects/{project}/members/all?order_by=id"),
+    )? {
+        Ok(members) => members,
+        Err(state) => return Ok(Some(state)),
+    };
+    for account in &accounts {
+        let (Some(id), Some(user)) = (account["id"].as_u64(), account["username"].as_str()) else {
+            continue;
+        };
+        if user == name
+            || !members
+                .iter()
+                .any(|member| member["id"].as_u64() == Some(id))
+        {
+            continue;
+        }
+        if user == default {
+            return Ok(Some(gitlab_rename(user, name)));
+        }
+        let path =
+            format!("groups/{group}/service_accounts/{id}/personal_access_tokens?state=active");
+        let tokens = match gitlab_all(ctx, run, &path)? {
+            Ok(tokens) => tokens,
+            Err(state) => return Ok(Some(state)),
+        };
+        if tokens
+            .iter()
+            .any(|token| token["description"] == BOT_MARKER && token["active"] != false)
+        {
+            return Ok(Some(gitlab_rename(user, name)));
+        }
+    }
+    Ok(None)
+}
+
+/// The `install-bot` observation: the form the tier selects, then that
+/// form's identity under the configured name, then the stored variable.
+/// The listings paginate exactly as the script's do, so an identity past
+/// the first page does not read as absent.
+fn gitlab_install_bot(ctx: &Ctx, run: &mut Runner, project: &str) -> Result<StepState, RkError> {
+    let form = match gitlab_identity_form(ctx, run)? {
+        Ok(form) => form,
+        Err(state) => return Ok(state),
+    };
+    match form {
+        GitlabIdentity::Token => {
+            let name = ctx.bot_name().unwrap_or("release-bot");
+            let path = format!("projects/{project}/access_tokens?state=active");
+            let tokens = match gitlab_all(ctx, run, &path)? {
+                Ok(tokens) => tokens,
+                Err(state) => return Ok(state),
+            };
+            let active: Vec<_> = tokens
+                .iter()
+                .filter(|token| token["revoked"] == false && token["active"] != false)
+                .collect();
+            // The live bot under another name is a rename whether or not a
+            // token under the requested name exists.
+            let live = active.iter().find(|token| {
+                token["name"] != name
+                    && (token["description"] == BOT_MARKER || token["name"] == "release-bot")
+            });
+            if let Some(live) = live.and_then(|token| token["name"].as_str()) {
+                return Ok(gitlab_rename(live, name));
+            }
+            if !active.iter().any(|token| token["name"] == name) {
+                return Ok(StepState::not(format!("no active {name} token exists")));
+            }
+            gitlab_bot_variable(ctx, run, project, &format!("an active {name} token exists"))
+        }
+        GitlabIdentity::ServiceAccount(group) => {
+            let project_id = match api_get(ctx, run, &format!("projects/{project}"))? {
+                Api::Ok(body) => body["id"].as_u64(),
+                Api::Missing => {
+                    return Ok(StepState::not(format!(
+                        "the forge does not know {}",
+                        ctx.repo
+                    )));
+                }
+                Api::Failed(err) => return Ok(StepState::unknown(err)),
+            };
+            let Some(project_id) = project_id else {
+                return Ok(StepState::unknown("the project answers no id"));
+            };
+            let name = ctx
+                .bot_name()
+                .map_or_else(|| format!("release-bot-{project_id}"), str::to_owned);
+            let path = format!("groups/{group}/service_accounts?order_by=id");
+            let account = match gitlab_listing(ctx, run, &path, |account| {
+                account["username"] == name.as_str()
+            })? {
+                Ok(account) => account,
+                Err(state) => return Ok(state),
+            };
+            // The live bot under another name is a rename whether or not an
+            // account under the requested name exists.
+            let default = format!("release-bot-{project_id}");
+            if let Some(state) = gitlab_live_account(ctx, run, project, group, &default, &name)? {
+                return Ok(state);
+            }
+            let Some(id) = account.and_then(|account| account["id"].as_u64()) else {
+                return Ok(StepState::not(format!(
+                    "no service account named {name} exists"
+                )));
+            };
+            let level = match api_get(ctx, run, &format!("projects/{project}/members/all/{id}"))? {
+                Api::Ok(body) => body["access_level"].as_u64().unwrap_or(0),
+                Api::Missing => {
+                    return Ok(StepState::not(format!(
+                        "the service account {name} is not a member of this project"
+                    )));
+                }
+                Api::Failed(err) => return Ok(StepState::unknown(err)),
+            };
+            if level < 40 {
+                return Ok(StepState::not(format!(
+                    "the service account {name} is a member of this project below Maintainer"
+                )));
+            }
+            gitlab_bot_variable(
+                ctx,
+                run,
+                project,
+                &format!("a service account named {name} is a Maintainer of this project"),
+            )
+        }
+    }
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "one arm per setup step, so the match is what makes an unobserved step a compile error"
@@ -1540,64 +1943,7 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),
             Api::Failed(err) => StepState::unknown(err),
         }),
-        "install-bot" => {
-            // The listing paginates, exactly as the script's does: an
-            // active token past the first page must not read as absent, or
-            // verification would contradict the apply it verifies. Absence
-            // is only reported once a short page proves the listing was
-            // exhausted; a bound reached on a full page is an unknown.
-            let mut active = false;
-            let mut exhausted = false;
-            for page in 1..=10u32 {
-                let path = format!(
-                    "projects/{project}/access_tokens?state=active&per_page=100&page={page}"
-                );
-                let list = match api_get(ctx, run, &path)? {
-                    Api::Ok(body) => body.as_array().cloned().unwrap_or_default(),
-                    Api::Missing => Vec::new(),
-                    Api::Failed(err) => return Ok(StepState::unknown(err)),
-                };
-                active = active
-                    || list.iter().any(|token| {
-                        token["name"] == "release-bot"
-                            && token["revoked"] == false
-                            && token["active"] != false
-                    });
-                if list.len() < 100 {
-                    exhausted = true;
-                }
-                if active || exhausted {
-                    break;
-                }
-            }
-            if !active {
-                return Ok(if exhausted {
-                    StepState::not("no active release-bot token exists")
-                } else {
-                    StepState::unknown(
-                        "the token listing did not exhaust within ten pages; nothing was decided",
-                    )
-                });
-            }
-            // A token whose stored variable has gone missing is a stranded
-            // identity — its value is unrecoverable — so the step is only
-            // satisfied when both halves hold, and a rerun rotates.
-            Ok(
-                match api_get(
-                    ctx,
-                    run,
-                    &format!("projects/{project}/variables/RELEASE_BOT_TOKEN"),
-                )? {
-                    Api::Ok(_) => StepState::ok(
-                        "an active release-bot token exists and its variable is stored",
-                    ),
-                    Api::Missing => StepState::not(
-                        "an active release-bot token exists with no stored variable; a rerun revokes and replaces it",
-                    ),
-                    Api::Failed(err) => StepState::unknown(err),
-                },
-            )
-        }
+        "install-bot" => gitlab_install_bot(ctx, run, &project),
         "bot-secrets" => Ok(
             match api_get(
                 ctx,
