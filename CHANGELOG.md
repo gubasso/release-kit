@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.13](https://github.com/gubasso/release-kit/compare/v0.9.12...v0.9.13) - 2026-11-12
+
+### Added
+
+- *(lines)* mint and promote release candidates on the rust pairs
+- *(release/bash)* land and run the bash release on GitLab Free
+
 ## [0.9.12](https://github.com/gubasso/release-kit/compare/v0.9.11...v0.9.12) - 2026-11-12
 
 ### Added
