@@ -8876,15 +8876,26 @@ fn a_signalled_child_names_the_signal_and_closes_the_journal() {
 /// are bytes written to disk to be executed, so a shared path is a
 /// window in which one run rewrites the bytes another is about to run;
 /// each run materializes under its own journal directory instead.
+///
+/// The two runs share the state root, which holds the journals, and
+/// nothing else. A step reads the forge before it writes and runs no
+/// script where the state already holds, so two runs against one forge
+/// would race: the run that reads after the other wrote finds nothing to
+/// do and records no script. Each run therefore applies to its own forge
+/// and target, and both always materialize.
 #[test]
 fn concurrent_runs_do_not_share_a_materialized_script() {
     let fixture = ForgeFixture::new();
+    let other = ForgeFixture::new();
+    let home = fixture.home.path();
     std::thread::scope(|scope| {
-        for _ in 0..2 {
-            scope.spawn(|| {
-                fixture
+        for forge in [&fixture, &other] {
+            scope.spawn(move || {
+                forge
                     .rk(&["setup", "step", "ci-permissions", "--apply"])
                     .args(["--repo", "acme/widget", "--forge", "github"])
+                    .env("HOME", home)
+                    .env("XDG_STATE_HOME", home)
                     .assert()
                     .success();
             });
@@ -30952,14 +30963,20 @@ fn the_migration_and_setup_chapters_send_the_landing_to_the_landing_chapter() {
 }
 
 /// Hold `target`'s lock the way a live run holds it, and return the lock
-/// file's path beside the open file that holds it.
+/// file's path beside the holder.
 ///
-/// Dropping the returned file releases the target. The process id in the
-/// body is what a refusal names, so it is written before the lock is
-/// taken and is this test's own choice.
-fn hold_target_lock(home: &Path, target: &Path) -> (PathBuf, std::fs::File) {
-    use std::io::Write as _;
-
+/// Dropping the holder releases the target. The process id in the body
+/// is what a refusal names, so it is written before the lock is taken and
+/// is this test's own choice.
+///
+/// The lock lives in a child process, never in this one. The suite runs
+/// its tests as threads of one process, and a child that another thread
+/// spawns gets a copy of every open descriptor until it execs. A lock
+/// taken here can thus outlive its drop inside an unrelated child, and the
+/// next run finds the target still held. The child holds the lock, spawns
+/// nothing, and exits when its stdin closes, so the release is complete
+/// once the drop has waited for it.
+fn hold_target_lock(home: &Path, target: &Path) -> (PathBuf, LockHolder) {
     let canonical = std::fs::canonicalize(target).expect("the target canonicalizes");
     let locks = home.join("release-kit").join("locks");
     std::fs::create_dir_all(&locks).expect("the locks directory exists");
@@ -30967,6 +30984,77 @@ fn hold_target_lock(home: &Path, target: &Path) -> (PathBuf, std::fs::File) {
         "{}.lock",
         Digest::of(canonical.to_string_lossy().as_bytes())
     ));
+    let holder = LockHolder::take(&path);
+    (path, holder)
+}
+
+/// The variable that turns [`lock_holder_child`] into a holder: the path
+/// of the lock file it takes.
+const LOCK_HOLDER_VAR: &str = "RK_TEST_LOCK_HOLDER";
+
+/// A lock held by a child process, released when this value drops.
+struct LockHolder {
+    child: std::process::Child,
+    /// The child's stdout, kept open so its closing report has a reader.
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl LockHolder {
+    /// Start this test binary as the holder of `path`'s lock, and return
+    /// once the child reports that it holds it.
+    fn take(path: &Path) -> Self {
+        use std::io::{BufRead as _, Read as _};
+
+        let mut child = std::process::Command::new(
+            std::env::current_exe().expect("the test binary has a path"),
+        )
+        .args([
+            "lock_holder_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
+        .env(LOCK_HOLDER_VAR, path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("the holder starts");
+        let mut stdout = std::io::BufReader::new(child.stdout.take().expect("the holder's stdout"));
+        let held = stdout
+            .by_ref()
+            .lines()
+            .map_while(Result::ok)
+            // libtest prints the test's name with no newline first.
+            .any(|line| line.ends_with("lock-holder: held"));
+        assert!(held, "the holder child took the target");
+        Self { child, stdout }
+    }
+}
+
+impl Drop for LockHolder {
+    fn drop(&mut self) {
+        // Closing stdin ends the child; waiting proves its descriptors,
+        // and the lock with them, are gone.
+        use std::io::Read as _;
+
+        drop(self.child.stdin.take());
+        let _ = self.stdout.read_to_end(&mut Vec::new());
+        let _ = self.child.wait();
+    }
+}
+
+/// The child half of [`LockHolder`]: ignored in a normal run, and a no-op
+/// without its variable.
+#[test]
+#[ignore = "the child process of LockHolder, started by hold_target_lock"]
+fn lock_holder_child() {
+    use std::io::{Read as _, Write as _};
+
+    let Some(path) = std::env::var_os(LOCK_HOLDER_VAR) else {
+        return;
+    };
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -30976,8 +31064,12 @@ fn hold_target_lock(home: &Path, target: &Path) -> (PathBuf, std::fs::File) {
         .expect("the lock file opens");
     writeln!(file, "4242").expect("the holder's line writes");
     file.flush().expect("the holder's line reaches the file");
-    file.try_lock().expect("this process takes the target");
-    (path, file)
+    file.try_lock().expect("the holder takes the target");
+    let mut out = std::io::stdout();
+    writeln!(out, "lock-holder: held").expect("the holder reports");
+    out.flush().expect("the report reaches the parent");
+    let _ = std::io::stdin().read_to_end(&mut Vec::new());
+    drop(file);
 }
 
 /// A host where no state root resolves has nowhere to put the lock, so
@@ -60074,13 +60166,9 @@ fn overlapping_checks_read_the_network_once() {
 fn a_held_lock_warns_from_the_cache_and_reads_nothing() {
     let fixture = pinned_fixture();
     fixture.seed_cache(8 * DAY, Some(8 * DAY), Some("v0.2.16"), None);
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(fixture.cache_file().with_extension("lock"))
-        .expect("the lock opens");
-    lock.try_lock().expect("this test holds the lock");
+    // Held by a child process, so no child of another test thread keeps
+    // it past the drop.
+    let lock = LockHolder::take(&fixture.cache_file().with_extension("lock"));
     let (code, report, stderr) = fixture.check();
     assert_eq!(code, Some(0));
     assert_eq!(report["outcome"], "locked", "{report}");
