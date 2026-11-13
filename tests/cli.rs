@@ -24,10 +24,6 @@ const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 /// `references/`, in the sorted order the embed walks them.
 const SHARED: [&str; 2] = ["plan-gate.md", "pre-flight-gate.md"];
 
-/// Where an earlier release installed the shared gates, which an install now
-/// sweeps where the record vouches for them.
-const LEGACY_SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
-
 /// Every file one installed package carries, relative to its skill
 /// directory, `SKILL.md` first.
 fn package_paths(name: &str) -> Vec<String> {
@@ -194,6 +190,23 @@ impl Home {
 
     fn load_record(&self) -> Record {
         Record::load(&utf8(&self.record()))
+    }
+
+    /// Leave the home that a 0.9.x `rk skill install --apply` left: every
+    /// package file under both roots, and the record vouching for each.
+    fn install_an_earlier_release(&self) {
+        let mut record = Record::default();
+        for package in release_kit::skills::packages().expect("the packages compose") {
+            for root in ROOTS {
+                for file in &package.files {
+                    let path = self.path().join(root).join(&package.name).join(&file.path);
+                    std::fs::create_dir_all(path.parent().expect("a parent")).expect("dirs");
+                    std::fs::write(&path, file.bytes).expect("the copy writes");
+                    record.written.insert(utf8(&path), Digest::of(file.bytes));
+                }
+            }
+        }
+        self.write_record(&record);
     }
 
     fn write_record(&self, record: &Record) {
@@ -1020,6 +1033,20 @@ fn skill_show_prints_the_frontmatter() {
 fn init_preview_human_lines_are_snapshot_held() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     let path = target.path().to_string_lossy().into_owned();
+    let skills = |root: &str| -> String {
+        skill_destinations(root)
+            .iter()
+            .fold(String::new(), |mut lines, destination| {
+                lines.push_str("created ");
+                lines.push_str(destination);
+                lines.push('\n');
+                lines
+            })
+    };
+    let (agents, claude) = (
+        skills(release_kit::skills::AGENTS_ROOT),
+        skills(release_kit::skills::CLAUDE_ROOT),
+    );
     let expected = format!(
         "DRY RUN: rk init writes these files into {path}; re-run with --apply\n\
          profile: technologies rust; forge github; repo unresolved; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration local; merge form squash; requests reporting_policy\n\
@@ -1032,6 +1059,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          capability packaging.nix: not-requested (capabilities.nix_packaging is false)\n\
          capability supply-chain.scorecard: not-requested (capabilities.scorecard is false)\n\
          capability supply-chain.code-scanning: not-requested (capabilities.code_scanning is off)\n\
+         {agents}{claude}\
          created .github/workflows/pr-title.yml\n\
          created .github/workflows/release-plz.yml\n\
          created .pre-commit-config.yaml\n\
@@ -1159,18 +1187,333 @@ fn init_apply_lands_reports_sentinels_and_a_relanding_names_upgrade() {
         .stderr(predicate::str::contains("rk upgrade"));
 }
 
-/// A skill has one owner, so a landing projects none into the target: a
-/// second copy under one name is a second entry offering the same skill.
+/// Every destination of every skill package under one root, sorted the
+/// way the projection sorts its candidates.
+fn skill_destinations(root: &str) -> Vec<String> {
+    let mut out: Vec<String> = release_kit::skills::packages()
+        .expect("the packages compose")
+        .iter()
+        .flat_map(|package| {
+            package
+                .files
+                .iter()
+                .map(|file| format!("{root}/{}/{}", package.name, file.path))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// SATISFIES distribution:a-landing-carries-the-skills
+///
+/// A landing writes every file of both skills under both roots, and the
+/// record lists each one as rendered.
 #[test]
-fn init_lands_no_skill_into_the_target() {
+fn init_lands_both_skills_into_both_roots() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    let manifest = read_manifest(target.path());
     for root in ROOTS {
-        assert!(
-            !target.path().join(root).exists(),
-            "{root} must not be landed into a target"
-        );
+        let expected = skill_destinations(root);
+        assert_eq!(expected.len(), 19, "{root}: {expected:?}");
+        for destination in &expected {
+            assert!(
+                target.path().join(destination).is_file(),
+                "{destination} landed"
+            );
+            assert!(
+                manifest["files"]
+                    .as_array()
+                    .expect("files")
+                    .iter()
+                    .any(|file| {
+                        file["destination"] == *destination && file["kind"] == "rendered"
+                    }),
+                "{destination} is recorded as rendered"
+            );
+        }
     }
+}
+
+/// SATISFIES distribution:a-landing-carries-the-skills
+///
+/// Each landed file equals the package bytes, and the reader prints the
+/// landed manual.
+#[test]
+fn a_landed_skill_is_byte_equal_to_the_package() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    for package in release_kit::skills::packages().expect("the packages compose") {
+        for root in ROOTS {
+            for file in &package.files {
+                let landed = std::fs::read(
+                    target
+                        .path()
+                        .join(format!("{root}/{}/{}", package.name, file.path)),
+                )
+                .expect("the landed file reads");
+                assert_eq!(landed, file.bytes, "{root}/{}/{}", package.name, file.path);
+            }
+            let shown = rk()
+                .args(["skill", "show", &package.name])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let manual = std::fs::read(
+                target
+                    .path()
+                    .join(format!("{root}/{}/SKILL.md", package.name)),
+            )
+            .expect("the landed manual reads");
+            assert_eq!(shown, manual, "{}", package.name);
+        }
+    }
+}
+
+/// SATISFIES distribution:a-landing-carries-the-skills
+///
+/// A target landed before the skills gains both under both roots through
+/// `rk upgrade`, and reads current after.
+#[test]
+fn an_upgrade_brings_the_skills_to_an_older_landing() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    forget_the_skills(target.path(), &mut manifest);
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    for root in ROOTS {
+        for destination in skill_destinations(root) {
+            assert!(target.path().join(&destination).is_file(), "{destination}");
+        }
+    }
+    assert_no_skill_violation(target.path());
+}
+
+/// The status check of `target` names no skill file: whatever else a
+/// scratch landing leaves unresolved, the skills are current.
+fn assert_no_skill_violation(target: &Path) {
+    let (_, report) = status_check_json(target);
+    let violations = report["violations"].as_array().expect("violations");
+    assert!(
+        violations
+            .iter()
+            .all(|violation| !violation.as_str().unwrap_or_default().contains("skills/")),
+        "{report}"
+    );
+}
+
+/// SATISFIES distribution:a-landing-carries-the-skills
+///
+/// A hand edit to a landed skill file is rendered drift.
+#[test]
+fn an_edited_landed_skill_is_drift() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let manual = target.path().join(".claude/skills/rk-setup/SKILL.md");
+    let mut bytes = std::fs::read(&manual).expect("the manual reads");
+    bytes.extend_from_slice(b"\nan edit\n");
+    std::fs::write(&manual, bytes).expect("the manual writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(".claude/skills/rk-setup/SKILL.md"));
+}
+
+/// SATISFIES distribution:a-landing-carries-the-skills
+///
+/// A recorded, unedited skill file that the package no longer carries is
+/// retired by the next landing.
+#[test]
+fn a_skill_file_the_package_drops_is_retired() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let dropped = ".agents/skills/rk-setup/references/retired.md";
+    std::fs::write(target.path().join(dropped), "# retired\n").expect("the file writes");
+    let mut manifest = read_manifest(target.path());
+    manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .push(serde_json::json!({
+            "destination": dropped,
+            "kind": "rendered",
+            "sha256": Digest::of(b"# retired\n").to_string(),
+        }));
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("retired {dropped}")));
+    assert!(!target.path().join(dropped).exists());
+}
+
+/// One shape of an unattributed skill folder: its name, and each file it
+/// holds with its bytes.
+type SkillFolderShape<'a> = (&'a str, &'a [(&'a str, &'a [u8])]);
+
+/// SATISFIES distribution:an-unattributed-skill-folder-is-never-replaced
+///
+/// A skill folder no record attributes refuses every landing verb, with
+/// and without `--replace` naming a file in it, and the target stays as
+/// it stood.
+#[test]
+fn a_landing_refuses_an_unattributed_skill_folder() {
+    let folder = ".claude/skills/rk-setup";
+    let shapes: [SkillFolderShape; 3] = [
+        (
+            "a full folder of another release",
+            &[
+                ("SKILL.md", b"---\nname: rk-setup\n---\nan older manual\n"),
+                ("references/adopt.md", b"# older\n"),
+            ],
+        ),
+        (
+            "a folder with only an extra file",
+            &[("notes.md", b"my notes\n")],
+        ),
+        (
+            "a folder with no SKILL.md",
+            &[("references/adopt.md", b"# mine\n")],
+        ),
+    ];
+    for (shape, files) in shapes {
+        for verb in ["init", "upgrade", "adopt"] {
+            for replace in [None, Some(format!("{folder}/SKILL.md"))] {
+                let target = tempfile::tempdir().expect("a scratch dir exists");
+                if verb == "upgrade" {
+                    land_rust(target.path()).success();
+                    let mut manifest = read_manifest(target.path());
+                    forget_the_skills(target.path(), &mut manifest);
+                    write_manifest(target.path(), &manifest);
+                } else if verb == "adopt" {
+                    land_rust(target.path()).success();
+                    let mut manifest = read_manifest(target.path());
+                    forget_the_skills(target.path(), &mut manifest);
+                    std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
+                        .expect("the receipt removes");
+                }
+                for (path, bytes) in files {
+                    let file = target.path().join(folder).join(path);
+                    std::fs::create_dir_all(file.parent().expect("a parent")).expect("dirs");
+                    std::fs::write(&file, bytes).expect("the file writes");
+                }
+                let before = tree_bytes(target.path());
+                let mut command = rk();
+                command.arg(verb);
+                if verb == "init" {
+                    command.args([
+                        "--technology",
+                        "rust",
+                        "--forge",
+                        "github",
+                        "--repo",
+                        "acme/widget",
+                    ]);
+                }
+                if let Some(path) = &replace {
+                    command.args(["--replace", path]);
+                }
+                command
+                    .args(["--apply", "--target"])
+                    .arg(target.path())
+                    .assert()
+                    .code(73)
+                    .stderr(predicate::str::contains(folder));
+                assert_eq!(
+                    tree_bytes(target.path()),
+                    before,
+                    "{shape}, {verb}, {replace:?}: the target is unchanged"
+                );
+            }
+        }
+    }
+}
+
+/// SATISFIES distribution:an-unattributed-skill-folder-is-never-replaced
+///
+/// A package folder that does not exist is created, on a fresh target and
+/// on a pre-skill target that `rk adopt` records.
+#[test]
+fn a_landing_creates_an_absent_skill_folder() {
+    let fresh = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(fresh.path()).success();
+    assert!(
+        fresh
+            .path()
+            .join(".agents/skills/rk-release/SKILL.md")
+            .is_file()
+    );
+    let adopted = pre_skill_target_without_a_record();
+    rk().args(["adopt", "--apply", "--target"])
+        .arg(adopted.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "created .claude/skills/rk-setup/SKILL.md",
+        ));
+    assert!(
+        adopted
+            .path()
+            .join(".claude/skills/rk-setup/SKILL.md")
+            .is_file()
+    );
+}
+
+/// A target a release before the skills landed, with its record lost, so
+/// `rk adopt` is the route to a record.
+fn pre_skill_target_without_a_record() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    forget_the_skills(target.path(), &mut manifest);
+    std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
+        .expect("the receipt removes");
+    target
+}
+
+/// SATISFIES landing:an-adoption-writes-the-record-and-nothing-else
+///
+/// Adopting a target that predates the skills creates every skill file,
+/// records it, and leaves every other destination untouched.
+#[test]
+fn adoption_of_a_pre_skill_target_brings_the_skills() {
+    let target = pre_skill_target_without_a_record();
+    let before = tree_bytes(target.path());
+    rk().args(["adopt", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let after = tree_bytes(target.path());
+    for (path, bytes) in &before {
+        if path.starts_with(".release-kit/") {
+            continue;
+        }
+        assert_eq!(after.get(path), Some(bytes), "{path} is untouched");
+    }
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["origin"], "adopt");
+    for root in ROOTS {
+        for destination in skill_destinations(root) {
+            assert!(target.path().join(&destination).is_file(), "{destination}");
+            assert!(
+                manifest["files"]
+                    .as_array()
+                    .expect("files")
+                    .iter()
+                    .any(|file| file["destination"] == *destination),
+                "{destination} is recorded"
+            );
+        }
+    }
+    assert_no_skill_violation(target.path());
 }
 
 #[test]
@@ -1285,36 +1628,14 @@ fn init_refuses_a_missing_target() {
     .code(73);
 }
 
+/// SATISFIES distribution:skill-uninstall-removes-only-what-it-wrote
+///
+/// A home that a 0.9.x release installed comes out empty, its record
+/// included, and an edited file stays.
 #[test]
-fn skill_install_previews_every_destination_and_writes_nothing() {
+fn skill_uninstall_removes_a_copy_an_earlier_release_wrote() {
     let home = Home::new();
-    let mut expected = predicate::str::contains("DRY RUN").boxed();
-    for root in ROOTS {
-        for name in ["rk-setup", "rk-release"] {
-            let destination = home.destination(root, name);
-            expected = expected
-                .and(predicate::str::contains(
-                    destination.to_string_lossy().into_owned(),
-                ))
-                .boxed();
-        }
-    }
-    home.rk()
-        .args(["skill", "install"])
-        .assert()
-        .success()
-        .stdout(expected);
-    assert!(!home.path().join(".claude").exists());
-    assert!(!home.record().exists());
-}
-
-#[test]
-fn skill_install_apply_and_uninstall_round_trip() {
-    let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
+    home.install_an_earlier_release();
     for root in ROOTS {
         for name in SKILLS {
             for path in package_paths(name) {
@@ -1331,18 +1652,13 @@ fn skill_install_apply_and_uninstall_round_trip() {
             }
         }
     }
-    assert!(!home.path().join(LEGACY_SHARED_ROOT).exists());
     assert_eq!(
         home.load_record().written.len(),
         ROOTS.len() * package_file_count(),
-        "an apply records every destination it wrote"
+        "the earlier release recorded every destination it wrote"
     );
-
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("unchanged "));
+    let edited = home.destination(ROOTS[1], SKILLS[1]);
+    std::fs::write(&edited, "the user rewrote this\n").expect("the edit writes");
 
     home.rk()
         .args(["skill", "uninstall", "--apply"])
@@ -1350,10 +1666,18 @@ fn skill_install_apply_and_uninstall_round_trip() {
         .success();
     for root in ROOTS {
         for name in SKILLS {
+            if root == ROOTS[1] && name == SKILLS[1] {
+                assert!(edited.is_file(), "the edited file stays");
+                continue;
+            }
             assert!(!home.path().join(root).join(name).exists(), "{root}/{name}");
         }
     }
-    assert!(!home.record().exists(), "an emptied record is removed");
+    std::fs::remove_file(&edited).expect("the operator removes the edit");
+    assert!(
+        home.load_record().written.len() <= 1,
+        "the record keeps no file it removed"
+    );
     // A re-run over an emptied home is a no-op, not a failure.
     home.rk()
         .args(["skill", "uninstall", "--apply"])
@@ -1361,171 +1685,10 @@ fn skill_install_apply_and_uninstall_round_trip() {
         .success();
 }
 
-/// A home an earlier release installed holds the gates once, under the
-/// shared root. The first install that copies them into each package takes
-/// that root back, because the record vouches for what it wrote there.
-#[test]
-fn skill_install_removes_the_shared_root_an_earlier_release_wrote() {
-    let home = Home::new();
-    let legacy = home.path().join(LEGACY_SHARED_ROOT);
-    std::fs::create_dir_all(&legacy).expect("the legacy root creates");
-    let mut record = Record::default();
-    for artifact in SHARED {
-        let bytes =
-            std::fs::read(repo_path(&format!("skill-shared/{artifact}"))).expect("the gate reads");
-        std::fs::write(legacy.join(artifact), &bytes).expect("the legacy gate writes");
-        record
-            .written
-            .insert(utf8(&legacy.join(artifact)), Digest::of(&bytes));
-    }
-    home.write_record(&record);
-
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("plan-gate.md"));
-    assert!(!legacy.exists(), "the legacy shared root is taken back");
-    for artifact in SHARED {
-        assert!(home.gate(ROOTS[0], SKILLS[0], artifact).is_file());
-        assert!(
-            !home
-                .load_record()
-                .written
-                .contains_key(&utf8(&legacy.join(artifact)))
-        );
-    }
-}
-
-#[test]
-fn skill_install_refuses_a_differing_destination_without_force() {
-    let home = Home::new();
-    let destination = home.destination(".claude/skills", "rk-release");
-    std::fs::create_dir_all(destination.parent().unwrap()).expect("the skill dir creates");
-    // Non-UTF-8 bytes: the existing file must still count as a conflict.
-    std::fs::write(&destination, [0xff, 0xfe, 0x00]).expect("the conflict file writes");
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .code(73)
-        .stderr(predicate::str::contains("--force"));
-    assert_eq!(
-        std::fs::read(&destination).expect("the conflict file survives"),
-        [0xff, 0xfe, 0x00],
-        "a refused install must not overwrite"
-    );
-    assert!(
-        !home.path().join(".agents").exists(),
-        "a refused install must not write the other root"
-    );
-    home.rk()
-        .args(["skill", "install", "--apply", "--force"])
-        .assert()
-        .success();
-    assert!(
-        std::fs::read_to_string(&destination)
-            .expect("the forced install wrote the embedded bytes")
-            .contains("name: rk-release")
-    );
-}
-
-/// The defect the record exists for: bytes an older release wrote are not the
-/// user's, so a newer release must replace them without asking for --force.
-#[test]
-fn skill_install_replaces_a_copy_a_previous_release_wrote() {
-    let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
-
-    // Stand in for an older release: rewrite every destination and record its
-    // digest, exactly as that release's apply would have left the home.
-    let mut older = Record::default();
-    for destination in home.load_record().written.into_keys() {
-        std::fs::write(&destination, "older canon bytes\n").expect("the older copy writes");
-        older
-            .written
-            .insert(destination, Digest::of(b"older canon bytes\n"));
-    }
-    home.write_record(&older);
-
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("wrote "));
-    assert!(
-        std::fs::read_to_string(home.destination(".claude/skills", "rk-setup"))
-            .expect("the upgraded skill reads")
-            .contains("name: rk-setup")
-    );
-}
-
-/// A skill a later release renames or drops leaves a file an agent keeps
-/// offering, so the install that supersedes it takes it back.
-#[test]
-fn skill_install_sweeps_a_destination_the_binary_dropped() {
-    let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
-
-    let dropped = home.destination(".claude/skills", "rk-retired");
-    std::fs::create_dir_all(dropped.parent().unwrap()).expect("the retired dir creates");
-    std::fs::write(&dropped, "a skill a later release dropped\n").expect("the leftover writes");
-    let mut record = home.load_record();
-    record.written.insert(
-        utf8(&dropped),
-        Digest::of(b"a skill a later release dropped\n"),
-    );
-    home.write_record(&record);
-
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("swept "));
-    assert!(!dropped.exists(), "a swept leftover is gone");
-    assert!(
-        !dropped.parent().unwrap().exists(),
-        "the directory a sweep empties goes with it"
-    );
-    assert!(!home.load_record().written.contains_key(&utf8(&dropped)));
-}
-
-/// A leftover the user has since edited is theirs, and no sweep takes it.
-#[test]
-fn skill_install_leaves_an_edited_leftover_alone() {
-    let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
-
-    let dropped = home.destination(".claude/skills", "rk-retired");
-    std::fs::create_dir_all(dropped.parent().unwrap()).expect("the retired dir creates");
-    std::fs::write(&dropped, "the user rewrote this\n").expect("the leftover writes");
-    let mut record = home.load_record();
-    record
-        .written
-        .insert(utf8(&dropped), Digest::of(b"what we wrote\n"));
-    home.write_record(&record);
-
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
-    assert_eq!(
-        std::fs::read_to_string(&dropped).expect("the leftover survives"),
-        "the user rewrote this\n"
-    );
-}
-
+/// SATISFIES distribution:a-skill-destination-is-a-regular-file
 #[cfg(unix)]
 #[test]
-fn skill_install_refuses_a_symlinked_destination() {
+fn skill_uninstall_refuses_a_symlinked_destination() {
     let home = Home::new();
     let destination = home.destination(".claude/skills", "rk-release");
     std::fs::create_dir_all(destination.parent().unwrap()).expect("the skill dir creates");
@@ -1534,21 +1697,22 @@ fn skill_install_refuses_a_symlinked_destination() {
     std::os::unix::fs::symlink(&elsewhere, &destination).expect("the symlink creates");
 
     home.rk()
-        .args(["skill", "install", "--apply", "--force"])
+        .args(["skill", "uninstall", "--apply"])
         .assert()
         .code(73)
         .stderr(predicate::str::contains("symlink"));
     assert_eq!(
         std::fs::read_to_string(&elsewhere).expect("the symlink target survives"),
         "the user's file\n",
-        "an install must never write through a symlink"
+        "an uninstall must never remove through a symlink"
     );
-    assert!(!home.path().join(".agents").exists());
+    assert!(destination.is_symlink(), "the link stays");
 }
 
+/// SATISFIES distribution:a-skill-destination-is-a-regular-file
 #[cfg(unix)]
 #[test]
-fn skill_install_refuses_a_symlinked_shared_root() {
+fn skill_uninstall_refuses_a_symlinked_shared_root() {
     let home = Home::new();
     let elsewhere = home.path().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("the outside directory creates");
@@ -1561,7 +1725,7 @@ fn skill_install_refuses_a_symlinked_shared_root() {
     std::os::unix::fs::symlink(&elsewhere, state_dir.join("skills")).expect("the symlink creates");
 
     home.rk()
-        .args(["skill", "install", "--apply", "--force"])
+        .args(["skill", "uninstall", "--apply"])
         .assert()
         .code(73)
         .stderr(predicate::str::contains("symlink"));
@@ -1570,7 +1734,7 @@ fn skill_install_refuses_a_symlinked_shared_root() {
             .expect("the symlink target survives")
             .count(),
         0,
-        "an install must never write through a symlinked shared root"
+        "an uninstall must never remove through a symlinked shared root"
     );
     assert!(!home.path().join(".claude").exists());
 }
@@ -1578,17 +1742,7 @@ fn skill_install_refuses_a_symlinked_shared_root() {
 #[test]
 fn skill_agent_flag_touches_one_root_only() {
     let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--agent", "claude", "--apply"])
-        .assert()
-        .success();
-    assert!(home.destination(".claude/skills", "rk-setup").is_file());
-    assert!(!home.path().join(".agents").exists());
-
-    home.rk()
-        .args(["skill", "install", "--agent", "codex", "--apply"])
-        .assert()
-        .success();
+    home.install_an_earlier_release();
     assert!(home.destination(".agents/skills", "rk-setup").is_file());
 
     home.rk()
@@ -1607,10 +1761,7 @@ fn skill_agent_flag_touches_one_root_only() {
 #[test]
 fn skill_uninstall_keeps_an_edited_skill() {
     let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
+    home.install_an_earlier_release();
     let edited = home.destination(".claude/skills", "rk-setup");
     std::fs::write(&edited, "the user rewrote this\n").expect("the edit writes");
 
@@ -1631,10 +1782,7 @@ fn skill_uninstall_keeps_an_edited_skill() {
 #[test]
 fn skill_uninstall_keeps_what_a_user_put_beside_a_skill() {
     let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
+    home.install_an_earlier_release();
     let beside = home
         .destination(".claude/skills", "rk-setup")
         .parent()
@@ -1648,60 +1796,6 @@ fn skill_uninstall_keeps_what_a_user_put_beside_a_skill() {
         .success()
         .stdout(predicate::str::contains("kept (not empty)"));
     assert!(beside.is_file(), "a file beside a skill must survive");
-}
-
-/// The human preview, snapshot-held line for line, `Next:` block included.
-#[test]
-fn skill_install_preview_human_lines_are_snapshot_held() {
-    let home = Home::new();
-    let mut expected =
-        String::from("DRY RUN: rk skill install writes these files; re-run with --apply\n");
-    // Root by root, skill by skill, and file by file: `SKILL.md` first,
-    // then the references in sorted order, the gate copies among them.
-    for root in ROOTS {
-        for name in SKILLS {
-            for path in package_paths(name) {
-                expected.push_str(
-                    &home
-                        .path()
-                        .join(root)
-                        .join(name)
-                        .join(path)
-                        .to_string_lossy(),
-                );
-                expected.push('\n');
-            }
-        }
-    }
-    expected.push_str("Next:\n  rk skill install --apply\n");
-    home.rk()
-        .args(["skill", "install"])
-        .assert()
-        .success()
-        .stdout(predicate::eq(expected));
-}
-
-#[test]
-fn skill_install_json_reports_typed_actions() {
-    let home = Home::new();
-    let out = home
-        .rk()
-        .args(["skill", "install", "--apply", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.skill/1");
-    assert_eq!(report["command"], "install");
-    assert_eq!(report["mode"], "apply");
-    let actions = report["actions"].as_array().expect("an action list");
-    assert_eq!(actions.len(), ROOTS.len() * package_file_count());
-    assert!(
-        actions.iter().all(|action| action["action"] == "write"),
-        "{actions:?}"
-    );
 }
 
 /// A doctor run answers on any host: probes fail as results, the exit code
@@ -1748,9 +1842,7 @@ fn doctor_reports_every_probe_and_exits_0() {
             "sh",
             "git",
             "state-root",
-            "skill-roots",
-            "skill-gate",
-            "skill-sources",
+            "skill-shadow",
             "git-remote",
             "gh-auth",
             "glab-auth",
@@ -1844,6 +1936,7 @@ fn a_git_verb_resolves_through_the_override() {
         .current_dir(home.path())
         .status()
         .expect("git init runs");
+    write_gate_record(home.path());
     home.rk()
         .args(["worktree", "list"])
         .current_dir(home.path())
@@ -1956,97 +2049,6 @@ fn probe(report: &serde_json::Value, id: &str) -> serde_json::Value {
         .find(|probe| probe["id"] == id)
         .unwrap_or_else(|| panic!("no {id} probe"))
         .clone()
-}
-
-/// A package whose `references/` lost a gate still resolves by name and
-/// cannot read the gate it is told to read first. The probe names that home
-/// before an agent acts in it, and clears once the gate is back where the
-/// skill looks for it.
-#[test]
-fn the_gate_probe_names_a_home_whose_skills_cannot_read_their_gate() {
-    let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
-    assert_eq!(probe(&skill_probes(&home), "skill-gate")["status"], "ok");
-
-    // The one difference between a working home and the failing one: one
-    // package lacks its plan gate while every skill stays.
-    std::fs::remove_file(home.gate(ROOTS[0], SKILLS[0], "plan-gate.md"))
-        .expect("the gate copy removes");
-    let report = skill_probes(&home);
-    let gate = probe(&report, "skill-gate");
-    assert_eq!(gate["status"], "failed");
-    assert!(
-        gate["message"]
-            .as_str()
-            .expect("a message")
-            .contains("plan-gate.md"),
-        "{gate:?}"
-    );
-    assert_eq!(gate["remediation"], "rk skill install --apply");
-    assert_eq!(
-        probe(&report, "skill-sources")["status"],
-        "ok",
-        "the skills are installed; only their gate is missing"
-    );
-}
-
-/// One binary serves every repository, so an installed skill and the `rk` on
-/// PATH can be updated apart. The probe reports bytes that are not this
-/// binary's, and asks for the `--force` only where the record cannot vouch
-/// for what it would overwrite.
-#[test]
-fn the_sources_probe_names_a_skill_that_is_not_this_binarys() {
-    let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
-    assert_eq!(probe(&skill_probes(&home), "skill-sources")["status"], "ok");
-
-    // Bytes the record cannot account for are the operator's own.
-    let edited = home.destination(ROOTS[0], SKILLS[0]);
-    std::fs::write(&edited, "mine now\n").expect("the skill rewrites");
-    let sources = probe(&skill_probes(&home), "skill-sources");
-    assert_eq!(sources["status"], "failed");
-    assert_eq!(sources["remediation"], "rk skill install --apply --force");
-
-    // Bytes the record vouches for are an older release's, and the plain
-    // apply corrects them.
-    let mut record = home.load_record();
-    record
-        .written
-        .insert(utf8(&edited), Digest::of(b"mine now\n"));
-    home.write_record(&record);
-    let sources = probe(&skill_probes(&home), "skill-sources");
-    assert_eq!(sources["status"], "failed");
-    assert_eq!(sources["remediation"], "rk skill install --apply");
-
-    // A skill destination that is simply absent is neither.
-    std::fs::remove_file(&edited).expect("the skill removes");
-    let sources = probe(&skill_probes(&home), "skill-sources");
-    assert_eq!(sources["status"], "failed");
-    assert_eq!(sources["remediation"], "rk skill install --apply");
-}
-
-/// A home nobody has installed into fails both skill probes and neither
-/// panics: the doctor answers on any host.
-#[test]
-fn the_skill_probes_answer_on_a_home_with_no_install() {
-    let home = Home::new();
-    let report = skill_probes(&home);
-    for id in ["skill-gate", "skill-sources"] {
-        let found = probe(&report, id);
-        assert_eq!(found["status"], "failed", "{id}");
-        assert_eq!(found["remediation"], "rk skill install --apply", "{id}");
-    }
-    assert_eq!(
-        probe(&report, "skill-roots")["status"],
-        "ok",
-        "an absent root under a writable home is not a refusal"
-    );
 }
 
 /// The gh probe asks `auth status --active` first: the bare form fails
@@ -2273,10 +2275,7 @@ fn a_command_leaves_one_application_log_record() {
 #[test]
 fn skill_uninstall_previews_by_default_and_removes_nothing() {
     let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
+    home.install_an_earlier_release();
     home.rk()
         .args(["skill", "uninstall"])
         .assert()
@@ -2285,14 +2284,103 @@ fn skill_uninstall_previews_by_default_and_removes_nothing() {
     assert!(home.destination(".claude/skills", "rk-setup").is_file());
 }
 
+/// SATISFIES distribution:a-skill-has-one-owner
+///
+/// `rk skill install` writes nothing under the home: its preview names
+/// the landing and exits 0, and `--apply` refuses.
 #[test]
-fn skill_force_without_apply_is_rejected() {
+fn skill_install_refuses_and_names_the_landing() {
     let home = Home::new();
     home.rk()
-        .args(["skill", "install", "--force"])
+        .args(["skill", "install"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("rk init")
+                .and(predicate::str::contains("rk upgrade"))
+                .and(predicate::str::contains("rk skill uninstall --apply")),
+        );
+    home.rk()
+        .args(["skill", "install", "--apply"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--apply"));
+        .stderr(predicate::str::contains("rk init"));
+    assert!(!home.path().join(".claude").exists());
+    assert!(!home.path().join(".agents").exists());
+    assert!(!home.record().exists());
+}
+
+/// SATISFIES distribution:a-skill-is-readable-before-a-landing
+///
+/// Both shared gates and one ordinary reference print their authored
+/// bytes with no project and no home copy present, and an unknown path
+/// exits 66.
+#[test]
+fn skill_show_prints_one_reference_file() {
+    let home = Home::new();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (file, authored) in [
+        (
+            "references/pre-flight-gate.md",
+            root.join("skill-shared/pre-flight-gate.md"),
+        ),
+        (
+            "references/plan-gate.md",
+            root.join("skill-shared/plan-gate.md"),
+        ),
+        (
+            "references/adopt.md",
+            root.join("skills/rk-setup/references/adopt.md"),
+        ),
+    ] {
+        let printed = home
+            .rk()
+            .args(["skill", "show", "rk-setup", "--file", file])
+            .current_dir(home.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        assert_eq!(printed, std::fs::read(&authored).expect("reads"), "{file}");
+    }
+    home.rk()
+        .args(["skill", "show", "rk-setup", "--file", "references/none.md"])
+        .assert()
+        .code(66);
+}
+
+/// SATISFIES distribution:the-doctor-names-a-shadowing-user-copy
+///
+/// A user-scope `SKILL.md` fails the probe and names the uninstall, a
+/// folder that keeps only notes passes, and an edited kept manual is
+/// named for the operator to read.
+#[test]
+fn the_shadow_probe_names_a_user_scope_manual() {
+    let home = Home::new();
+    assert_eq!(probe(&skill_probes(&home), "skill-shadow")["status"], "ok");
+    home.install_an_earlier_release();
+    let shadow = probe(&skill_probes(&home), "skill-shadow");
+    assert_eq!(shadow["status"], "failed", "{shadow}");
+    assert_eq!(shadow["remediation"], "rk skill uninstall --apply");
+    let edited = home.destination(ROOTS[0], SKILLS[0]);
+    std::fs::write(&edited, "mine now\n").expect("the edit writes");
+    home.rk()
+        .args(["skill", "uninstall", "--apply"])
+        .assert()
+        .success();
+    let kept = probe(&skill_probes(&home), "skill-shadow");
+    assert_eq!(kept["status"], "failed", "{kept}");
+    assert!(
+        kept["remediation"]
+            .as_str()
+            .expect("a remediation")
+            .contains("read"),
+        "{kept}"
+    );
+    std::fs::remove_file(&edited).expect("the operator removes the copy");
+    std::fs::write(edited.with_file_name("notes.md"), "notes\n").expect("the notes write");
+    assert_eq!(probe(&skill_probes(&home), "skill-shadow")["status"], "ok");
 }
 
 #[test]
@@ -3050,67 +3138,6 @@ fn the_binary_carries_two_skills() {
         !text.contains("rk-migrate"),
         "the absorbed skill is not listed: {text}"
     );
-}
-
-/// A home installed by the release that carried `rk-migrate` still holds
-/// it. The install that supersedes it sweeps the recorded file and takes
-/// the emptied directory with it, and keeps a directory the user filled.
-#[test]
-fn the_skill_installer_reports_a_skill_the_binary_no_longer_carries() {
-    let home = Home::new();
-    home.rk()
-        .args(["skill", "install", "--apply"])
-        .assert()
-        .success();
-
-    let swept = home.destination(".claude/skills", "rk-migrate");
-    let kept = home.destination(".agents/skills", "rk-migrate");
-    for dropped in [&swept, &kept] {
-        std::fs::create_dir_all(dropped.parent().unwrap()).expect("the retired dir creates");
-        std::fs::write(dropped, "the migrate skill an older release wrote\n")
-            .expect("the leftover writes");
-    }
-    std::fs::write(
-        kept.parent().unwrap().join("notes.md"),
-        "the user's own file\n",
-    )
-    .expect("the user's file writes");
-    let mut record = home.load_record();
-    for dropped in [&swept, &kept] {
-        record.written.insert(
-            utf8(dropped),
-            Digest::of(b"the migrate skill an older release wrote\n"),
-        );
-    }
-    home.write_record(&record);
-
-    let out = home
-        .rk()
-        .args(["skill", "install", "--apply", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&out).expect("the report parses");
-    let actions = report["actions"].as_array().expect("actions");
-    let sweeps = actions
-        .iter()
-        .filter(|action| action["action"] == "sweep")
-        .count();
-    assert_eq!(sweeps, 2, "both recorded copies are swept: {report}");
-    assert!(
-        actions
-            .iter()
-            .any(|action| action["action"] == "kept-directory"
-                && action["directory"]
-                    .as_str()
-                    .unwrap()
-                    .ends_with("rk-migrate")),
-        "the directory holding the user's file is reported kept: {report}"
-    );
-    assert!(!swept.exists() && !swept.parent().unwrap().exists());
-    assert!(!kept.exists() && kept.parent().unwrap().join("notes.md").exists());
 }
 
 /// A file of the setup skill's package, as authored.
@@ -5944,7 +5971,7 @@ impl ForgeFixture {
             self.target.path().join(".release-kit/manifest.json"),
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version": 10,
-                "rk_version": "0.0.0",
+                "rk_version": env!("CARGO_PKG_VERSION"),
                 "origin": "init",
                 "landed_at": "2026-09-15T00:00:00Z",
                 "profile": {
@@ -11824,7 +11851,8 @@ fn branch_fixture() -> tempfile::TempDir {
         ],
     );
     std::fs::write(dir.path().join("seed"), "x\n").expect("the seed writes");
-    git_in(dir.path(), &["add", "seed"]);
+    write_gate_record(dir.path());
+    git_in(dir.path(), &["add", "seed", ".release-kit"]);
     git_in(dir.path(), &["commit", "-qm", "chore: seed"]);
     dir
 }
@@ -11847,6 +11875,7 @@ fn guarded_branch_fixture() -> tempfile::TempDir {
 #[test]
 fn branch_reminder_does_not_apply_without_the_workflow_guards() {
     let repo = branch_fixture();
+    forget_gate_record(repo.path());
     let home = tempfile::tempdir().expect("a scratch home exists");
     let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
     rk_scrubbed()
@@ -16870,6 +16899,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
 #[test]
 fn message_check_holds_the_scope_to_the_shape() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
+    write_gate_record(target.path());
     let message = target.path().join("COMMIT_EDITMSG");
 
     std::fs::write(&message, "docs(Specs Ugly): split the ranking rules\n")
@@ -17049,6 +17079,39 @@ fn status_reports_the_mode_and_check_flags_a_hand_edited_guard() {
 // ---------------------------------------------------------------------------
 // rk worktree list | add | prune
 
+/// Write a landing record at this binary's version into `repo`, naming the
+/// default Git workflow and no release, so a gated verb's subject is the
+/// verb and not the version gate. The caller commits it where seats must
+/// carry it.
+fn write_gate_record(repo: &Path) {
+    std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
+    std::fs::write(
+        repo.join(".release-kit/manifest.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": 12,
+            "rk_version": env!("CARGO_PKG_VERSION"),
+            "origin": "init",
+            "landed_at": "2026-11-13T00:00:00Z",
+            "profile": { "technologies": [], "release": { "mode": "none" } },
+            "git": {
+                "trunk": "master",
+                "checkout_mode": "linked-worktree",
+                "integration": "local",
+            },
+            "capabilities": {
+                "nix_packaging": false,
+                "reporting_policy": false,
+                "scorecard": false,
+            },
+            "parameters": { "repo": "", "security_contact": "", "security_response": "best-effort" },
+            "files": [],
+            "pins": {},
+        }))
+        .expect("the record serializes"),
+    )
+    .expect("the record writes");
+}
+
 /// A scratch parent holding the repo at `./widget`, so the derived
 /// sibling worktrees stay inside the tempdir and die with it.
 fn worktree_fixture() -> (tempfile::TempDir, PathBuf) {
@@ -17073,10 +17136,48 @@ fn seatable_fixture() -> (tempfile::TempDir, PathBuf) {
         &["remote", "add", "origin", origin.to_str().expect("utf-8")],
     );
     std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
-    git_in(&repo, &["add", "seed"]);
+    write_gate_record(&repo);
+    git_in(&repo, &["add", "seed", ".release-kit"]);
     git_in(&repo, &["commit", "-qm", "chore: seed"]);
     git_in(&repo, &["push", "-q", "origin", "master"]);
     (parent, repo)
+}
+
+/// [`seatable_fixture`] whose committed record states the branches
+/// checkout mode, which the tests that pass `--checkout-mode branches`
+/// must agree with.
+fn seatable_branches_fixture() -> (tempfile::TempDir, PathBuf) {
+    let (parent, repo) = seatable_fixture();
+    rewrite_gate_record(&repo, |record| {
+        record["git"]["checkout_mode"] = serde_json::json!("branches");
+    });
+    git_in(
+        &repo,
+        &["commit", "-qam", "chore: record the branches mode"],
+    );
+    git_in(&repo, &["push", "-q", "origin", "master"]);
+    (parent, repo)
+}
+
+/// Remove the committed record of a fixture, for a test whose subject is
+/// a target with no landing.
+fn forget_gate_record(repo: &Path) {
+    git_in(repo, &["rm", "-rq", ".release-kit"]);
+    git_in(repo, &["commit", "-qm", "chore: forget the record"]);
+}
+
+/// Rewrite the record that [`write_gate_record`] wrote.
+fn rewrite_gate_record(repo: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+    let path = repo.join(".release-kit/manifest.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("the record reads"))
+            .expect("the record parses");
+    edit(&mut record);
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&record).expect("the record serializes"),
+    )
+    .expect("the record writes");
 }
 
 /// A scratch repository with the named remote URL, for the tests whose
@@ -17090,9 +17191,276 @@ fn fixture_with_origin(url: &str) -> (tempfile::TempDir, PathBuf) {
     git_in(&repo, &["config", "user.name", "rk test"]);
     git_in(&repo, &["remote", "add", "origin", url]);
     std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
-    git_in(&repo, &["add", "seed"]);
+    write_gate_record(&repo);
+    git_in(&repo, &["add", "seed", ".release-kit"]);
     git_in(&repo, &["commit", "-qm", "chore: seed"]);
     (parent, repo)
+}
+
+/// A worktree fixture whose committed record names `version`, so the
+/// version gate meets a landing of another release.
+fn gated_fixture(version: &str) -> (tempfile::TempDir, PathBuf) {
+    let (parent, repo) = worktree_fixture();
+    rewrite_gate_record(&repo, |record| {
+        record["rk_version"] = serde_json::json!(version);
+    });
+    git_in(&repo, &["commit", "-qam", "chore: record another release"]);
+    (parent, repo)
+}
+
+/// VERIFIES version-gate:a-gated-command-names-its-fix
+///
+/// A writing action on a target with no record refuses with exit 73,
+/// names `rk init`, and names the setup skill's reader.
+#[test]
+fn a_writing_action_refuses_a_target_with_no_record() {
+    let (_parent, repo) = worktree_fixture();
+    forget_gate_record(&repo);
+    let before = tree_bytes(&repo);
+    rk().args(["worktree", "add", "feat/x", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("rk init")
+                .and(predicate::str::contains("rk skill show rk-setup"))
+                .and(predicate::str::contains("--file <path>")),
+        );
+    assert_eq!(tree_bytes(&repo), before, "the target is unchanged");
+}
+
+/// VERIFIES version-gate:every-command-has-a-gate-class
+///
+/// The calls the setup runbook and the setup skill make before
+/// `rk init` all run on a target with no record.
+#[test]
+fn the_first_setup_runs_before_any_record() {
+    let (_parent, repo) = worktree_fixture();
+    forget_gate_record(&repo);
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = scratch.path().join("stage");
+    let calls: Vec<Vec<String>> = vec![
+        vec!["assess".into()],
+        vec!["profile".into()],
+        vec!["status".into()],
+        vec!["init".into(), "--technology".into(), "rust".into()],
+        vec![
+            "stage".into(),
+            "--technology".into(),
+            "rust".into(),
+            "--output".into(),
+            stage.to_string_lossy().into_owned(),
+        ],
+        vec!["self-depend".into(), "status".into()],
+    ];
+    for call in calls {
+        let out = rk()
+            .args(&call)
+            .arg("--target")
+            .arg(&repo)
+            .output()
+            .expect("rk runs");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{call:?}: {stderr}");
+        assert!(
+            !stderr.contains("has no release-kit landing"),
+            "{call:?}: {stderr}"
+        );
+    }
+    for call in [
+        vec!["doctor"],
+        vec!["skill", "show", "rk-setup"],
+        vec!["setup", "--list"],
+    ] {
+        rk().args(&call).current_dir(&repo).assert().success();
+    }
+}
+
+/// VERIFIES version-gate:a-gated-command-names-its-fix
+///
+/// `rk upgrade` takes a landing at an older version to this binary
+/// through the public CLI, and the gate then lets a writing action run.
+#[test]
+fn an_upgrade_repairs_an_older_landing() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.1.0");
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        read_manifest(target.path())["rk_version"],
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// VERIFIES version-gate:a-gated-command-names-its-fix
+///
+/// A binary newer than the record refuses a writing action, names
+/// `rk upgrade`, and leaves the target as it stood. Where the project
+/// pins the recorded release, the refusal says this rk is not the
+/// project's own and names the environment first.
+#[test]
+fn a_writing_action_refuses_when_the_binary_is_newer() {
+    let (_parent, repo) = gated_fixture("0.1.0");
+    let before = tree_bytes(&repo);
+    rk().args(["worktree", "add", "feat/x", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("the landing is at rk 0.1.0")
+                .and(predicate::str::contains("rk upgrade")),
+        );
+    assert_eq!(tree_bytes(&repo), before, "the target is unchanged");
+    std::fs::write(
+        repo.join("flake.nix"),
+        "{\n  inputs = {\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.1.0\";\n    };\n  };\n}\n",
+    )
+    .expect("the flake writes");
+    rk().args(["worktree", "add", "feat/x", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("outside the project's environment")
+                .and(predicate::str::contains("direnv exec .")),
+        );
+}
+
+/// VERIFIES version-gate:a-gated-command-names-its-fix
+///
+/// A binary newer than the record lets a read-only action run, keeps its
+/// exit code, and prints one warning line on stderr.
+#[test]
+fn a_read_only_action_warns_when_the_binary_is_newer() {
+    let (_parent, repo) = gated_fixture("0.1.0");
+    let out = rk()
+        .args(["worktree", "list", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.contains("rk upgrade"))
+            .count(),
+        1,
+        "{stderr}"
+    );
+    let message = repo.join("MSG");
+    std::fs::write(&message, "docs(Bad Scope): x\n").expect("the message writes");
+    rk().args(["message", "--check", "--target"])
+        .arg(&repo)
+        .arg(&message)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("the landing is at rk 0.1.0"));
+}
+
+/// VERIFIES version-gate:a-gated-command-names-its-fix
+///
+/// A record newer than the binary refuses and names the project's own
+/// environment, and names the pin only where the pin is older than the
+/// record.
+#[test]
+fn a_record_newer_than_the_binary_names_the_environment() {
+    let (_parent, repo) = gated_fixture("999.0.0");
+    let out = rk()
+        .args(["worktree", "list", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("999.0.0") && stderr.contains("which is older"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("direnv exec ."), "{stderr}");
+    assert!(!stderr.contains("The pin"), "{stderr}");
+    std::fs::write(
+        repo.join("flake.nix"),
+        "{\n  inputs = {\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.1.0\";\n    };\n  };\n}\n",
+    )
+    .expect("the flake writes");
+    rk().args(["worktree", "list", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("names 0.1.0. Move it to 999.0.0"));
+}
+
+/// VERIFIES version-gate:every-command-has-a-gate-class
+///
+/// An exempt action runs in a folder with no record and in one whose
+/// record names another release, and the gate says nothing.
+#[test]
+fn an_exempt_action_runs_without_a_record() {
+    let home = Home::new();
+    let bare = tempfile::tempdir().expect("a scratch dir exists");
+    let (_older_parent, older) = gated_fixture("0.1.0");
+    let (_newer_parent, newer) = gated_fixture("999.0.0");
+    for dir in [bare.path(), older.as_path(), newer.as_path()] {
+        for call in [
+            vec!["doctor"],
+            vec!["skill", "show", "rk-setup"],
+            vec!["skill", "uninstall"],
+            vec!["runs", "list"],
+            vec!["self-depend", "check"],
+            vec!["status"],
+        ] {
+            let out = home
+                .rk()
+                .args(&call)
+                .env("RK_DEVSHELL_SYNC", "0")
+                .current_dir(dir)
+                .output()
+                .expect("rk runs");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                out.status.success(),
+                "{call:?} in {}: {stderr}",
+                dir.display()
+            );
+            assert!(
+                !stderr.contains("has no release-kit landing")
+                    && !stderr.contains("the landing is at rk"),
+                "{call:?}: {stderr}"
+            );
+        }
+    }
+}
+
+/// VERIFIES version-gate:a-gated-command-names-its-fix
+///
+/// The warning of a read-only action goes to stderr alone, so the JSON
+/// body on stdout stays one object.
+#[test]
+fn the_warning_never_enters_the_json_body() {
+    let (_parent, repo) = gated_fixture("0.1.0");
+    let out = rk()
+        .args(["worktree", "list", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let body: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout is one JSON object");
+    assert!(body.is_object(), "{body}");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("rk upgrade"),
+        "the warning stays out of the body"
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("warning: the landing is at rk 0.1.0"));
 }
 
 /// Seat one existing branch in its derived sibling worktree, via git.
@@ -18511,6 +18879,7 @@ fn message_fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a scratch repo exists");
     git_in(dir.path(), &["init", "-q", "-b", "master"]);
     std::fs::write(dir.path().join(".gitignore"), ".draft/\n").expect("the ignore writes");
+    write_gate_record(dir.path());
     dir
 }
 
@@ -18620,6 +18989,7 @@ fn the_message_json_is_one_object_with_the_schema() {
 #[test]
 fn a_non_repo_target_degrades_to_the_fixed_pattern() {
     let dir = tempfile::tempdir().expect("a plain directory exists");
+    write_gate_record(dir.path());
     rk().args(["message", "--check", "--target"])
         .arg(dir.path())
         .write_stdin("feat(api): add\n\nSee .draft/plan.md here.\n")
@@ -19370,6 +19740,7 @@ fn line_repo() -> tempfile::TempDir {
     run(&["config", "user.name", "t"]);
     run(&["config", "user.email", "t@invalid"]);
     std::fs::write(dir.path().join("f"), "1\n").expect("writes");
+    write_gate_record(dir.path());
     run(&["add", "."]);
     run(&["commit", "-q", "-m", "feat(api): one"]);
     run(&["tag", "-a", "v1.1.0", "-m", "v1.1.0"]);
@@ -20562,10 +20933,12 @@ fn the_rc_text_names_every_pair_that_can_cut() {
             ))
             .stdout(predicate::str::contains("no candidate path").not());
     }
-    // A checkout with no landing record claims no candidate job.
+    // A checkout whose record names no release driver claims no
+    // candidate job.
     let bare = tempfile::tempdir().expect("a scratch checkout exists");
     git_in(bare.path(), &["init", "-q", "-b", "master"]);
     std::fs::write(bare.path().join("VERSION"), "1.4.2\n").expect("writes");
+    write_gate_record(bare.path());
     rk().args(["lines", "rc", "1.4", "--target"])
         .arg(bare.path())
         .assert()
@@ -20749,6 +21122,73 @@ fn every_third_party_destination_names_its_source() {
         assert!(
             reference.contains(source),
             "the reference cites the owning application's documentation at {source}"
+        );
+    }
+}
+
+/// SATISFIES distribution:this-repository-runs-its-previous-release
+///
+/// The hooks and recipes that test the tree name the built binary, and
+/// the ones that manage this repository take `rk` from the devshell,
+/// which carries the pinned release.
+#[test]
+fn every_tree_test_names_the_built_binary() {
+    let justfile = std::fs::read_to_string(repo_path("justfile")).expect("the justfile reads");
+    let envrc = std::fs::read_to_string(repo_path(".envrc")).expect("the .envrc reads");
+    let hooks = std::fs::read_to_string(repo_path(".pre-commit-config.yaml"))
+        .expect("the hook configuration reads");
+    for (file, text) in [("justfile", &justfile), (".envrc", &envrc)] {
+        assert!(
+            !text.contains("PATH_add target/debug") && !text.contains("/target/debug:$PATH"),
+            "{file} puts the tree's rk on PATH"
+        );
+    }
+    let build = justfile
+        .split("\nbuild:\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .expect("the build recipe exists");
+    assert!(
+        build.contains("cargo run -q --") && !build.contains(" rk "),
+        "the scratch landing runs the tree's build by cargo run"
+    );
+    let managing: Vec<&str> = hooks
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("entry: "))
+        .filter(|entry| entry.starts_with("rk "))
+        .collect();
+    assert_eq!(
+        managing,
+        ["rk message --check", "rk status --check --target ."],
+        "only the hooks that manage this repository run rk from PATH"
+    );
+    let flake = std::fs::read_to_string(repo_path("flake.nix")).expect("the flake reads");
+    assert!(
+        flake.contains("url = \"github:gubasso/release-kit/v")
+            && flake.contains("release-kit.packages.${pkgs.stdenv.hostPlatform.system}.default"),
+        "the devshell carries a released rk through the release-kit input"
+    );
+}
+
+/// SATISFIES distribution:this-repository-runs-its-previous-release
+///
+/// This repository records that its environment carries rk, so its
+/// release jobs install no rk of their own.
+#[test]
+fn the_release_jobs_take_rk_from_the_environment() {
+    let config =
+        std::fs::read_to_string(repo_path(".release-kit/config.toml")).expect("the config reads");
+    assert!(
+        config.contains("rk = \"environment\""),
+        "the configuration records the environment route"
+    );
+    for entry in std::fs::read_dir(repo_path(".github/workflows")).expect("the workflows list") {
+        let path = entry.expect("the entry reads").path();
+        let text = std::fs::read_to_string(&path).expect("the workflow reads");
+        assert!(
+            !text.contains("release-kit-installer.sh"),
+            "{} installs an rk of its own",
+            path.display()
         );
     }
 }
@@ -24843,6 +25283,7 @@ fn assess_classifies_a_plain_directory_and_a_release_marker() {
 #[test]
 fn assess_reads_tags_and_long_lived_branches_from_git() {
     let repo = branch_fixture();
+    forget_gate_record(repo.path());
     let verdict = |args: &[&str]| -> serde_json::Value {
         let out = rk()
             .args(["assess", "--json", "--target"])
@@ -25855,7 +26296,7 @@ fn a_second_issue_start_mints_nothing_and_reports_the_seat() {
 
 #[test]
 fn issue_start_checks_out_in_place_under_branches_mode() {
-    let (_parent, repo) = seatable_fixture();
+    let (_parent, repo) = seatable_branches_fixture();
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(
         mock.path().join("before.json"),
@@ -25885,6 +26326,7 @@ fn issue_start_checks_out_in_place_under_branches_mode() {
 #[test]
 fn issue_start_reads_the_mode_from_the_landing_record() {
     let (_parent, repo) = worktree_fixture();
+    forget_gate_record(&repo);
     land_rust(&repo).success();
     let mut manifest = read_manifest(&repo);
     manifest["git"]["checkout_mode"] = serde_json::json!("main-worktree");
@@ -26314,6 +26756,7 @@ fn an_override_that_restates_the_clone_is_accepted() {
 #[test]
 fn a_workflow_flag_disagreeing_with_the_record_refuses() {
     let (_parent, repo) = worktree_fixture();
+    forget_gate_record(&repo);
     land_rust(&repo).success();
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(
@@ -26336,7 +26779,7 @@ fn a_workflow_flag_disagreeing_with_the_record_refuses() {
 /// there whichever of the repository's worktrees named the target.
 #[test]
 fn branches_mode_switches_the_main_checkout_not_the_named_worktree() {
-    let (_parent, repo) = seatable_fixture();
+    let (_parent, repo) = seatable_branches_fixture();
     git_in(&repo, &["branch", "feat/other"]);
     let linked_seat = seat(&repo, "feat/other");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
@@ -26769,7 +27212,8 @@ fn an_issue_url_on_another_host_refuses_with_no_origin_to_read() {
     git_in(repo.path(), &["config", "user.email", "rk@example.invalid"]);
     git_in(repo.path(), &["config", "user.name", "rk test"]);
     std::fs::write(repo.path().join("seed"), "x\n").expect("the seed writes");
-    git_in(repo.path(), &["add", "seed"]);
+    write_gate_record(repo.path());
+    git_in(repo.path(), &["add", "seed", ".release-kit"]);
     git_in(repo.path(), &["commit", "-qm", "chore: seed"]);
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(mock.path().join("before.json"), linked(&[])).expect("the answer writes");
@@ -26801,7 +27245,7 @@ fn an_issue_url_on_another_host_refuses_with_no_origin_to_read() {
 /// forge is written to: git refuses a branch another worktree holds.
 #[test]
 fn a_branches_mode_collision_stops_before_the_gitlab_branch_is_created() {
-    let (_parent, repo) = seatable_fixture();
+    let (_parent, repo) = seatable_branches_fixture();
     git_in(&repo, &["branch", "57-fix-the-csv-upload"]);
     seat(&repo, "57-fix-the-csv-upload");
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
@@ -26882,7 +27326,7 @@ fn a_partial_gitlab_project_answer_mints_nothing() {
 /// before the forge is written to.
 #[test]
 fn a_dirty_main_checkout_stops_before_the_gitlab_branch_is_created() {
-    let (_parent, repo) = seatable_fixture();
+    let (_parent, repo) = seatable_branches_fixture();
     std::fs::write(repo.join("seed"), "changed\n").expect("the change writes");
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
@@ -26909,7 +27353,7 @@ fn a_dirty_main_checkout_stops_before_the_gitlab_branch_is_created() {
 /// dirty tree is no obstacle to adopting it.
 #[test]
 fn a_branch_already_in_the_main_checkout_ignores_a_dirty_tree() {
-    let (_parent, repo) = seatable_fixture();
+    let (_parent, repo) = seatable_branches_fixture();
     with_remote_branch(&repo, "57-fix-the-csv-upload");
     git_in(&repo, &["fetch", "-q", "origin"]);
     git_in(
@@ -26945,7 +27389,7 @@ fn a_branch_already_in_the_main_checkout_ignores_a_dirty_tree() {
 /// repository an inherited hook environment points at.
 #[test]
 fn branches_mode_ignores_an_inherited_hook_environment() {
-    let (_parent, repo) = seatable_fixture();
+    let (_parent, repo) = seatable_branches_fixture();
     with_remote_branch(&repo, "57-fix-the-csv-upload");
     // A second repository, which the hook variables name.
     let (_other_parent, other) = seatable_fixture();
@@ -26989,7 +27433,8 @@ fn every_gitlab_call_names_the_host_the_reference_gave() {
     git_in(repo.path(), &["config", "user.email", "rk@example.invalid"]);
     git_in(repo.path(), &["config", "user.name", "rk test"]);
     std::fs::write(repo.path().join("seed"), "x\n").expect("the seed writes");
-    git_in(repo.path(), &["add", "seed"]);
+    write_gate_record(repo.path());
+    git_in(repo.path(), &["add", "seed", ".release-kit"]);
     git_in(repo.path(), &["commit", "-qm", "chore: seed"]);
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
@@ -35378,8 +35823,30 @@ fn target_with_every_boundary_pending() -> tempfile::TempDir {
         ],
         b"# stale\n",
     );
+    // A landing from before the skills: neither the folders nor the
+    // record carry them, so every skill file is a boundary too.
+    forget_the_skills(target.path(), &mut manifest);
     write_manifest(target.path(), &manifest);
     target
+}
+
+/// Turn a landed target into one an older release landed before the
+/// skills: remove both skill roots and their receipt entries.
+fn forget_the_skills(target: &Path, manifest: &mut serde_json::Value) {
+    for root in [
+        release_kit::skills::CLAUDE_ROOT,
+        release_kit::skills::AGENTS_ROOT,
+    ] {
+        std::fs::remove_dir_all(target.join(root)).expect("the skill root removes");
+        manifest["files"]
+            .as_array_mut()
+            .expect("files")
+            .retain(|file| {
+                !file["destination"]
+                    .as_str()
+                    .is_some_and(|destination| destination.starts_with(&format!("{root}/")))
+            });
+    }
 }
 
 /// Make `manifest` record `bytes` as what each of `destinations` holds,
@@ -36566,11 +37033,6 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "_docs/specs/SPEC-distribution.md",
         "skills-are-part-of-the-payload",
-        "a rule id an immutable record cites",
-    ),
-    (
-        "_docs/specs/SPEC-distribution.md",
-        "an-install-sweeps-what-the-payload-dropped",
         "a rule id an immutable record cites",
     ),
     (
@@ -38803,7 +39265,7 @@ fn integrate_fixture_shaped(
         repo.join(".release-kit/manifest.json"),
         serde_json::to_string_pretty(&serde_json::json!({
             "schema_version": if merge_form.is_some() { 12 } else { 10 },
-            "rk_version": "0.0.0",
+            "rk_version": env!("CARGO_PKG_VERSION"),
             "origin": "init",
             "landed_at": "2026-09-15T00:00:00Z",
             "profile": { "technologies": technologies, "release": release },
@@ -42463,8 +42925,8 @@ fn a_collision_no_replace_passes_reads_not_replaceable() {
     );
 
     // An edited rendered file is a collision `--replace` passes, until
-    // the record is a newer binary's: the upgrade refuses that before any
-    // replace check, so nothing reads replaceable.
+    // the record is a newer binary's: the version gate refuses the
+    // comparison itself, before any row is read.
     let edited = ".github/workflows/release-plz.yml";
     let file = target.path().join(edited);
     let text = std::fs::read_to_string(&file).expect("reads");
@@ -42478,9 +42940,13 @@ fn a_collision_no_replace_passes_reads_not_replaceable() {
     let mut manifest = read_manifest(target.path());
     manifest["rk_version"] = serde_json::Value::from("999.0.0");
     write_manifest(target.path(), &manifest);
-    let row = compare_row(&compare_json(&stage, target.path()), edited).clone();
-    assert_eq!(row["word"], "collision", "{row}");
-    assert_eq!(row["replaceable"], false, "{row}");
+    rk().args(["stage", "compare"])
+        .arg(&stage)
+        .args(["--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("which is older"));
 }
 
 /// SATISFIES staging:the-comparison-is-the-landing-decision
@@ -46056,8 +46522,9 @@ fn land_workflow_only(repo: &Path, extra: &[&str]) -> assert_cmd::assert::Assert
         .assert()
 }
 
-/// Every file under `root` but the repository's own and the seed, as
-/// sorted paths relative to it.
+/// Every file under `root` but the repository's own, the seed, and the
+/// skill packages that every landing carries, as sorted paths relative to
+/// it. The skill tests hold the packages.
 fn landed_files(root: &Path) -> Vec<String> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).expect("the dir reads") {
@@ -46067,7 +46534,11 @@ fn landed_files(root: &Path) -> Vec<String> {
                 .expect("under the root")
                 .to_string_lossy()
                 .into_owned();
-            if relative == ".git" || relative == "seed" {
+            if relative == ".git"
+                || relative == "seed"
+                || relative == release_kit::skills::CLAUDE_ROOT
+                || relative == release_kit::skills::AGENTS_ROOT
+            {
                 continue;
             }
             if path.is_dir() {
@@ -47999,7 +48470,7 @@ fn reftable_rebase_fixture() -> (tempfile::TempDir, PathBuf) {
         repo.join(".release-kit/manifest.json"),
         serde_json::to_string_pretty(&serde_json::json!({
             "schema_version": 12,
-            "rk_version": "0.0.0",
+            "rk_version": env!("CARGO_PKG_VERSION"),
             "origin": "init",
             "landed_at": "2026-09-15T00:00:00Z",
             "profile": { "technologies": [], "release": { "mode": "none" } },
@@ -55368,6 +55839,12 @@ fn message_classes(dir: &Path, text: &str) -> (bool, Vec<String>) {
 fn rk_message_refuses_an_advisory_without_a_releasing_type() {
     let dir = message_fixture();
     write_release_config(dir.path(), "mode = \"automatic\"\ndriver = \"rust\"\n");
+    rewrite_gate_record(dir.path(), |record| {
+        record["profile"] = serde_json::json!({
+            "technologies": ["rust"],
+            "release": { "mode": "automatic", "driver": "rust", "style": "trunk", "line_prefix": "release/" },
+        });
+    });
     let body = "\n\nMoves foo past RUSTSEC-2026-0001.\n";
     let (ok, classes) = message_classes(dir.path(), &format!("chore(deps): bump foo{body}"));
     assert!(!ok, "{classes:?}");

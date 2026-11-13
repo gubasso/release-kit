@@ -251,6 +251,19 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
     })
 }
 
+/// The rk version the project pins, without a leading `v`, where exactly
+/// one manager names release-kit with one version; `None` otherwise,
+/// including a target that does not read.
+#[must_use]
+pub fn pinned_version(target: &Utf8Path) -> Option<String> {
+    let observed = observe(target).ok()?;
+    let entry = observed.entry(observed.wired?)?;
+    entry
+        .read
+        .version()
+        .map(|version| version.trim_start_matches('v').to_owned())
+}
+
 /// Whether an `.envrc` text carries the retired sync line: a line whose
 /// trimmed start is the verb, whatever flags follow.
 #[must_use]

@@ -52,8 +52,7 @@
             }
           }
         ]
-      },
-      "rk": "installer"
+      }
     }
   },
   "files": [
@@ -70,7 +69,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "9682290e7ccb5fea4b53cfd525440c0cd39c1735171e77e31f34dc50dd6a4bff"
+      "sha256": "c330d17117d9f5bb9dc9595fd8a66627cf08f18606b4dc32d4e38e1243dc89c0"
     },
     {
       "destination": ".github/workflows/scorecard.yml",

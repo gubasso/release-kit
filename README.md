@@ -29,7 +29,7 @@ The binary is `rk`.
 - See the pinned tools and their freshness: `rk versions`, and `rk versions --check` to compare each pin upstream.
 - Take `rk` through the tool manager a project already runs and keep it fresh: `rk self-depend add` prints the fragments for one manager and venue pair and seeds the file the project lacks; `rk self-depend check` warns from `.envrc` once a newer release is out, and `rk self-depend sync --apply` moves the pin on your order; `rk self-depend clean` removes what a hand-rolled bump left.
 - Check the host and load the whole surface: `rk doctor` and `rk usage`.
-- Install the agent skills at user scope: `rk skill install` previews; `--apply` writes one package per skill under `~/.claude/skills/` and `~/.agents/skills/`, each carrying the shared gates in its own `references/`.
+- Read the agent skills: every landing writes one package per skill under the project's `.claude/skills/` and `.agents/skills/`, each carrying the shared gates in its own `references/`. Before a landing, `rk skill show <name>` prints a skill, and `--file <path>` one file of it. `rk skill uninstall --apply` removes the copies an earlier release installed under the home.
 - Follow the recipe: `rk guide setup` once per repository, `rk guide release` for every release, `rk guide backport` for a fix crossing to an older line, `rk guide release-lines` for the line's own life, `rk guide landing` for every landing write from stage to cleanup.
 - Start work an issue names: `rk issue start <issue>` previews; `--apply` mints the branch at the forge and seats it, with `rk guide issue` as the procedure.
 - Execute the repository-side setup: `rk setup --target .` previews; `--apply` runs; `rk setup check` proves it.

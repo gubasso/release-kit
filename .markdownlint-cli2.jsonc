@@ -81,9 +81,12 @@
     ".draft/",
     // Generated files follow their generator (the dev environment rule of
     // nix-secrets, home/apps/claude-session/rules/dev-environment.md):
-    // release-plz writes CHANGELOG.md, and rk renders SECURITY.md whole.
+    // release-plz writes CHANGELOG.md, and rk renders SECURITY.md and the
+    // skill packages whole.
     "CHANGELOG.md",
     "SECURITY.md",
+    ".claude/skills/",
+    ".agents/skills/",
     ".obsidian/",
     ".trash/",
     "draft*"

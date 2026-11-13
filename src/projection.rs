@@ -10,8 +10,8 @@
 //! share it byte for byte, so what an agent studies in a stage is what a
 //! landing writes.
 //!
-//! This module reads snippets and blocks through `src/embedded.rs`
-//! directly and reads nothing else: no target file, no environment, no
+//! This module reads snippets, blocks, and the skill packages through
+//! `src/embedded.rs` directly and reads nothing else: no target file, no environment, no
 //! Git state, no clock, no registry, no network. Whatever a projection
 //! needs from the target arrives as [`TargetEvidence`], gathered before
 //! construction by [`evidence::gather`], which lives in its own file so a
@@ -380,6 +380,25 @@ impl Projection {
                     sources: vec![path],
                 });
             }
+        }
+        // The second candidate source beside the catalog: every file of
+        // every skill package, once under each project-scope root, with
+        // the package bytes unchanged.
+        //
+        // SATISFIES distribution:a-landing-carries-the-skills
+        for candidate in skill_candidates()? {
+            if let Some(existing) = candidates
+                .iter()
+                .find(|existing| existing.destination == candidate.destination)
+            {
+                return Err(anyhow::anyhow!(
+                    "{} and the skill packages both ship {}; the embedded sources are defective",
+                    existing.capability,
+                    candidate.destination
+                )
+                .into());
+            }
+            candidates.push(candidate);
         }
         let mut collisions = Vec::new();
         for destination in BLOCK_DESTINATIONS {
@@ -1224,11 +1243,73 @@ pub fn code_scanning_licence_refusal(
     }
 }
 
+/// The candidate source of the skill packages, in the place a catalog
+/// capability takes for every other candidate.
+pub const SKILLS_SOURCE: &str = "agent.skills";
+
+/// The two project-scope roots each skill package lands under: Claude
+/// Code reads the first, and Codex, Gemini CLI, and Copilot CLI read the
+/// second.
+pub const SKILL_ROOTS: [&str; 2] = [crate::skills::CLAUDE_ROOT, crate::skills::AGENTS_ROOT];
+
+/// The package folder, `<root>/<name>`, that a destination under a skill
+/// root sits in, or `None` for any other destination.
+#[must_use]
+pub fn skill_folder(destination: &str) -> Option<String> {
+    SKILL_ROOTS.iter().find_map(|root| {
+        let rest = destination.strip_prefix(root)?.strip_prefix('/')?;
+        let (name, path) = rest.split_once('/')?;
+        (!name.is_empty() && !path.is_empty()).then(|| format!("{root}/{name}"))
+    })
+}
+
+/// Whether `path` is a package folder, `<root>/<name>`, under a skill root.
+#[must_use]
+pub fn is_skill_folder(path: &str) -> bool {
+    SKILL_ROOTS.iter().any(|root| {
+        path.strip_prefix(root)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+    })
+}
+
+/// Every file of every embedded skill package as a rendered candidate,
+/// once under each root, byte for byte.
+fn skill_candidates() -> Result<Vec<Candidate>, RkError> {
+    let mut out = Vec::new();
+    for package in crate::skills::packages()? {
+        for file in &package.files {
+            let source = if file.shared {
+                format!(
+                    "skill-shared/{}",
+                    file.path
+                        .strip_prefix(&format!("{}/", crate::skills::REFERENCES_DIR))
+                        .unwrap_or(&file.path)
+                )
+            } else {
+                format!("skills/{}/{}", package.name, file.path)
+            };
+            for root in SKILL_ROOTS {
+                out.push(Candidate {
+                    capability: SKILLS_SOURCE,
+                    destination: format!("{root}/{}/{}", package.name, file.path),
+                    kind: Kind::Rendered,
+                    placement: Placement::Whole,
+                    bytes: file.bytes.to_vec(),
+                    region: None,
+                    sources: vec![source.clone()],
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// The declared kind of a destination, or `None` for a file the sources
 /// does not classify.
 #[must_use]
 pub fn kind_of(destination: &str) -> Option<Kind> {
-    if BLOCK_DESTINATIONS.contains(&destination) {
+    if BLOCK_DESTINATIONS.contains(&destination) || skill_folder(destination).is_some() {
         return Some(Kind::Rendered);
     }
     KINDS
@@ -3798,7 +3879,7 @@ mod tests {
         let whole: Vec<&str> = projection
             .candidates
             .iter()
-            .filter(|c| c.placement == Placement::Whole)
+            .filter(|c| c.placement == Placement::Whole && c.capability != super::SKILLS_SOURCE)
             .map(|c| c.destination.as_str())
             .collect();
         assert_eq!(whole, ["SECURITY.md", "release-plz.toml"]);

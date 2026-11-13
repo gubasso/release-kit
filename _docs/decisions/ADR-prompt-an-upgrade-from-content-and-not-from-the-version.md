@@ -24,4 +24,4 @@ Enforced by `landing:status-judges-only-under-check`.
 
 ## Status
 
-Implemented — `pending_of` in `src/commands/status.rs`, over the projection `src/landing.rs` builds.
+Superseded by [ADR-gate-every-command-on-the-landing-version](./ADR-gate-every-command-on-the-landing-version.md), in part: `rk_version` now prompts an upgrade. `rk status` keeps its content-based report.

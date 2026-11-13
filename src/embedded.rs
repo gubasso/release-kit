@@ -42,7 +42,8 @@ pub static BLOCKS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/blocks");
 /// The agent skills, one directory per skill.
 pub static SKILLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
-/// The artifacts every skill shares, installed once outside the skill roots.
+/// The artifacts every skill shares, authored once and copied into each
+/// package as `references/<file>`, so every landed package carries them.
 pub static SKILL_SHARED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/skill-shared");
 
 /// The pinned-tool registry.

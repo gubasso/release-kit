@@ -1,6 +1,7 @@
 {
   "Exclude": [
     "^(CHANGELOG|SECURITY)\\.md$",
+    "^\\.(claude|agents)/skills/",
     "^\\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\\.yml$",
     "^\\.release-kit/(manifest|setup-proof)\\.json$",
     "^\\.spec-driven-docs/manifest\\.json$",

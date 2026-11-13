@@ -17,6 +17,7 @@
 //! the readers of a target's recorded destinations and the submodules
 //! that lock, write, and record.
 pub mod apply;
+pub mod gate;
 pub mod invariants;
 pub mod lock;
 pub mod manifest;

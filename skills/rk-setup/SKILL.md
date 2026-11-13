@@ -7,7 +7,7 @@ compatibility: Provisions the rk binary where the host lacks it. Landing files i
 
 # rk-setup
 
-Set up the release-kit convention in a project. Keep a landed project current with the installed `rk`. Provision the `rk` it runs on. Each run takes three inputs:
+Set up the release-kit convention in a project. Keep a landed project current with the installed `rk`. Provision the `rk` it runs on. Where a file named here is missing, `rk skill show rk-setup --file <path>` prints it. Each run takes three inputs:
 
 - The state of the target decides which tasks are possible.
 - The request picks among them.
@@ -52,7 +52,7 @@ An unreadable record never counts as an absent one, so never land over it.
 3. Leave rendered bytes to release-kit. Never edit a file or a region that `rk` renders. Never hand-edit a generated artifact workflow. Change its configuration, as the binding directs. Then regenerate it. Never author a tag.
 4. Use an `rk` verb first. Where no verb covers a step, use the forge CLI. Say that the step runs outside the convention.
 5. Report from observation. Report each step's outcome from what a check observed, never from the operator's word alone. A credential this runtime cannot reach leaves a step `unknown`, which is an observation boundary. Never ask for a secret so that a check can pass.
-6. Keep one record per repository. Keep the skills at user scope. A target carries one release-kit record at its root and no skill file. `rk skill install` puts the skills under the user's home.
+6. Keep one record per repository. Every landing carries the skills beside it. No step installs a skill under the home.
 7. Let the repository record how it obtains `rk`. The `provision` task proposes the method, the operator picks it, and every install runs as a gated step.
 8. Keep no state of your own, with one exception. These are the records:
    - The target.

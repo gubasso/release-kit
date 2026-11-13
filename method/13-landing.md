@@ -6,6 +6,10 @@ How a release-kit write reaches a repository. The installed binary stages its ow
 
 `rk` renders one release: its own. The operator chooses the installed version through the manager the project records. The `provision` task of the setup skill proposes that manager, records the answer in the repository, and runs the install as a step the operator approves. `rk self-depend` serves the manager's fragment, and a host install is recorded as the acquisition answer in `.release-kit/config.toml`. No `rk` verb installs `rk`: the manager the operator picked does. No landing verb fetches, resolves, or runs another release. A stage, a landing, and a status report therefore describe what the binary on `PATH` does, and nothing else. A record whose `rk_version` is newer than the binary refuses and names the version to install, because rewriting a newer landing with older bytes is a downgrade rather than an upgrade.
 
+The skills follow the same version. Every landing writes the skill packages of the installed release into the project, under `.claude/skills/` and `.agents/skills/`, and the record lists each file. An agent in the project therefore reads the skills of the `rk` that the project pins, and the next pin move brings the next skills through `rk upgrade`. A skill folder that the record does not attribute is the operator's, and no landing replaces it.
+
+Every command checks the record against the binary before it acts. A writing command refuses a landing of another release and names the fix: `rk upgrade` where the binary is newer, and the project's own environment where the record is newer. A read-only command warns and runs. So a pin move and its `rk upgrade` land as one change.
+
 Reading how the project obtains `rk` comes before any comparison. A version the operator did not choose is not a version to migrate to. Where the request did not authorize an update, the installed state is the whole report, and the migration work waits.
 
 ## The stage is evidence

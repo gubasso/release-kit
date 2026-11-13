@@ -1,6 +1,7 @@
-//! The user-scope skill record: what this tool last wrote outside a project.
+//! The user-scope skill record: what an earlier release last wrote outside a
+//! project. `rk skill uninstall` reads it to remove only those copies.
 //!
-//! Skill destinations live under the invoking user's home, where no target
+//! Those destinations live under the invoking user's home, where no target
 //! repository reaches, so without a record the installer's only reference is
 //! the skills it currently carries. That makes a copy an older release wrote
 //! indistinguishable from a file the user edited, and every release touching a

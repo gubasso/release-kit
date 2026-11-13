@@ -30,7 +30,10 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
 use crate::held;
-use crate::projection::{Candidate, Placement, Projection, ProjectionInput, TargetEvidence};
+use crate::projection::{
+    Candidate, Placement, Projection, ProjectionInput, TargetEvidence, is_skill_folder,
+    skill_folder,
+};
 
 /// The environment variable the interruption proof sets to the relative
 /// destination whose rename is to fail on purpose.
@@ -393,6 +396,11 @@ pub fn name_replacements(prepared: &mut Prepared, replace: &[String]) -> Result<
         if prepared.replacements.contains(path) {
             continue;
         }
+        // A skill folder the record does not attribute takes no replace:
+        // the landing refuses it by name, whatever the operator named.
+        if refused_skill_folder(&prepared.collisions, path) {
+            continue;
+        }
         let Some(index) = prepared
             .collisions
             .iter()
@@ -463,7 +471,14 @@ pub fn decide(
             replaceable: false,
         })
         .collect();
+    let refused = skill_folder_collisions(root, recorded, projection)?;
+    collisions.extend(refused.iter().cloned());
     for candidate in &projection.candidates {
+        if skill_folder(&candidate.destination)
+            .is_some_and(|folder| refused.iter().any(|collision| collision.path == folder))
+        {
+            continue;
+        }
         let record = recorded.and_then(|record| record.file(&candidate.destination));
         let located = match locate(root, &candidate.destination)? {
             Located::Collision(reason) => {
@@ -681,6 +696,143 @@ impl Located {
             Self::Absent | Self::Collision(_) => Ok(Vec::new()),
         }
     }
+}
+
+/// Whether an adoption creates `destination`: a skill file the decision
+/// pass found absent, in a package folder that is not refused.
+#[must_use]
+pub fn adoption_creates(prepared: &Prepared, destination: &str) -> bool {
+    skill_folder(destination).is_some()
+        && prepared
+            .decision(destination)
+            .is_some_and(|decision| decision.action == Action::Created)
+}
+
+/// Whether `path` is, or sits under, a skill folder that a collision
+/// refuses with no replace.
+#[must_use]
+pub fn refused_skill_folder(collisions: &[Collision], path: &str) -> bool {
+    collisions.iter().any(|collision| {
+        !collision.replaceable
+            && is_skill_folder(&collision.path)
+            && (path == collision.path || path.starts_with(&format!("{}/", collision.path)))
+    })
+}
+
+/// One collision for each skill package folder that exists, that the
+/// record does not attribute, and that holds anything other than the
+/// package's own bytes. No flag clears it.
+///
+/// A folder that does not exist is created. A folder that holds only
+/// files equal to their candidates is what a landing stopped part way
+/// leaves, so it is matched rather than refused.
+///
+/// SATISFIES distribution:an-unattributed-skill-folder-is-never-replaced
+fn skill_folder_collisions(
+    root: &File,
+    recorded: Option<&Manifest>,
+    projection: &Projection,
+) -> Result<Vec<Collision>, RkError> {
+    let mut folders: Vec<String> = projection
+        .candidates
+        .iter()
+        .filter_map(|candidate| skill_folder(&candidate.destination))
+        .collect();
+    folders.dedup();
+    let mut out = Vec::new();
+    for folder in folders {
+        let prefix = format!("{folder}/");
+        let attributed = recorded.is_some_and(|record| {
+            record
+                .files
+                .iter()
+                .any(|file| file.destination.starts_with(&prefix))
+        });
+        if attributed {
+            continue;
+        }
+        if let Some(reason) = skill_folder_refusal(root, &folder, projection)? {
+            out.push(Collision {
+                path: folder,
+                reason,
+                replaceable: false,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Why an unattributed package folder refuses, or `None` where it is
+/// absent or holds only the package's own bytes.
+fn skill_folder_refusal(
+    root: &File,
+    folder: &str,
+    projection: &Projection,
+) -> Result<Option<String>, RkError> {
+    const UNATTRIBUTED: &str = "is a skill folder that no receipt attributes to release-kit";
+    let dir = match held::hold_dir_existing(root, Path::new(folder)) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Ok(Some(format!(
+                "{UNATTRIBUTED}, and it cannot be held: {error}"
+            )));
+        }
+    };
+    let mut pending = vec![(held::proc_path(&dir), String::new())];
+    while let Some((path, relative)) = pending.pop() {
+        let listing = match std::fs::read_dir(&path) {
+            Ok(listing) => listing,
+            Err(error) => {
+                return Ok(Some(format!(
+                    "{UNATTRIBUTED}, and it cannot be read: {error}"
+                )));
+            }
+        };
+        for entry in listing {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let inner = if relative.is_empty() {
+                name
+            } else {
+                format!("{relative}/{name}")
+            };
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            if metadata.is_dir() {
+                pending.push((entry.path(), inner));
+                continue;
+            }
+            let destination = format!("{folder}/{inner}");
+            let Some(candidate) = projection
+                .candidates
+                .iter()
+                .find(|candidate| candidate.destination == destination)
+            else {
+                return Ok(Some(format!(
+                    "{UNATTRIBUTED}, and it holds {inner}, which the package does not carry"
+                )));
+            };
+            if !metadata.is_file() {
+                return Ok(Some(format!(
+                    "{UNATTRIBUTED}, and its {inner} is not a regular file"
+                )));
+            }
+            match std::fs::read(entry.path()) {
+                Ok(bytes) if bytes == candidate.bytes => {}
+                Ok(_) => {
+                    return Ok(Some(format!(
+                        "{UNATTRIBUTED}, and its {inner} differs from the package"
+                    )));
+                }
+                Err(error) => {
+                    return Ok(Some(format!(
+                        "{UNATTRIBUTED}, and its {inner} cannot be read: {error}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Locate `destination` inside the held `root`: the parent chain is held
@@ -1108,6 +1260,10 @@ fn action_of(prepared: &Prepared, origin: Origin, destination: &str) -> Option<A
         Origin::Adopt if prepared.replacements.iter().any(|path| path == destination) => {
             Some(Action::Replaced)
         }
+        // A skill file whose package folder is absent is new in this
+        // release, so no operator content can sit there: the adoption
+        // creates it.
+        Origin::Adopt if adoption_creates(prepared, destination) => Some(Action::Created),
         Origin::Adopt => Some(Action::Preserved),
         Origin::Init | Origin::Upgrade => prepared.decision(destination).map(|d| d.action),
     }

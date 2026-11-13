@@ -24,4 +24,4 @@ Enforced by `distribution:a-skill-has-one-owner` and `placement:a-third-party-de
 
 ## Status
 
-Implemented: `src/cli/skill.rs`, `src/commands/skill.rs`, `runbooks/setup.md`, `_docs/reference/REFERENCE-skill-scopes-sources.md`.
+Superseded by [ADR-land-the-skills-into-each-project-at-its-pin](./ADR-land-the-skills-into-each-project-at-its-pin.md), in part: the user-scope install. The per-project placement decision stands.

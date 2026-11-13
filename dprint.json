@@ -12,8 +12,8 @@
   ],
   // The generated files follow their generator (the dev environment rule of
   // nix-secrets, home/apps/claude-session/rules/dev-environment.md):
-  // release-plz writes CHANGELOG.md, rk writes SECURITY.md and the
-  // .release-kit files, and sdd writes the rest: its manifest and lint
+  // release-plz writes CHANGELOG.md, rk writes SECURITY.md, the skill
+  // packages, and the .release-kit files, and sdd writes the rest: its manifest and lint
   // configuration, and the specs, the schema, and the templates it ships,
   // which stay equal to the copy `sdd spec <name>` prints.
   "excludes": [
@@ -23,6 +23,8 @@
     "AGENTS.md",
     "CHANGELOG.md",
     "SECURITY.md",
+    ".claude/skills",
+    ".agents/skills",
     ".release-kit/manifest.json",
     ".release-kit/setup-proof.json",
     ".spec-driven-docs/manifest.json",

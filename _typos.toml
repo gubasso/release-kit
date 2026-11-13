@@ -6,6 +6,8 @@ extend-exclude = [
   "tests/fixtures/**",
   "/CHANGELOG.md",
   "/SECURITY.md",
+  "/.claude/skills/**",
+  "/.agents/skills/**",
   "/.github/workflows/code-scanning-codeql.yml",
   "/.github/workflows/pr-title.yml",
   "/.github/workflows/release-plz.yml",

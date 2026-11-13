@@ -2,7 +2,8 @@
 
 use clap::{Args, Subcommand, ValueEnum};
 
-/// Manage the agent skills at user scope.
+/// Read the agent skills this binary carries, and remove the copies an
+/// earlier release installed under the home.
 #[derive(Debug, Args)]
 pub struct SkillArgs {
     /// What to do with the skills.
@@ -15,37 +16,35 @@ pub struct SkillArgs {
 pub enum SkillAction {
     /// List the skills the binary carries.
     List,
-    /// Print one skill.
+    /// Print one skill's `SKILL.md`, or one file of its package.
     Show {
         /// The skill's name.
         name: String,
+        /// One file of the package, relative to the skill's folder, such
+        /// as `references/pre-flight-gate.md`.
+        #[arg(long)]
+        file: Option<String>,
     },
-    /// Install the skills at user scope, previewing by default.
+    /// Retired: every landing carries the skills. Names the landing, and
+    /// refuses under `--apply`.
     Install {
-        /// Which agent's skill directory to install into.
+        /// Kept so that an older call reads the retirement, not a usage
+        /// error.
         #[arg(long, value_enum, default_value_t = Agent::All)]
         agent: Agent,
-        /// Where the skills land.
-        #[arg(long, value_enum, default_value_t = Scope::User)]
-        scope: Scope,
-        /// Write the files; without it the destinations are listed.
+        /// Refuse, because no rk verb writes a skill under the home.
         #[arg(long)]
         apply: bool,
-        /// Overwrite a destination whose bytes differ from the embedded skill.
-        #[arg(long, requires = "apply")]
-        force: bool,
         /// Emit one JSON object on stdout instead of the human report.
         #[arg(long)]
         json: bool,
     },
-    /// Remove the installed skills, previewing by default.
+    /// Remove the skill copies an earlier release installed under the
+    /// home, previewing by default.
     Uninstall {
         /// Which agent's skill directory to remove from.
         #[arg(long, value_enum, default_value_t = Agent::All)]
         agent: Agent,
-        /// Where the skills live.
-        #[arg(long, value_enum, default_value_t = Scope::User)]
-        scope: Scope,
         /// Remove the files; without it the removals are listed.
         #[arg(long)]
         apply: bool,
@@ -65,17 +64,4 @@ pub enum Agent {
     Codex,
     /// Both directories.
     All,
-}
-
-/// Where an install lands.
-///
-/// One value, and a flag rather than a silent default, because the scope is
-/// the decision an operator most needs stated: an agent resolves a skill by
-/// name across scopes, so the skills have exactly one owner and no project
-/// scope is offered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub enum Scope {
-    /// The home-directory skill roots, shared across every repository.
-    User,
 }

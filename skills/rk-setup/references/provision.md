@@ -34,5 +34,5 @@ Where `wired` names a manager or `state` reads `host`, and the request does not 
 
 1. In the dev environment, `rk --version` names the version the repository records.
 2. `rk self-depend status --target . --json` names the wired manager or the host decision, and `envrc_check` matches the answer to the freshness line.
-3. Where the `skill-sources` probe of `rk doctor` fails, run `rk skill install --apply`.
+3. Where the `skill-shadow` probe of `rk doctor` fails, gate its `next` line for the operator.
 4. Run the general pre-flight again, now with the binary.

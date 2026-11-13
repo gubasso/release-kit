@@ -13,7 +13,9 @@
 //! The installer reports what it did as typed [`Action`]s and renders
 //! nothing; the handler in `commands::skill` owns both renderings.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -187,6 +189,7 @@ fn check_destination(destination: &Utf8Path) -> Result<(), RkError> {
 /// later release has since changed. That is an upgrade, not a conflict, and
 /// naming it one would make every skill-touching release refuse on files
 /// nobody edited.
+#[cfg(test)]
 fn conflicts(planned: &[Planned], record: &Record) -> Result<Vec<String>, RkError> {
     let mut conflicts = Vec::new();
     for entry in planned {
@@ -284,6 +287,7 @@ fn remove_installed(
 /// reaches here — the write loop stopped before this destination, or a
 /// read-only root refused every write including this one — and reporting the
 /// second as unrestored sends the operator to verify files no write reached.
+#[cfg(test)]
 fn rollback(backups: &BTreeMap<Utf8PathBuf, Option<Vec<u8>>>) -> Vec<Utf8PathBuf> {
     let mut unrestored = Vec::new();
     for (destination, previous) in backups {
@@ -302,6 +306,7 @@ fn rollback(backups: &BTreeMap<Utf8PathBuf, Option<Vec<u8>>>) -> Vec<Utf8PathBuf
 }
 
 /// The refusal a failed apply carries, naming the cause and what it restored.
+#[cfg(test)]
 fn abort(unrestored: &[Utf8PathBuf], cause: &str) -> RkError {
     if unrestored.is_empty() {
         return RkError::Refused(format!(
@@ -316,7 +321,11 @@ fn abort(unrestored: &[Utf8PathBuf], cause: &str) -> RkError {
 }
 
 /// Install every embedded skill package under each root, previewing by
-/// default.
+/// default: the writer that every 0.9.x release ran.
+///
+/// No `rk` verb runs it now, because every landing carries the skills. It
+/// stays for the tests, which build with it the home that an earlier release
+/// left, so the uninstall is proved against that home.
 ///
 /// `record_path` names the user-scope digest record: read to tell a stale copy
 /// this tool wrote from a file the user edited, and rewritten after a
@@ -334,6 +343,7 @@ fn abort(unrestored: &[Utf8PathBuf], cause: &str) -> RkError {
 /// bytes neither reference accounts for and `force` is unset, or when a write
 /// fails partway, in which case the destinations are restored first.
 /// Returns [`RkError::Io`] when a destination exists but cannot be read.
+#[cfg(test)]
 pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>, RkError> {
     check_legacy_root(layout.legacy_shared.as_deref(), &layout.record)?;
     let record_path = layout.record.as_path();
@@ -447,6 +457,7 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
 
 /// The bytes each planned destination holds before an apply, or `None` for
 /// one that does not exist yet.
+#[cfg(test)]
 fn back_up(planned: &[Planned]) -> Result<BTreeMap<Utf8PathBuf, Option<Vec<u8>>>, RkError> {
     let mut backups = BTreeMap::new();
     for entry in planned {

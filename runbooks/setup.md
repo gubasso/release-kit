@@ -13,17 +13,14 @@ The commands are the operator's to run. An agent serves a runbook and states the
 Every step below assumes these prerequisites. Each one is a probe, not a change.
 
 - `rk` on `PATH`: `rk --version`. Two ways put it there. A host install, `cargo install release-kit`, serves one version to the whole host. The devshell pin below gives each project its own `rk` from its flake and keeps the pin fresh. One project runs one of the two, never both. `rk self-depend add --host --apply` records a host install as the acquisition answer of the configuration. `rk self-depend status --target .` then reports `state host`.
-- The skills of this binary, installed once per user, at user scope. User scope is the only mode. `rk doctor` reports the skill probes ok, and `rk skill install --apply` is the repair. The skills install into two roots:
-  - `~/.claude/skills`, which Claude Code reads
-  - `~/.agents/skills`, which these agents read:
+- No user-scope copy of the skills: `rk doctor` reports `skill-shadow` ok. The landing writes the skills of this binary into the project, under two roots:
+  - `.claude/skills`, which Claude Code reads
+  - `.agents/skills`, which these agents read:
     - Codex
     - Gemini CLI
     - Copilot CLI
 
-  No system-wide mode exists, by decision and not by omission. Every install channel takes the same step. `just install` runs it as its second line. These channels leave it to the operator:
-  - Cargo
-  - the curl-pipe installer
-  - a packaged `rk`
+  Before the landing, `rk skill show rk-setup` prints the setup skill, and `rk skill show rk-setup --file <path>` prints each file it names. A copy that an earlier release installed under the home shadows the project's, and `rk skill uninstall --apply` is the repair.
 - The forge CLI: `rk doctor` reports it ok. `rk` sends its own web requests and signs the App token itself, so it needs neither `curl` nor `openssl`.
 - A hook manager that reads `.pre-commit-config.yaml`, such as prek or pre-commit, which the host installs: its own version call answers. Step 4d installs its hooks in the clone, and the `pre-merge-commit` gate of `rk integrate` is one of them.
 - An OS keyring where the forge bootstrap needs one: `secret-tool --version`, on a host shell and never in a container.

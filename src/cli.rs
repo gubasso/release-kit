@@ -89,7 +89,8 @@ pub enum Commands {
     Issue(issue::IssueArgs),
     /// Inspect and prune the run journals.
     Runs(runs::RunsArgs),
-    /// Manage the agent skills at user scope.
+    /// Read the agent skills, and remove the copies an earlier release
+    /// installed under the home.
     Skill(skill::SkillArgs),
     /// Wire release-kit as a consumer's dependency and keep its pin fresh.
     SelfDepend(self_depend::SelfDependArgs),

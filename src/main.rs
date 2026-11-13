@@ -48,6 +48,9 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<(), RkError> {
+    // The version gate reads the target's record before any handler, and
+    // writes nothing.
+    release_kit::landing::gate::require_aligned(&cli.command)?;
     match &cli.command {
         Commands::Method(args) => commands::read::method(args),
         Commands::Binding(args) => commands::read::binding(args),

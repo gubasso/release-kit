@@ -4,7 +4,7 @@ The steps of [migration](../method/10-migration.md) as commands, in the chapter'
 
 ## Prerequisites
 
-The setup runbook's prerequisites, unchanged: `rk` on `PATH`, this binary's skills installed at user scope, the forge CLI authenticated, and a clean working tree. A migration adds two. The target classifies as brownfield, and the work runs on the operator's own branch, so the trunk keeps releasing through the predecessor until that branch merges.
+The setup runbook's prerequisites, unchanged: `rk` on `PATH`, no user-scope copy of the skills, the forge CLI authenticated, and a clean working tree. A migration adds two. The target classifies as brownfield, and the work runs on the operator's own branch, so the trunk keeps releasing through the predecessor until that branch merges.
 
 ```bash
 rk assess --target .

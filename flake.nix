@@ -30,6 +30,23 @@
       inputs.release-kit.follows = "";
       inputs.spec-driven-docs.follows = "spec-driven-docs";
     };
+    # The rk that manages this repository: a released tag, as in every
+    # consumer. It runs the hooks, rk worktree, rk integrate, and this
+    # repository's own landing. The rk built from the tree runs only under
+    # test, where a caller names target/debug/rk or cargo run. The tag in
+    # this URL is the version and flake.lock is the content pin, and
+    # rk self-depend sync --apply moves the two together.
+    #
+    # Once the pinned release carries a release-kit input of its own, add
+    # inputs.release-kit.follows = ""; here. Without it, each pin move nests
+    # the older release in flake.lock, one node per release.
+    release-kit = {
+      url = "github:gubasso/release-kit/v0.9.15";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "rust-overlay";
+      inputs.spec-driven-docs.follows = "spec-driven-docs";
+      inputs.exobrain-tech.follows = "exobrain-tech";
+    };
   };
 
   outputs =
@@ -39,6 +56,7 @@
       rust-overlay,
       spec-driven-docs,
       exobrain-tech,
+      release-kit,
     }:
     let
       # The support claim, not a convenience: the one system named here is
@@ -109,16 +127,14 @@
           # share one compiler. The installed package owns its own runtime
           # closure in nix/package.nix.
           #
-          # rk is absent on purpose, and it is the one tool this shell may not
-          # carry. A binary embeds the sources it was compiled from, so an rk
-          # built when the lock last moved judges the current snippets against a
-          # stale copy of them and reports drift that is not there. This
-          # repository's rk is the one it just built: the justfile puts
-          # target/debug on PATH for the sweep, and .envrc does the same for an
-          # interactive shell.
+          # rk is the pinned release of the release-kit input, not the tree's
+          # build. The pinned rk judges only its own landing against its own
+          # embedded sources, and the tests judge the tree's snippets.
           default = pkgs.mkShell {
             packages = [
               toolchain
+              # rk, the previous release that manages this repository.
+              release-kit.packages.${pkgs.stdenv.hostPlatform.system}.default
               spec-driven-docs.packages.${pkgs.stdenv.hostPlatform.system}.default
               # exobrain, the store guard that .envrc runs once a day.
               exobrain-tech.packages.${pkgs.stdenv.hostPlatform.system}.default

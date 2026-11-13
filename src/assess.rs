@@ -296,7 +296,12 @@ pub fn own_landing(
         return Ok(own);
     };
     for candidate in &projection.candidates {
-        if candidate.kind != landing::Kind::Rendered || candidate.region.is_some() {
+        // A skill copy is no evidence of a landing: an agent's own skill
+        // installer can write the same bytes into a project.
+        if candidate.kind != landing::Kind::Rendered
+            || candidate.region.is_some()
+            || crate::projection::skill_folder(&candidate.destination).is_some()
+        {
             continue;
         }
         if landing::read_recorded(target, &candidate.destination)?.as_deref()

@@ -347,13 +347,35 @@ fn verify(
     let mut files = Vec::new();
     // An ill-formed marked document lists beside the mismatches rather
     // than refusing alone, so one run still names everything unadoptable.
-    let defects: Vec<String> = prepared
+    let mut defects: Vec<String> = prepared
         .projection
         .collisions
         .iter()
         .map(|collision| collision.reason.clone())
         .collect();
+    // A skill folder the record does not attribute refuses whatever
+    // --replace names, beside every other defect.
+    defects.extend(
+        prepared
+            .collisions
+            .iter()
+            .filter(|collision| apply::refused_skill_folder(&prepared.collisions, &collision.path))
+            .map(|collision| format!("{} ({})", collision.path, collision.reason)),
+    );
     for candidate in &prepared.projection.candidates {
+        if apply::refused_skill_folder(&prepared.collisions, &candidate.destination) {
+            continue;
+        }
+        // A skill file whose package folder is absent is new in this
+        // release, and the adoption creates it.
+        if apply::adoption_creates(prepared, &candidate.destination) {
+            files.push(FileEntry {
+                path: candidate.destination.clone(),
+                kind: candidate.kind.as_str(),
+                action: "created",
+            });
+            continue;
+        }
         let judged = apply::judge_adoption(held, candidate)?;
         let answers = judged.replaceable(candidate.kind) && named(&candidate.destination);
         let action = match judged {
@@ -401,7 +423,9 @@ fn verify(
             action,
         });
     }
-    if let Some(stray) = replace.iter().find(|path| !answered.contains(path)) {
+    if let Some(stray) = replace.iter().find(|path| {
+        !answered.contains(path) && !apply::refused_skill_folder(&prepared.collisions, path)
+    }) {
         return Err(RkError::Usage(format!(
             "--replace {stray} names no conflict this adoption has; a conflict is a rendered destination that differs from the candidate or is missing"
         )));

@@ -1,17 +1,12 @@
-//! The agent skills: the embedded files, the user-scope record, and the installer.
+//! The agent skills: the embedded files, the packages every landing writes,
+//! and the user-scope record and installer that earlier releases used.
 //!
-//! Skills land under the invoking user's home and never into a target
-//! repository. An agent resolves a skill by name across scopes, so a second
-//! copy under one name is a second entry offering the same skill, with no way
-//! for the operator to tell which one runs. One installed binary already
-//! serves every repository, and the skills routing into it belong at the same
-//! scope.
-//!
-//! That places every destination outside the reach of `rk init`, which has a
-//! target directory to compare against and a landing to refuse. Here there is
-//! no target and no manifest, so [`record`] stands in for one: it answers the
-//! single question the installer cannot otherwise answer — are these bytes
-//! ones we wrote?
+//! Every landing writes each package into the target, under the project's
+//! `.claude/skills/` and `.agents/skills/`, and the landing record vouches for
+//! each file. No verb writes a skill under the home any more: an agent
+//! resolves a skill by name across scopes, and a home copy shadows the
+//! project's. [`record`] and [`installer`] stay so that `rk skill uninstall`
+//! removes exactly the copies an earlier release wrote there.
 
 pub mod installer;
 pub mod record;

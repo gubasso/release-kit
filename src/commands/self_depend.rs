@@ -1734,7 +1734,7 @@ mod tests {
     #[test]
     fn the_self_depend_check_schema_snapshot_holds() {
         let warnings = vec![
-            "rk 0.9.16 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"
+            "rk 0.10.0 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"
                 .to_owned(),
         ];
         let report = CheckReport {
@@ -1742,7 +1742,7 @@ mod tests {
             target: Some("/srv/widget"),
             outcome: "cached",
             pin: Some("v0.9.15"),
-            latest: Some("v0.9.16"),
+            latest: Some("v0.10.0"),
             cache: Some(
                 "/srv/cache/release-kit/self-depend/widget-0123456789abcdef.json".to_owned(),
             ),
@@ -1751,7 +1751,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-check/1","target":"/srv/widget","outcome":"cached","pin":"v0.9.15","latest":"v0.9.16","cache":"/srv/cache/release-kit/self-depend/widget-0123456789abcdef.json","fetched":false,"warnings":["rk 0.9.16 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"]}"#
+            r#"{"schema":"rk.self-depend-check/1","target":"/srv/widget","outcome":"cached","pin":"v0.9.15","latest":"v0.10.0","cache":"/srv/cache/release-kit/self-depend/widget-0123456789abcdef.json","fetched":false,"warnings":["rk 0.10.0 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"]}"#
         );
         let bare = CheckReport {
             schema: "rk.self-depend-check/1",

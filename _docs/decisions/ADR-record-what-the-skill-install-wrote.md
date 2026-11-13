@@ -32,4 +32,4 @@ Enforced by `distribution:a-stale-skill-is-not-a-conflict`, `distribution:an-ins
 
 ## Status
 
-Implemented — `src/skills/record.rs` holds the record; `src/skills/installer.rs` plans, sweeps, and restores from it.
+Superseded by [ADR-land-the-skills-into-each-project-at-its-pin](./ADR-land-the-skills-into-each-project-at-its-pin.md), in part: the install. `rk skill uninstall` still reads the record.

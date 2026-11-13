@@ -40,25 +40,15 @@ build:
 # instead, and every check on the manual stage carries pre-merge-commit
 # too, so this sweep is a superset of the integration gate.
 #
-# The build comes first because several hooks call this checkout's own rk,
-# which they find on PATH. Loading the configuration for the manual run is
-# what refuses an invalid hook configuration, so no separate
-# validate step remains.
+# The hooks that manage this repository, rk message and rk status, run the
+# rk release that the devshell pins. The hooks that test the tree build it
+# themselves: cargo test, and just build through cargo run. Loading the
+# configuration for the manual run is what refuses an invalid hook
+# configuration, so no separate validate step remains.
 check:
-    cargo build -q
-    PATH="$(pwd)/target/debug:$PATH" prek run --hook-stage manual --all-files
+    prek run --hook-stage manual --all-files
 
-# Install this checkout as the user's rk, plus the user-scope agent skills.
-# The installed skills are this checkout's build artifact and never an edit
-# source, so the apply overwrites whatever an older release left in the home
-# roots. The binary is called by the path cargo just wrote it to, since the
-# first install of all runs before any shell has it on PATH.
-install:
-    cargo install --path . --locked
-    "${CARGO_HOME:-$HOME/.cargo}/bin/rk" skill install --apply --force
-
-# Remove the user-scope skills, then the binary; the binary owns the file
-# list, so the skills go first, while it still exists.
+# Remove the skill copies an earlier release installed under the home. Every
+# landing now carries the skills, so the home keeps none.
 uninstall:
     rk skill uninstall --apply
-    cargo uninstall release-kit

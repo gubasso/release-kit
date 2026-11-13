@@ -139,3 +139,36 @@ tracked:
       - advance last_checked
     dependents:
       - _docs/comparison-docs/COMPARISON-release-tools-for-a-uv-project.md
+  - id: skill-scope-precedence
+    path: _docs/reference/REFERENCE-skill-scopes-sources.md
+    last_checked: 2026-11-13
+    cadence_days: 90
+    why: the agents move their skill roots and their collision order between releases
+    revalidate:
+      - re-read https://code.claude.com/docs/en/skills and https://learn.chatgpt.com/docs/build-skills
+      - update the project-scope facts in _docs/reference/REFERENCE-skill-scopes-sources.md, and every rule that rests on them
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-distribution.md
+  - id: project-scope-skill-tools
+    path: _docs/reference/REFERENCE-skill-scopes-sources.md
+    last_checked: 2026-11-13
+    cadence_days: 180
+    why: Prisma and gh change how and where they sync project-scope skills
+    revalidate:
+      - re-read https://www.prisma.io/docs/cli/skills and https://cli.github.com/manual/gh_skill_install
+      - update the project-scope facts in _docs/reference/REFERENCE-skill-scopes-sources.md
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-distribution.md
+  - id: cargo-dist-version-mismatch
+    path: _docs/reference/REFERENCE-skill-scopes-sources.md
+    last_checked: 2026-11-13
+    cadence_days: 180
+    why: cargo-dist can reword or drop its refusal of a mismatched cargo-dist-version
+    revalidate:
+      - re-read https://github.com/axodotdev/cargo-dist/blob/main/cargo-dist/src/errors.rs
+      - update the cargo-dist fact in _docs/reference/REFERENCE-skill-scopes-sources.md
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-version-gate.md

@@ -102,6 +102,7 @@ repos:
 #   release-plz.yml, and scorecard.yml   rk, rendered whole
 #   .github/workflows/release.yml        cargo-dist
 #   .release-kit/manifest.json and .release-kit/setup-proof.json   rk
+#   .claude/skills/ and .agents/skills/  rk, the skill packages it lands
 #   .spec-driven-docs/manifest.json and _docs/.markdownlint-cli2.jsonc   sdd
 #   the specs, the tracking schema, and the templates under _docs/ that
 #   sdd ships, which stay equal to its shipped copy   sdd
@@ -118,13 +119,13 @@ repos:
       - id: trailing-whitespace
         stages: [pre-commit, manual, pre-merge-commit]
         args: [--markdown-linebreak-ext=md]
-        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: end-of-file-fixer
         stages: [pre-commit, manual, pre-merge-commit]
-        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: mixed-line-ending
         args: [--fix=lf]
-        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: check-added-large-files
         args: ['--maxkb=16384']
         stages: [pre-commit, manual, pre-merge-commit]
@@ -173,6 +174,15 @@ repos:
         entry: cargo test
         language: system
         files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|blocks/|skills/|versions\.toml$|LICENSE)'
+        pass_filenames: false
+      # The rk on PATH is the release that flake.nix pins, so the hooks that
+      # manage this repository run that release and not a build of the tree.
+      # owner: devshell (project-environment) rk must be the release that this project's environment pins.
+      - id: the-devshell-rk-is-the-pinned-release
+        name: the devshell rk is the pinned release
+        entry: sh -c 'rk self-depend status --target . | grep -Fq "(same as this binary)" || { echo "the rk on PATH is not the release that flake.nix pins; run the rk of this project through direnv exec ." >&2; exit 1; }'
+        language: system
+        files: '^(flake\.(nix|lock)|\.envrc)$'
         pass_filenames: false
       # The three checks below are scope `both` at moment push: each is too
       # costly for a commit, so it runs at pre-push, and in the manual sweep

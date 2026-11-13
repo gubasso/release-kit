@@ -78,7 +78,7 @@ The emerging cross-vendor location is `.agents/skills/`, discovered automaticall
 
 Corroborating: secondary sources only. The primary specification at agentskills.io was not fetched, so treat the dates and the product counts as unverified.
 
-Bearing: the two roots the installer writes are the two the convention names. A project-scope root is excluded by `distribution:a-skill-has-one-owner`, because an agent resolves a skill by name across scopes. Agent Plugins 1.0 is a thing to watch rather than a thing to build for.
+Bearing: the two roots that the landing writes are the two the convention names. Since 2026-11-13 the landing writes them at project scope, under `distribution:a-skill-has-one-owner`, and no rk verb writes them under the home, because an agent resolves a skill by name across scopes. Agent Plugins 1.0 is a thing to watch rather than a thing to build for.
 
 ## Preview, force, and honest idempotence
 
@@ -88,7 +88,7 @@ Bearing: the two roots the installer writes are the two the convention names. A 
 - <https://github.com/cli-guidelines/cli-guidelines>
 - <https://clispec.dev/>
 
-Bearing: the preview-by-default inversion across `rk init`, `rk skill install`, and `rk setup`, which is stricter than the guideline, and the per-step idempotence table in the setup documentation, which is the accurate statement the CLI Spec asks for rather than a blanket claim.
+Bearing: the preview-by-default inversion across `rk init`, `rk skill uninstall`, and `rk setup`, which is stricter than the guideline, and the per-step idempotence table in the setup documentation, which is the accurate statement the CLI Spec asks for rather than a blanket claim.
 
 ## Machine-readable streams
 

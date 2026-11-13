@@ -1,15 +1,15 @@
-//! `rk skill`: the agent skills at user scope.
+//! `rk skill`: the reader of the agent skills, and the removal of the
+//! copies an earlier release installed under the home.
 //!
-//! This handler resolves three things — the home directory, the roots the
-//! chosen agent implies, and the record that sits beside them — and renders
-//! what the installer reports, in both the human and the machine form.
-//! Install and uninstall semantics live in `skills::installer`; nothing
-//! here decides them.
+//! Every landing carries the skills, so `install` only names the landing.
+//! `uninstall` resolves the home, the roots the chosen agent implies, and
+//! the record that sits beside them, and renders what the installer
+//! reports, in both the human and the machine form.
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
-use crate::cli::skill::{Agent, Scope, SkillAction, SkillArgs};
+use crate::cli::skill::{Agent, SkillAction, SkillArgs};
 use crate::error::RkError;
 use crate::output::Output;
 use crate::skills;
@@ -48,29 +48,37 @@ pub fn run(args: &SkillArgs) -> Result<(), RkError> {
             }
             Ok(())
         }
-        SkillAction::Show { name } => show(name),
-        SkillAction::Install {
-            agent,
-            scope,
-            apply,
-            force,
-            json,
-        } => {
-            let layout = layout(*agent, *scope)?;
-            let actions = installer::install(&layout, *apply, *force)?;
-            render(Output::new(*json), "install", *apply, &actions)
-        }
-        SkillAction::Uninstall {
-            agent,
-            scope,
-            apply,
-            json,
-        } => {
-            let layout = layout(*agent, *scope)?;
+        SkillAction::Show { name, file } => show(name, file.as_deref()),
+        SkillAction::Install { apply, json, .. } => retired_install(Output::new(*json), *apply),
+        SkillAction::Uninstall { agent, apply, json } => {
+            let layout = layout(*agent)?;
             let actions = installer::uninstall(&layout, *apply)?;
             render(Output::new(*json), "uninstall", *apply, &actions)
         }
     }
+}
+
+/// What `rk skill install` says now that every landing carries the skills.
+const RETIRED_INSTALL: &str = "rk lands its skills into each project through `rk init` and `rk upgrade`. To remove the copies that an earlier release wrote under your home, run `rk skill uninstall --apply`.";
+
+/// The retired install: the text and exit 0 for a preview, a refusal
+/// under `--apply`, and nothing written either way.
+///
+/// SATISFIES distribution:a-skill-has-one-owner
+fn retired_install(out: Output, apply: bool) -> Result<(), RkError> {
+    if apply {
+        return Err(RkError::Usage(RETIRED_INSTALL.to_owned()));
+    }
+    out.result_line(RETIRED_INSTALL);
+    let next = vec!["rk skill uninstall --apply".to_owned()];
+    out.next(&next);
+    out.emit(&Report {
+        schema: "rk.skill/1",
+        command: "install",
+        mode: "preview",
+        actions: &[],
+        next: &next,
+    })
 }
 
 /// Render what the installer reported: the human lines by default, the
@@ -151,19 +159,39 @@ fn applied_line(command: &str, action: &Action) -> String {
 /// What plausibly follows each outcome.
 fn next_lines(command: &str, apply: bool) -> Vec<String> {
     match (command, apply) {
-        ("install", false) => vec!["rk skill install --apply".to_owned()],
-        ("install", true) => vec![
-            "rk skill list names the installed skills".to_owned(),
-            "an agent now resolves each skill by name".to_owned(),
+        (_, false) => vec![format!("rk skill {command} --apply")],
+        (_, true) => vec![
+            "rk init and rk upgrade land the skills into each project".to_owned(),
+            "rk doctor reports any user-scope copy that is left".to_owned(),
         ],
-        (_, false) => vec!["rk skill uninstall --apply".to_owned()],
-        (_, true) => vec!["rk skill install lands them again".to_owned()],
     }
 }
 
-/// Print one skill's `SKILL.md`, byte-identical to the authored file.
-fn show(name: &str) -> Result<(), RkError> {
+/// Print one skill's `SKILL.md`, byte-identical to the authored file, or
+/// one file of its package, byte for byte.
+///
+/// SATISFIES distribution:a-skill-is-readable-before-a-landing
+fn show(name: &str, file: Option<&str>) -> Result<(), RkError> {
     let out = Output::human();
+    if let Some(path) = file {
+        let package = skills::packages()?
+            .into_iter()
+            .find(|package| package.name == name)
+            .ok_or_else(|| RkError::NotFound {
+                kind: "skill",
+                name: name.to_owned(),
+            })?;
+        let found = package
+            .files
+            .iter()
+            .find(|candidate| candidate.path == path)
+            .ok_or_else(|| RkError::NotFound {
+                kind: "skill file",
+                name: format!("{name}/{path}"),
+            })?;
+        out.result_bytes(found.bytes);
+        return Ok(());
+    }
     skills::all()?
         .into_iter()
         .find(|skill| skill.name == name)
@@ -182,8 +210,7 @@ fn show(name: &str) -> Result<(), RkError> {
 }
 
 /// The roots a run touches, and the record that vouches for them.
-fn layout(agent: Agent, scope: Scope) -> Result<Layout, RkError> {
-    let Scope::User = scope;
+fn layout(agent: Agent) -> Result<Layout, RkError> {
     let home = home()?;
     Ok(Layout {
         roots: roots(&home, agent),

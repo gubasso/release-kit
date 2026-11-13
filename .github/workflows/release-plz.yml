@@ -148,20 +148,6 @@ jobs:
         with:
           use-flakehub: false
           use-gha-cache: true
-      # The project records that its environment carries no rk, so this job
-      # installs rk at the landing version. The installer checks the
-      # archive's SHA-256 before it installs, and puts rk at
-      # $RUNNER_TEMP/rk/rk. The prefix keeps the runner's PATH, so the
-      # steps below find that rk, and every tool rk calls still comes from
-      # the environment. Where a comment below says the environment must
-      # carry rk, this step answers for it.
-      - name: install rk
-        env:
-          RK_VERSION: "0.9.15"
-        run: |
-          set -eu
-          curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/gubasso/release-kit/releases/download/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
-          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
       # The release app commits and tags, so git takes its identity, read
       # from the app token the way release-plz's own action reads it. gh is
       # the runner's, never the project's: it carries the forge credential.
@@ -314,20 +300,6 @@ jobs:
           fi
           sed 's/^release_always = false$/release_always = true/' release-plz.toml > "$RUNNER_TEMP/release-plz-rc.toml"
       - uses: DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19
-      # The project records that its environment carries no rk, so this job
-      # installs rk at the landing version. The installer checks the
-      # archive's SHA-256 before it installs, and puts rk at
-      # $RUNNER_TEMP/rk/rk. The prefix keeps the runner's PATH, so the
-      # steps below find that rk, and every tool rk calls still comes from
-      # the environment. Where a comment below says the environment must
-      # carry rk, this step answers for it.
-      - name: install rk
-        env:
-          RK_VERSION: "0.9.15"
-        run: |
-          set -eu
-          curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/gubasso/release-kit/releases/download/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
-          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
 
       # rk, release-plz, and the toolchain come from the project's development
       # environment, through the prefix the project records, so the

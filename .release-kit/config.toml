@@ -75,9 +75,9 @@ merge_access_level = 40 # F: floor thirty
 # release jobs run release-plz and the toolchain through it.
 [dev_environment]
 run = "nix develop --command"
-# The devshell carries no rk on purpose (see flake.nix), so each job that
-# runs rk installs the landing release through the shell installer.
-rk = "installer"
+# The devshell carries the rk release that flake.nix pins, so each job that
+# runs rk takes it from the environment and installs none.
+rk = "environment"
 
 [[dev_environment.github.setup]]
 uses = "DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea"

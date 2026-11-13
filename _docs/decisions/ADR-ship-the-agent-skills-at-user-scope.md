@@ -29,4 +29,4 @@ Enforced by `distribution:skills-are-part-of-the-payload`, `distribution:a-skill
 
 ## Status
 
-Implemented — `src/skills.rs` embeds the payload and `rk init` projects no skill.
+Superseded by [ADR-land-the-skills-into-each-project-at-its-pin](./ADR-land-the-skills-into-each-project-at-its-pin.md), in part: the user-scope install and the rule that `rk init` lands no skill.

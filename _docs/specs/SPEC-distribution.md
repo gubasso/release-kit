@@ -15,23 +15,23 @@
   - [`distribution:a-forge-document-answers-its-own-axis` — A forge document answers its own axis](#distributiona-forge-document-answers-its-own-axis--a-forge-document-answers-its-own-axis)
   - [`distribution:skills-are-part-of-the-payload` — Skills are part of the payload](#distributionskills-are-part-of-the-payload--skills-are-part-of-the-payload)
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
+  - [`distribution:a-landing-carries-the-skills` — A landing carries the skills](#distributiona-landing-carries-the-skills--a-landing-carries-the-skills)
+  - [`distribution:an-unattributed-skill-folder-is-never-replaced` — An unattributed skill folder is never replaced](#distributionan-unattributed-skill-folder-is-never-replaced--an-unattributed-skill-folder-is-never-replaced)
   - [`distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format](#distributiona-skill-obeys-the-portable-format--a-skill-obeys-the-portable-format)
   - [`distribution:a-skill-plans-before-it-acts` — A skill plans before it acts](#distributiona-skill-plans-before-it-acts--a-skill-plans-before-it-acts)
   - [`distribution:a-skill-checks-its-host-before-it-plans` — A skill checks its host before it plans](#distributiona-skill-checks-its-host-before-it-plans--a-skill-checks-its-host-before-it-plans)
   - [`distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home](#distributionshared-skill-artifacts-have-one-home--shared-skill-artifacts-have-one-home)
-  - [`distribution:the-doctor-answers-for-the-installed-skills` — The doctor answers for the installed skills](#distributionthe-doctor-answers-for-the-installed-skills--the-doctor-answers-for-the-installed-skills)
-  - [`distribution:skill-install-previews-before-writing` — A skill install previews before writing](#distributionskill-install-previews-before-writing--a-skill-install-previews-before-writing)
-  - [`distribution:a-stale-skill-is-not-a-conflict` — A stale skill is not a conflict](#distributiona-stale-skill-is-not-a-conflict--a-stale-skill-is-not-a-conflict)
-  - [`distribution:a-skill-install-restores-on-failure` — A skill install restores on failure](#distributiona-skill-install-restores-on-failure--a-skill-install-restores-on-failure)
-  - [`distribution:an-install-sweeps-what-the-payload-dropped` — An install sweeps what the payload dropped](#distributionan-install-sweeps-what-the-payload-dropped--an-install-sweeps-what-the-payload-dropped)
+  - [`distribution:a-skill-is-readable-before-a-landing` — A skill is readable before a landing](#distributiona-skill-is-readable-before-a-landing--a-skill-is-readable-before-a-landing)
+  - [`distribution:the-doctor-names-a-shadowing-user-copy` — The doctor names a shadowing user copy](#distributionthe-doctor-names-a-shadowing-user-copy--the-doctor-names-a-shadowing-user-copy)
   - [`distribution:a-skill-destination-is-a-regular-file` — A skill destination is a regular file](#distributiona-skill-destination-is-a-regular-file--a-skill-destination-is-a-regular-file)
   - [`distribution:skill-uninstall-removes-only-what-it-wrote` — A skill uninstall removes only what it wrote](#distributionskill-uninstall-removes-only-what-it-wrote--a-skill-uninstall-removes-only-what-it-wrote)
+  - [`distribution:this-repository-runs-its-previous-release` — This repository runs its previous release](#distributionthis-repository-runs-its-previous-release--this-repository-runs-its-previous-release)
 
 <!--TOC-->
 
 ## Purpose
 
-Rules governing what the `rk` binary carries and what it writes outside a target repository. The distribution is one installed binary embedding the method, the bindings, the snippets, the blocks, the guidance, the skills, and the pinned-tool registry, read directly by every command that renders, stages, serves, or installs them, and every rule here binds whoever authors that binary. The binary answers for its own release alone: the candidate a stage shows and the landing production writes both come from these embedded sources, bound by `SPEC-staging.md` and `SPEC-landing.md`. The files `rk init` lands inside a target are governed by the invariants in `method/01-invariants.md`, which an adopting project owns; the documentation this repository writes about itself is governed by `SPEC-instance.md`. No adopting project adopts this spec: its subject is the installer, so a project holding these rules would hold obligations it cannot violate and verifications it cannot run. The external sources these rules were checked against are in `../reference/REFERENCE-distribution-sources.md`.
+Rules governing what the `rk` binary carries, what it writes outside a target repository, the skill packages that every landing writes into a target, and how this repository takes its own previous release. The distribution is one installed binary embedding the method, the bindings, the snippets, the blocks, the guidance, the skills, and the pinned-tool registry, read directly by every command that renders, stages, serves, or installs them, and every rule here binds whoever authors that binary. The binary answers for its own release alone: the candidate a stage shows and the landing production writes both come from these embedded sources, bound by `SPEC-staging.md` and `SPEC-landing.md`. The files `rk init` lands inside a target are governed by the invariants in `method/01-invariants.md`, which an adopting project owns; the documentation this repository writes about itself is governed by `SPEC-instance.md`. No adopting project adopts this spec: its subject is the installer, so a project holding these rules would hold obligations it cannot violate and verifications it cannot run. The external sources these rules were checked against are in `../reference/REFERENCE-distribution-sources.md`.
 
 ## Requirements
 
@@ -163,15 +163,39 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-has-one-owner` — A skill has one owner
 
-The distribution MUST install every skill at user scope alone, and `rk init` MUST land no skill into a target, because an agent resolves a skill by name across scopes and a second copy under one name is a second entry offering the same skill. User scope is the only mode rather than one branch of a choice: the vendors share a user-scope convention and no system-scope one, so `Scope` stays a single-variant enum and no staging mode, vendor tree, or system path exists.
+The landing MUST own every skill at project scope, and every `rk` verb MUST leave the skill roots under the home unwritten, because an agent resolves a skill by name across scopes and one host copy cannot match the rk that each project pins. The version of a landed skill is the `rk_version` of the record, so a skill file carries no stamp. `rk skill uninstall` stays, and it only removes what an earlier release wrote under the home.
 
-#### Scenario: A project is initialized inside a home that already carries the skills
+#### Scenario: A project is initialized inside a home that carries no skill
 
-- GIVEN a home directory holding the installed skills and a target repository
-- WHEN `rk init --technology rust --target . --apply` runs
-- THEN the target carries no `.claude/skills/` or `.agents/skills/` file, so each skill name resolves to exactly one file
+- GIVEN an empty home directory and a target repository
+- WHEN `rk init --technology rust --target . --apply` runs, and then `rk skill install --apply`
+- THEN the target carries both skills under both roots, the install refuses and names the landing, and the home holds no skill file
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(init_lands_both_skills_into_both_roots) or test(skill_install_refuses_and_names_the_landing)'`
+
+### `distribution:a-landing-carries-the-skills` — A landing carries the skills
+
+Every landing MUST project each file of each package that `skills::packages()` returns, once under `.claude/skills/<name>/` and once under `.agents/skills/<name>/`, byte-equal to the package, and MUST record each one as a `rendered` destination, because the record then judges drift, retires a dropped file, and prompts an upgrade with no mechanism of its own. `.claude/skills/` serves Claude Code, and `.agents/skills/` serves Codex, Gemini CLI, and Copilot CLI, as `../reference/REFERENCE-skill-scopes-sources.md` records. A landing of this repository by its pinned release follows that release's projection, under `distribution:this-repository-runs-its-previous-release`.
+
+#### Scenario: A landing from an older release meets a newer binary
+
+- GIVEN a target landed by a release that projected no skill
+- WHEN `rk upgrade --apply` runs
+- THEN both skills land under both roots, each file equals the package bytes, and `rk status --check` reports `current`
+
+Verify: `cargo nextest run -E 'test(init_lands_both_skills_into_both_roots) or test(a_landed_skill_is_byte_equal_to_the_package) or test(an_upgrade_brings_the_skills_to_an_older_landing) or test(an_edited_landed_skill_is_drift) or test(a_skill_file_the_package_drops_is_retired)'`
+
+### `distribution:an-unattributed-skill-folder-is-never-replaced` — An unattributed skill folder is never replaced
+
+Where a package folder exists under a skill root and the record does not attribute it, `rk init`, `rk adopt`, and `rk upgrade` MUST refuse before the first write, name the folder, and accept no `--replace` for it, because a skill folder that the landing did not write holds the operator's own skill under one name. A full folder, a partial one, an unreadable one, and one that holds only an extra file all refuse. A package folder that does not exist is created, which covers the first landing and the adoption of a target that predates the skills.
+
+#### Scenario: A hand-written skill shares a name
+
+- GIVEN a target whose `.claude/skills/rk-setup/` holds only a file that the operator wrote, and no record
+- WHEN `rk init --apply` runs, and then again with `--replace` naming that file
+- THEN both runs exit 73 naming the folder, and the target is unchanged
+
+Verify: `cargo nextest run -E 'test(a_landing_refuses_an_unattributed_skill_folder) or test(a_landing_creates_an_absent_skill_folder) or test(adoption_of_a_pre_skill_target_brings_the_skills)'`
 
 ### `distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format
 
@@ -199,11 +223,11 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-checks-its-host-before-it-plans` — A skill checks its host before it plans
 
-The distribution MUST carry a shared pre-flight gate as its own artifact beside the plan gate, and every skill MUST route to it ahead of the plan gate, because a skill routes to verbs whose dependencies live outside the repository — a forge CLI, a signing tool, the skills and shared artifacts installed under the home — and a plan written without observing them fails at the step nobody checked. It MUST be shared rather than authored per skill, so every skill checks the same host facts the same way. It MUST check the host alone, report a missing `rk` instead of stopping on it, and hand the status report or its diagnostic back to the skill, judging nothing in either, because a setup skill provisions the binary it runs on and only the skill knows what a finding means for its tasks. It MUST run whatever the request carries, and no flag MUST waive it, because a check a request can decline is one no skill can rely on having run. It MUST name every probe judging the skill installation itself, so the catalog and the gate cannot drift into checking different things.
+The distribution MUST carry a shared pre-flight gate as its own artifact beside the plan gate, and every skill MUST route to it ahead of the plan gate, because a skill routes to verbs whose dependencies live outside the repository, a forge CLI, a signing tool, or a user-scope skill copy that shadows the landed one, and a plan written without observing them fails at the step nobody checked. It MUST be shared rather than authored per skill, so every skill checks the same host facts the same way. It MUST check the host alone, report a missing `rk` instead of stopping on it, and hand the status report or its diagnostic back to the skill, judging nothing in either, because a setup skill provisions the binary it runs on and only the skill knows what a finding means for its tasks. It MUST run whatever the request carries, and no flag MUST waive it, because a check a request can decline is one no skill can rely on having run. It MUST name every probe that judges the skills on the host, so the catalog and the gate cannot drift into checking different things.
 
 #### Scenario: A skill probe is added to the catalog and the pre-flight is not updated
 
-- GIVEN a probe judging the skill installation that the pre-flight gate does not name
+- GIVEN a probe judging the skills on the host that the pre-flight gate does not name
 - WHEN the test suite reads the catalog's declaration and the gate
 - THEN it fails and names the probe, because an agent following the gate would never read that probe's answer
 
@@ -217,97 +241,49 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home
 
-The distribution MUST author what the skills share once, under `skill-shared/`, and `rk skill install` MUST copy it into every package as `references/<file>`, so each installed package carries every file it reads and a skill names each shared artifact by a path relative to its own root. A package is the unit every skill installer writes and the format defines no location two skills share, so a read outside the skill directory is a hop a sandboxed agent can prompt on and an agent with no home access cannot take (`../reference/REFERENCE-skill-format-sources.md`). Copies the installer writes from one embedded source keep one authored file, so a fix still lands once. The first apply that copies them into every agent root removes the copies an earlier release installed once under `~/.local/state/release-kit/skills/shared/`, where the record vouches for them, and names any it cannot vouch for rather than removing it. A run limited to one agent family leaves that root alone, because an older manual under the other family's root still reads the gates there.
+The distribution MUST author what the skills share once, under `skill-shared/`, and every package MUST carry it as `references/<file>`, so each landed package holds every file it reads and a skill names each shared artifact by a path relative to its own root. A package is the unit that the landing writes, and the format defines no location two skills share, so a read outside the skill directory is a hop a sandboxed agent can prompt on (`../reference/REFERENCE-skill-format-sources.md`). The copies come from one embedded source, so a fix still lands once.
 
-#### Scenario: One agent family is uninstalled while the other stays
+#### Scenario: A shared gate is edited
 
-- GIVEN a home carrying the skills under both agent roots
-- WHEN `rk skill uninstall --agent codex --apply` runs
-- THEN the packages under `.claude/skills` still carry their gate copies, because each package owns its own
+- GIVEN an edit to `skill-shared/plan-gate.md`
+- WHEN the binary is rebuilt and a target is landed
+- THEN `references/plan-gate.md` of each package under both roots equals the edited file
 
-Verify: `cargo nextest run -E 'binary(cli) or test(a_one_family_install_keeps_the_legacy_gates)'`
+Verify: `cargo nextest run -E 'test(a_landed_skill_is_byte_equal_to_the_package) or test(skill_show_prints_one_reference_file)'`
 
-### `distribution:the-doctor-answers-for-the-installed-skills` — The doctor answers for the installed skills
+### `distribution:a-skill-is-readable-before-a-landing` — A skill is readable before a landing
 
-The probe catalog MUST report whether each package installed under the invoking user's home, its gate copies included, is the one the running binary carries, and whether the roots an install writes accept writes at all, because one binary serves every repository while its skills sit in two agent roots under a home that can be carried between machines in part. `skill-gate` MUST judge the gate copies inside each installed package, and `skill-sources` MUST judge each `SKILL.md` and the skill's own reference files. A difference the record vouches for is a stale install and its remediation MUST be the plain apply; a difference the record cannot account for is the operator's own and its remediation MUST be the forcing one, per `distribution:a-stale-skill-is-not-a-conflict`. An absent agent root MUST NOT be a failure on its own, because `--agent` selects one family and leaves the other's root untouched. These probes MUST NOT create any destination they judge, because a preview must still be able to report a root as absent.
+`rk skill show <name>` MUST print the package's `SKILL.md` byte-identical to the authored file, and `rk skill show <name> --file <path>` MUST print that file of the package byte for byte and exit 66 on a path the package lacks, because an agent in a project with no landing has no skill on disk and reads the setup skill from the binary.
 
-#### Scenario: A package lacks a gate
+#### Scenario: An agent starts in a project with no landing
 
-- GIVEN a home whose packages hold every `SKILL.md` while one package's `references/plan-gate.md` is gone
+- GIVEN a folder with no record, and a home with no skill copy
+- WHEN `rk skill show rk-setup --file references/pre-flight-gate.md` runs
+- THEN it prints the authored gate, and an unknown path exits 66
+
+Verify: `cargo nextest run -E 'test(skill_show_prints_one_reference_file) or test(skill_show_is_byte_identical_to_the_authored_file)'`
+
+### `distribution:the-doctor-names-a-shadowing-user-copy` — The doctor names a shadowing user copy
+
+The probe `skill-shadow` MUST fail while a `SKILL.md` of an embedded skill exists under `~/.claude/skills/<name>/` or `~/.agents/skills/<name>/`, MUST name `rk skill uninstall --apply` as the fix, and MUST pass on a folder without `SKILL.md`, because Claude Code resolves "personal over project" and a home copy left behind wins over the landed one. Where the `SKILL.md` is an edited copy that the uninstall kept, the probe MUST tell the operator to read it and remove it by hand. It stays a soft probe, and it creates nothing it judges.
+
+#### Scenario: An uninstall kept the operator's notes
+
+- GIVEN `~/.claude/skills/rk-setup/` holding only a file that the operator wrote
 - WHEN `rk doctor` runs
-- THEN the gate probe fails, names the missing copy, and gives the install that lands it, while the `skill-sources` probe still reports the skills as installed
+- THEN `skill-shadow` passes, and it fails once a `SKILL.md` appears there
 
-#### Scenario: An installed skill is not the running binary's
-
-- GIVEN a home holding a skill whose bytes differ from the embedded skill
-- WHEN `rk doctor` runs
-- THEN the `skill-sources` probe fails and names the running version, asking for the forcing apply only where the record cannot vouch for the bytes it would overwrite
-
-Verify: `cargo nextest run -E 'binary(cli)'`
-
-### `distribution:skill-install-previews-before-writing` — A skill install previews before writing
-
-When run without `--apply`, `rk skill install` MUST list every destination and write nothing, and where a destination holds bytes neither the embedded sources nor the user-scope record account for, an apply MUST refuse atomically, naming every conflict in one run.
-
-#### Scenario: A home directory already carries an edited skill
-
-- GIVEN `~/.claude/skills/rk-release/SKILL.md` holding bytes the user wrote
-- WHEN `rk skill install --apply` runs
-- THEN it exits 73 naming that destination, the file is unchanged, and the second root is untouched
-
-Verify: `cargo nextest run -E 'binary(cli)'`
-
-### `distribution:a-stale-skill-is-not-a-conflict` — A stale skill is not a conflict
-
-Where a destination holds the bytes a previous apply recorded writing there, `rk skill install --apply` MUST replace it without `--force`.
-
-#### Scenario: A release edits a skill the user never touched
-
-- GIVEN a home whose installed skills came from an older release of this binary
-- WHEN a newer `rk skill install --apply` runs
-- THEN every destination is upgraded, no conflict is reported, and `just install` stays idempotent across releases
-
-Verify: `cargo nextest run -E 'binary(cli)'`
-
-### `distribution:a-skill-install-restores-on-failure` — A skill install restores on failure
-
-If an apply fails partway, then `rk skill install` MUST restore every destination it backed up and name both the path that failed and any it could not restore.
-
-#### Scenario: The second skill root cannot be written
-
-- GIVEN two roots, the second holding a destination the process cannot create
-- WHEN `rk skill install --apply` has already rewritten the first root
-- THEN the first root is restored to its prior bytes, so no two agents read different versions of one skill
-
-Verify: `cargo nextest run -E 'kind(lib)'`
-
-### `distribution:an-install-sweeps-what-the-payload-dropped` — An install sweeps what the payload dropped
-
-Where the record vouches for a destination under the roots a run touches and the embedded sources no longer name it, `rk skill install --apply` and `rk skill uninstall --apply` MUST remove it, and MUST leave a destination whose bytes the record does not vouch for.
-
-#### Scenario: A release renames a skill
-
-- GIVEN a home holding a skill directory an earlier release installed and this one dropped
-- WHEN `rk skill install --apply` runs
-- THEN the leftover and the directory it emptied are gone, so an agent offers one entry per skill
-
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(the_shadow_probe_names_a_user_scope_manual) or test(doctor_reports_every_probe_and_exits_0)'`
 
 ### `distribution:a-skill-destination-is-a-regular-file` — A skill destination is a regular file
 
-Where a destination is a symlink, is not a regular file, or sits under the legacy shared root reached through a symlinked directory, `rk skill install` and `rk skill uninstall` MUST refuse before writing or removing anything, whatever `--force` was given.
+Where a destination under the home is a symlink, is not a regular file, or sits under the legacy shared root reached through a symlinked directory, `rk skill uninstall` MUST refuse before it removes anything.
 
 #### Scenario: A destination is symlinked out of the home
 
 - GIVEN `~/.claude/skills/rk-release/SKILL.md` symlinked to a file elsewhere
-- WHEN `rk skill install --apply --force` runs
+- WHEN `rk skill uninstall --apply` runs
 - THEN it exits 73 naming the symlink, and the file it points at is unchanged
-
-#### Scenario: The legacy shared root is reached through a symlinked directory
-
-- GIVEN `~/.local/state/release-kit/skills` symlinked to a directory elsewhere, so every legacy destination the sweep would remove resolves outside the home
-- WHEN `rk skill install --apply --force` runs
-- THEN it exits 73 naming the symlink, and the directory it points at is unchanged, because the destination check sees only the final component and cannot see the link above it
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -322,3 +298,15 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 - THEN the `SKILL.md` is removed, the added file and its directory remain, and a re-run succeeds
 
 Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:this-repository-runs-its-previous-release` — This repository runs its previous release
+
+This repository's devshell MUST carry the rk of a released tag through its `release-kit` flake input, and every caller that tests the tree MUST name `target/debug/rk` or `cargo run`, because the tool's own repository is a consumer of its previous release, and an rk built from the tree is newer than the landing record after every release. The pinned rk runs the hooks, `rk worktree`, `rk integrate`, and the repository's own landing. The rk built from the tree runs only under `cargo nextest`, `just build`, and the scratch landing. After a release publishes, one change moves the pin and runs `rk upgrade` on this repository.
+
+#### Scenario: A release bumps the crate version
+
+- GIVEN a merged release that moves `Cargo.toml` to a new version
+- WHEN an agent commits the next change in this repository
+- THEN the hooks run the pinned rk, which matches the landing record, and the version gate passes
+
+Verify: `cargo nextest run -E 'test(every_tree_test_names_the_built_binary) or test(the_release_jobs_take_rk_from_the_environment)' && prek run the-devshell-rk-is-the-pinned-release --all-files`

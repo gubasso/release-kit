@@ -7,7 +7,7 @@
 //! candidate tree over the embedded sources, `landing` the parameters and
 //! the direct writes into a target, `stage` the disposable candidate
 //! stage over the projection, `self_depend` the consumer pin, `skills`
-//! the user-scope skill install, `digest` the one hash type, and `error`
+//! the skill packages and the removal of the user-scope copies, `digest` the one hash type, and `error`
 //! the one exit-code matrix.
 
 pub mod applog;

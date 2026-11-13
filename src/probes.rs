@@ -9,7 +9,6 @@
 
 use std::process::Command;
 
-use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
 use crate::detect::Forge;
@@ -85,7 +84,7 @@ impl ProbeResult {
 /// gate's pre-flight phase must name each of these, and the test holding it to
 /// that must not have to spawn a forge CLI or write into the operator's home
 /// to learn what they are.
-pub const SKILL_PROBES: [&str; 3] = ["skill-roots", "skill-gate", "skill-sources"];
+pub const SKILL_PROBES: [&str; 1] = ["skill-shadow"];
 
 /// Every executable a Hard probe requires, paired with the nixpkgs package
 /// whose `bin/` supplies it in the installed package's wrapper.
@@ -184,9 +183,7 @@ pub fn run_all() -> Vec<ProbeResult> {
         shell(),
         git(),
         state_root(),
-        skill_roots(),
-        skill_gate(),
-        skill_sources(),
+        skill_shadow(),
         git_remote(),
         forge_cli(
             "gh-auth",
@@ -443,288 +440,81 @@ fn state_root() -> ProbeResult {
     }
 }
 
-/// The destinations `rk skill install` writes accept writes: the two agent
-/// roots under the invoking user's home.
+/// No user-scope copy of an embedded skill shadows the project's landed
+/// one.
 ///
-/// A root can exist and still refuse, which is what a read-only bind of an
-/// agent directory produces, so what is tested is the nearest existing
-/// ancestor — the directory an install would actually have to write
-/// through. The probe creates nothing: a preview must still be able to
-/// report a root as absent, and a probe that made it exist would take that
-/// answer away.
-fn skill_roots() -> ProbeResult {
+/// Claude Code resolves a name collision as "personal over project", and
+/// Codex lists both copies, so a `SKILL.md` an earlier release installed
+/// under the home wins over the skills every landing now carries. A folder
+/// without `SKILL.md`, such as one that keeps the operator's notes after
+/// an uninstall, passes. The probe creates nothing.
+///
+/// SATISFIES distribution:the-doctor-names-a-shadowing-user-copy
+fn skill_shadow() -> ProbeResult {
     let id = SKILL_PROBES[0];
     let Ok(home) = crate::skills::home() else {
         return ProbeResult::failed(
             id,
             ProbeClass::Soft,
-            "neither HOME nor USERPROFILE is set, so no skill root resolves",
+            "neither HOME nor USERPROFILE is set, so no user-scope skill root resolves",
             "export HOME",
         );
     };
-    let mut refused = Vec::new();
-    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
-        let root = home.join(root);
-        let Some(existing) = nearest_existing(&root) else {
-            refused.push(format!("no ancestor of {root} exists"));
-            continue;
-        };
-        if let Err(source) = accepts_a_write(&existing) {
-            refused.push(format!("{existing} is not writable: {source}"));
-        }
-    }
-    if refused.is_empty() {
-        ProbeResult::ok(
-            id,
-            ProbeClass::Soft,
-            format!("the skill roots under {home} accept writes"),
-        )
-    } else {
-        ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            refused.join("; "),
-            format!("make the skill roots under {home} writable"),
-        )
-    }
-}
-
-/// Every installed package carries the gates, and they are this binary's.
-///
-/// This is the probe that answers the one failure a package without its
-/// gates produces: the skill stays resolvable by name and cannot read the
-/// gates it is told to read first. A skill that cannot read them runs
-/// neither its pre-flight nor its plan phase, which is the whole reason they
-/// are files rather than prose.
-fn skill_gate() -> ProbeResult {
-    let id = SKILL_PROBES[1];
-    let Some(context) = installed_context(id) else {
-        return no_home(id);
-    };
-    let (home, packages, record) = match context {
-        Ok(context) => context,
-        Err(failed) => return failed,
-    };
-    let planned = installed_files(&home, &packages, true);
-    if planned.is_empty() {
+    let Ok(skills) = crate::skills::all() else {
         return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            format!("no agent skill root exists under {home}"),
-            "rk skill install --apply",
-        );
-    }
-    let found = judge(planned, &record);
-    if let Some(first) = found.missing.first() {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            format!("a gate every skill reads before acting is missing from its package: {first}"),
-            "rk skill install --apply",
-        );
-    }
-    if !found.differing.is_empty() {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            format!(
-                "{} installed gate copies are not this binary's; rk is {}",
-                found.differing.len(),
-                env!("CARGO_PKG_VERSION")
-            ),
-            reinstall(found.all_recorded),
-        );
-    }
-    ProbeResult::ok(
-        id,
-        ProbeClass::Soft,
-        format!("{} installed gate copies are this binary's", found.matching),
-    )
-}
-
-/// The skills installed under this home are the ones this binary carries.
-///
-/// One binary serves every repository, so a skill under an agent root and
-/// the `rk` on PATH are two artifacts that can be updated apart: a home
-/// shared with a container, a sandbox, or another machine can hold skills
-/// some other build installed. The probe names that drift rather than
-/// leaving an agent to follow instructions the binary no longer answers.
-/// It judges each `SKILL.md` and the skill's own reference files, and leaves
-/// the gate copies to `skill-gate`.
-fn skill_sources() -> ProbeResult {
-    let id = SKILL_PROBES[2];
-    let Some(context) = installed_context(id) else {
-        return no_home(id);
-    };
-    let (home, packages, record) = match context {
-        Ok(context) => context,
-        Err(failed) => return failed,
-    };
-    let planned = installed_files(&home, &packages, false);
-    if planned.is_empty() {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            format!("no agent skill root exists under {home}"),
-            "rk skill install --apply",
-        );
-    }
-    let found = judge(planned, &record);
-    if let Some(first) = found.missing.first() {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            format!(
-                "{} of this binary's skill files are not installed, the first at {first}",
-                found.missing.len()
-            ),
-            "rk skill install --apply",
-        );
-    }
-    if !found.differing.is_empty() {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            format!(
-                "{} installed skill file(s) are not this binary's; rk is {}",
-                found.differing.len(),
-                env!("CARGO_PKG_VERSION")
-            ),
-            reinstall(found.all_recorded),
-        );
-    }
-    ProbeResult::ok(
-        id,
-        ProbeClass::Soft,
-        format!(
-            "{} installed skill destination(s) are this binary's",
-            found.matching
-        ),
-    )
-}
-
-/// What both skill probes read: the home, the embedded packages, and the
-/// record.
-type SkillContext = (Utf8PathBuf, Vec<crate::skills::Package>, Record);
-
-/// The home, the embedded packages, and the record both skill probes read,
-/// or the failure that stops them: `None` when no home resolves.
-fn installed_context(id: &'static str) -> Option<Result<SkillContext, ProbeResult>> {
-    let home = crate::skills::home().ok()?;
-    let Ok(packages) = crate::skills::packages() else {
-        return Some(Err(ProbeResult::failed(
             id,
             ProbeClass::Soft,
             "this binary's embedded skills do not read",
             "reinstall rk; the sources it was built from are defective",
-        )));
+        );
     };
     let record = Record::load(&home.join(RECORD_PATH));
-    Some(Ok((home, packages, record)))
-}
-
-/// The probe result when no home directory resolves.
-fn no_home(id: &'static str) -> ProbeResult {
-    ProbeResult::failed(
+    let mut vouched = Vec::new();
+    let mut edited = Vec::new();
+    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
+        for skill in &skills {
+            let manual = home.join(root).join(&skill.name).join("SKILL.md");
+            if std::fs::symlink_metadata(&manual).is_err() {
+                continue;
+            }
+            let ours = std::fs::read(&manual)
+                .is_ok_and(|bytes| record.wrote(&manual, &Digest::of(&bytes)));
+            if ours {
+                vouched.push(manual);
+            } else {
+                edited.push(manual);
+            }
+        }
+    }
+    if let Some(first) = edited.first() {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!(
+                "{} user-scope SKILL.md file(s) shadow the project's landed skills, and the uninstall kept them as your edits, the first at {first}",
+                edited.len()
+            ),
+            format!(
+                "read {first} and each other kept copy, keep what you need elsewhere, and remove them by hand"
+            ),
+        );
+    }
+    if let Some(first) = vouched.first() {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!(
+                "{} user-scope SKILL.md file(s) that an earlier release installed shadow the project's landed skills, the first at {first}",
+                vouched.len()
+            ),
+            "rk skill uninstall --apply",
+        );
+    }
+    ProbeResult::ok(
         id,
         ProbeClass::Soft,
-        "neither HOME nor USERPROFILE is set, so no agent root resolves",
-        "export HOME",
+        format!("no user-scope copy of an rk skill under {home} shadows a project's landed one"),
     )
-}
-
-/// Every package file under each agent root that exists: the gate copies
-/// when `shared` is set, the skill's own files otherwise.
-///
-/// An absent agent root is a choice, not a defect: `--agent` selects one
-/// family and leaves the other's root untouched.
-fn installed_files(
-    home: &Utf8Path,
-    packages: &[crate::skills::Package],
-    shared: bool,
-) -> Vec<(Utf8PathBuf, &'static [u8])> {
-    let mut planned = Vec::new();
-    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
-        let root = home.join(root);
-        if !root.is_dir() {
-            continue;
-        }
-        for package in packages {
-            for file in package.files.iter().filter(|file| file.shared == shared) {
-                planned.push((root.join(&package.name).join(&file.path), file.bytes));
-            }
-        }
-    }
-    planned
-}
-
-/// What sits at each destination the embedded skills name.
-struct Installed {
-    /// Destinations the embedded skills name that hold no readable file.
-    missing: Vec<Utf8PathBuf>,
-    /// Destinations holding bytes that are not this binary's.
-    differing: Vec<Utf8PathBuf>,
-    /// How many destinations hold exactly this binary's bytes.
-    matching: usize,
-    /// Whether the record vouches for every differing destination, which
-    /// makes the difference a stale install rather than the operator's own
-    /// edit — and decides whether the fix needs `--force`.
-    all_recorded: bool,
-}
-
-/// Judge each destination the embedded skills name against what sits on disk.
-fn judge(planned: Vec<(Utf8PathBuf, &'static [u8])>, record: &Record) -> Installed {
-    let mut found = Installed {
-        missing: Vec::new(),
-        differing: Vec::new(),
-        matching: 0,
-        all_recorded: true,
-    };
-    for (destination, bytes) in planned {
-        match std::fs::read(&destination) {
-            Ok(held) if held == bytes => found.matching += 1,
-            Ok(held) => {
-                if !record.wrote(&destination, &Digest::of(&held)) {
-                    found.all_recorded = false;
-                }
-                found.differing.push(destination);
-            }
-            Err(_) => found.missing.push(destination),
-        }
-    }
-    found
-}
-
-/// The install that corrects a difference. Bytes the record vouches for are
-/// an older release's and go without asking; bytes it cannot account for are
-/// the operator's own, and overwriting those is what `--force` is.
-const fn reinstall(all_recorded: bool) -> &'static str {
-    if all_recorded {
-        "rk skill install --apply"
-    } else {
-        "rk skill install --apply --force"
-    }
-}
-
-/// The nearest ancestor of `path`, itself included, that exists as a
-/// directory.
-fn nearest_existing(path: &Utf8Path) -> Option<Utf8PathBuf> {
-    let mut current = Some(path);
-    while let Some(dir) = current {
-        if dir.is_dir() {
-            return Some(dir.to_owned());
-        }
-        current = dir.parent();
-    }
-    None
-}
-
-/// A directory accepts a write, leaving nothing behind.
-fn accepts_a_write(dir: &Utf8Path) -> std::io::Result<()> {
-    let probe = dir.join(format!(".rk-probe-{}", std::process::id()));
-    let written = std::fs::write(&probe, b"probe");
-    let _ = std::fs::remove_file(&probe);
-    written
 }
 
 /// The working directory's `origin` remote parses to a host, which is
