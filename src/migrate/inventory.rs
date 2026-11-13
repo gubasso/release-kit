@@ -70,7 +70,7 @@ impl Placement {
 
 /// Every predecessor file this release recognizes: its path, its tool,
 /// and its kind.
-pub const PREDECESSORS: [(&str, &str, Kind); 52] = [
+pub const PREDECESSORS: [(&str, &str, Kind); 54] = [
     // release-please stays a predecessor: the python binding no longer
     // lands it, and a target an earlier release landed it in, or that ran
     // it before release-kit, still carries these files.
@@ -101,6 +101,7 @@ pub const PREDECESSORS: [(&str, &str, Kind); 52] = [
     (".releaserc.js", "semantic-release", Kind::ReleaseConfig),
     (".releaserc.cjs", "semantic-release", Kind::ReleaseConfig),
     (".releaserc.mjs", "semantic-release", Kind::ReleaseConfig),
+    (".releaserc.ts", "semantic-release", Kind::ReleaseConfig),
     ("release.config.js", "semantic-release", Kind::ReleaseConfig),
     (
         "release.config.cjs",
@@ -112,6 +113,7 @@ pub const PREDECESSORS: [(&str, &str, Kind); 52] = [
         "semantic-release",
         Kind::ReleaseConfig,
     ),
+    ("release.config.ts", "semantic-release", Kind::ReleaseConfig),
     (
         ".github/workflows/semantic-release.yml",
         "semantic-release",
@@ -191,6 +193,20 @@ pub const PREDECESSORS: [(&str, &str, Kind); 52] = [
     ("scripts/release.sh", "hand-rolled", Kind::BumpScript),
     ("scripts/bump-version.sh", "hand-rolled", Kind::BumpScript),
 ];
+
+/// The tool name that semantic-release's rows carry.
+pub const SEMANTIC_RELEASE: &str = "semantic-release";
+
+/// Every configuration file name of semantic-release, in table order.
+///
+/// [`PREDECESSORS`] owns the names, and `rk assess` reads its markers for
+/// that tool from here, so the two verbs cannot name different files.
+pub fn semantic_release_configs() -> impl Iterator<Item = &'static str> {
+    PREDECESSORS
+        .iter()
+        .filter(|(_, tool, kind)| *tool == SEMANTIC_RELEASE && *kind == Kind::ReleaseConfig)
+        .map(|(path, _, _)| *path)
+}
 
 /// The root files that stay in place and are listed as such.
 pub const ROOT_FILES: [&str; 4] = ["CHANGELOG.md", "README.md", "LICENSE", "AGENTS.md"];

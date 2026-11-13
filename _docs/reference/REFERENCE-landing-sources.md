@@ -305,7 +305,7 @@ Bearing: `landing:status-judges-only-under-check`, as the option not taken. A re
 
 ## semantic-release and GoReleaser, on where their configuration lives
 
-The semantic-release tool reads its configuration from any of these:
+The semantic-release tool reads its configuration from any of these, as its configuration page listed them on 2026-11-13:
 
 - `.releaserc`, with no extension
 - the same name with one of these extensions:
@@ -313,13 +313,17 @@ The semantic-release tool reads its configuration from any of these:
   - `.yml`
   - `.json`
   - `.js`
+  - `.ts`
   - `.cjs`
   - `.mjs`
 - one of these configuration files:
   - `release.config.js`
+  - `release.config.ts`
   - `release.config.cjs`
   - `release.config.mjs`
 - a `release` key in `package.json`
+
+The older GitBook copy of that page still lists no `.ts` name. The page on semantic-release.org is the current one.
 
 GoReleaser looks for these files, in this order:
 
@@ -330,10 +334,10 @@ GoReleaser looks for these files, in this order:
 - `goreleaser.yml`
 - `goreleaser.yaml`
 
-- <https://semantic-release.gitbook.io/semantic-release/usage/configuration>
+- <https://semantic-release.org/usage/configuration/#configuration-file>
 - <https://goreleaser.com/customization/>
 
-Bearing: `landing:a-landing-classifies-its-target-first`. The marker catalog that `rk assess` reads, `RELEASE_MARKERS` in `src/assess.rs`, carries every documented name. `package.json` counts only with the `release` key, because an ordinary Node manifest is not a release mechanism.
+Bearing: `landing:a-landing-classifies-its-target-first`. The marker catalog that `rk assess` reads carries every documented name. `PREDECESSORS` in `src/migrate/inventory.rs` owns the semantic-release names, and `marker_names` in `src/assess.rs` reads them beside `RELEASE_MARKERS`. So `rk assess` and `rk migrate` name the same files. `package.json` counts only with the `release` key, because an ordinary Node manifest is not a release mechanism.
 
 ## SPDX, on the licence expression the code scanning condition reads
 

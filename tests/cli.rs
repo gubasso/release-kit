@@ -25463,6 +25463,31 @@ fn assess_recognizes_the_documented_marker_names() {
     );
 }
 
+/// semantic-release's TypeScript configuration files mark its mechanism
+/// alone, each without any other release file beside it.
+#[test]
+fn assess_recognizes_a_semantic_release_typescript_configuration() {
+    for name in [".releaserc.ts", "release.config.ts"] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        std::fs::write(target.path().join(name), "export default {};\n").expect("writes");
+        let out = rk()
+            .args(["assess", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let verdict: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(verdict["classification"], "brownfield", "{name}: {verdict}");
+        assert_eq!(
+            verdict["release_markers"],
+            serde_json::json!([name]),
+            "{name}"
+        );
+    }
+}
+
 /// An unreadable history is not an absent one: a git that runs and
 /// refuses — anything but a plain "not a repository" — is the run's
 /// failure, never a greenfield verdict.
@@ -43847,6 +43872,47 @@ fn the_inventory_lists_the_predecessor_files_and_the_root_files() {
         assert_eq!(row(root)["placement"], "in-place");
     }
     assert!(!files.iter().any(|file| file["path"] == "Cargo.toml"));
+}
+
+/// semantic-release's TypeScript configuration files are predecessor
+/// files like its JavaScript ones: the inventory lists them with the tool
+/// and the kind, and the archive moves them out of the target.
+#[test]
+fn the_inventory_and_the_archive_take_semantic_release_typescript_files() {
+    let fixture = MigrateFixture::new();
+    let names = [".releaserc.ts", "release.config.ts"];
+    for name in names {
+        std::fs::write(fixture.path().join(name), "export default {};\n").expect("writes");
+    }
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: configure semantic-release"],
+    );
+    let report = fixture.json(&["migrate", "inventory"]);
+    let files = report["files"].as_array().expect("files");
+    for name in names {
+        let row = files
+            .iter()
+            .find(|file| file["path"] == name)
+            .unwrap_or_else(|| panic!("{name} is listed: {report}"));
+        assert_eq!(row["tool"], "semantic-release", "{name}");
+        assert_eq!(row["kind"], "release-config", "{name}");
+        assert_eq!(row["placement"], "archived", "{name}");
+    }
+    let archived = fixture.archive();
+    let workspace = archived["workspace"].as_str().expect("a workspace");
+    for name in names {
+        assert!(
+            !fixture.path().join(name).exists(),
+            "{name} left the target"
+        );
+        assert_eq!(
+            std::fs::read_to_string(Path::new(workspace).join("sources").join(name))
+                .expect("the archived copy reads"),
+            "export default {};\n"
+        );
+    }
 }
 
 /// SATISFIES migration:the-configuration-names-the-open-migration
