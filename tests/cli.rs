@@ -41592,19 +41592,8 @@ fn python_package_step_from(
         command.env("RK_UV_BIN", uv);
     }
     // No uv of the host's: only the stand-in may answer to the bare name.
-    let host: Vec<String> = std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .filter(|dir| !Path::new(dir).join("uv").exists())
-        .map(str::to_owned)
-        .collect();
-    let path = path_prefix
-        .into_iter()
-        .map(str::to_owned)
-        .chain(host)
-        .collect::<Vec<_>>()
-        .join(":");
-    command.env("PATH", path);
+    let host = HostPath::hiding("uv");
+    command.env("PATH", host.led_by(&Vec::from_iter(path_prefix)));
     let out = command
         .args(["setup", "check", "--json", "--target"])
         .arg(target)
@@ -54400,15 +54389,34 @@ fn an_initial_release_needs_a_releasing_commit() {
 
 // ---- rk release eligible ----
 
-/// `rk release eligible --json` at `dir`, with no CI variable and no forge
-/// credential, answering its exit status and its report or diagnostic.
-fn eligible_at(dir: &Path) -> (bool, serde_json::Value) {
+/// `rk release eligible` with no CI variable and no forge credential. The
+/// engine's uv stand-in leads the PATH: uv is a host tool, and a CI
+/// devshell carries none.
+fn eligible_command() -> Rk {
     let mut command = rk();
     for var in ENGINE_CI_VARS {
         command.env_remove(var);
     }
-    let out = command
-        .args(["release", "eligible", "--json", "--target"])
+    let stubs = tempfile::tempdir().expect("a stub dir exists");
+    std::fs::create_dir(stubs.path().join("state")).expect("the state dir creates");
+    std::fs::write(stubs.path().join("state/log"), "").expect("writes");
+    write_executable(&stubs.path().join("uv"), ENGINE_UV);
+    let rest = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(stubs.path().to_path_buf()).chain(std::env::split_paths(&rest)),
+    )
+    .expect("the PATH joins");
+    command.env("PATH", path).env_remove("RK_UV_BIN");
+    command.dirs.push(stubs);
+    command.args(["release", "eligible"]);
+    command
+}
+
+/// `rk release eligible --json` at `dir`, with no CI variable and no forge
+/// credential, answering its exit status and its report or diagnostic.
+fn eligible_at(dir: &Path) -> (bool, serde_json::Value) {
+    let out = eligible_command()
+        .args(["--json", "--target"])
         .arg(dir)
         .output()
         .expect("rk runs");
@@ -54455,8 +54463,8 @@ fn rk_release_eligible_answers_without_a_forge() {
         );
         let after = git_out(engine.dir(), &["status", "--porcelain", "--ignored"]);
         assert_eq!(before, after, "{tech} {forge}: the verb writes nothing");
-        let human = rk()
-            .args(["release", "eligible", "--target"])
+        let human = eligible_command()
+            .arg("--target")
             .arg(engine.dir())
             .assert()
             .success()
@@ -58508,16 +58516,6 @@ fn the_check_judges_the_program_that_runs() {
     // A relative PATH entry resolves where the tool runs too: a uv found
     // only through `uvbin` in the caller's directory is missing in the
     // target, and one in the target's `uvbin` is found.
-    // The host's PATH with every directory that holds `tool` dropped, led
-    // by the relative `entry`.
-    let path_with = |entry: &str, tool: &str| {
-        let rest = std::env::var_os("PATH").unwrap_or_default();
-        std::env::join_paths(
-            std::iter::once(PathBuf::from(entry))
-                .chain(std::env::split_paths(&rest).filter(|dir| !dir.join(tool).exists())),
-        )
-        .expect("the PATH joins")
-    };
     let python = Engine::new("python", "github", &[], "0.1.0");
     std::fs::create_dir_all(caller.path().join("uvbin")).expect("the dir creates");
     stub(&caller.path().join("uvbin"));
@@ -58530,7 +58528,7 @@ fn the_check_judges_the_program_that_runs() {
         .run("request")
         .current_dir(caller.path())
         .env_remove("RK_UV_BIN")
-        .env("PATH", path_with("uvbin", "uv"))
+        .env("PATH", HostPath::hiding("uv").led_by(&["uvbin"]))
         .assert()
         .code(73)
         .stderr(predicate::str::contains("uv is missing"));
@@ -58573,7 +58571,7 @@ fn a_setup_step_runs_the_forge_cli_the_check_judged() {
         .args(["--repo", "acme/widget", "--forge", "github"])
         .current_dir(caller.path())
         .env_remove("RK_GH_BIN")
-        .env("PATH", relative_path_with("ghbin", "gh"))
+        .env("PATH", HostPath::hiding("gh").led_by(&["ghbin"]))
         .assert()
         .success();
     assert!(
@@ -58636,15 +58634,121 @@ fn a_setup_step_judges_the_shell_under_the_step_path() {
     );
 }
 
-/// The host's PATH with every directory that holds `tool` dropped, led by
-/// the relative `entry`.
-fn relative_path_with(entry: &str, tool: &str) -> std::ffi::OsString {
-    let rest = std::env::var_os("PATH").unwrap_or_default();
-    std::env::join_paths(
-        std::iter::once(PathBuf::from(entry))
-            .chain(std::env::split_paths(&rest).filter(|dir| !dir.join(tool).exists())),
-    )
-    .expect("the PATH joins")
+/// The host's PATH with one tool hidden. Each directory that holds the
+/// tool gives way to a directory of links to its other programs, so a tool
+/// beside the hidden one stays reachable: a runner's `/usr/bin` holds both
+/// `gh` and `git`, and dropping the whole directory loses `git` too. The
+/// link directories live as long as the value.
+struct HostPath {
+    dirs: Vec<PathBuf>,
+    _links: Vec<tempfile::TempDir>,
+}
+
+impl HostPath {
+    fn hiding(tool: &str) -> Self {
+        let cwd = std::env::current_dir().expect("the working dir reads");
+        Self::hiding_in(&std::env::var_os("PATH").unwrap_or_default(), tool, &cwd)
+    }
+
+    /// `path` with `tool` hidden. A directory that holds the tool but
+    /// cannot be listed is dropped, since no link can name its programs.
+    /// Directories that resolve to one place, such as `/bin` and
+    /// `/usr/bin` on a merged-usr host, share one link directory. A
+    /// relative entry, and an empty one, which POSIX reads as the current
+    /// directory, resolve against `cwd`.
+    fn hiding_in(path: &std::ffi::OsStr, tool: &str, cwd: &Path) -> Self {
+        let mut links: Vec<(PathBuf, tempfile::TempDir)> = Vec::new();
+        let mut dirs = Vec::new();
+        for dir in std::env::split_paths(path) {
+            let at = cwd.join(&dir);
+            if !at.join(tool).exists() {
+                dirs.push(dir);
+                continue;
+            }
+            // A link names its program absolutely: a relative PATH entry
+            // would resolve against the link directory instead.
+            let Ok(real) = std::fs::canonicalize(&at) else {
+                continue;
+            };
+            if let Some((_, linked)) = links.iter().find(|(from, _)| *from == real) {
+                dirs.push(linked.path().to_path_buf());
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&real) else {
+                continue;
+            };
+            let linked = tempfile::tempdir().expect("a link dir exists");
+            for entry in entries.flatten() {
+                if entry.file_name() != tool {
+                    std::os::unix::fs::symlink(entry.path(), linked.path().join(entry.file_name()))
+                        .expect("the link writes");
+                }
+            }
+            dirs.push(linked.path().to_path_buf());
+            links.push((real, linked));
+        }
+        Self {
+            dirs,
+            _links: links.into_iter().map(|(_, linked)| linked).collect(),
+        }
+    }
+
+    /// This PATH led by `entries`, which may be relative.
+    fn led_by(&self, entries: &[&str]) -> std::ffi::OsString {
+        std::env::join_paths(
+            entries
+                .iter()
+                .map(PathBuf::from)
+                .chain(self.dirs.iter().cloned()),
+        )
+        .expect("the PATH joins")
+    }
+}
+
+/// The hiding keeps every other tool of a directory that holds the hidden
+/// one, the shape of a runner whose `/usr/bin` holds both `gh` and `git`.
+/// An alias of that directory shares its links, a directory without the
+/// tool stays as it is, and one that holds the tool but cannot be listed
+/// is dropped. A relative entry and an empty one, the current directory,
+/// keep their neighbours too.
+#[test]
+fn a_hidden_tool_leaves_its_neighbours_on_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = tempfile::tempdir().expect("a root dir exists");
+    let bin = root.path().join("bin");
+    for name in ["gh", "git"] {
+        write_executable(&bin.join(name), "#!/bin/sh\n");
+    }
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&bin, &alias).expect("the alias links");
+    let other = root.path().join("other");
+    write_executable(&other.join("sh"), "#!/bin/sh\n");
+    let sealed = root.path().join("sealed");
+    write_executable(&sealed.join("gh"), "#!/bin/sh\n");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o111)).expect("chmod");
+    let path = std::env::join_paths([&bin, &alias, &other, &sealed]).expect("the PATH joins");
+    let hidden = HostPath::hiding_in(&path, "gh", root.path());
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let [first, second, third] = hidden.dirs.as_slice() else {
+        panic!("the sealed dir is dropped: {:?}", hidden.dirs);
+    };
+    assert!(first.join("git").exists(), "git stays: {first:?}");
+    assert!(!first.join("gh").exists(), "gh is hidden: {first:?}");
+    assert_eq!(first, second, "the alias shares the links");
+    assert_eq!(third, &other, "a dir without gh stays");
+
+    // Relative to the working directory: `bin` names it, and so does an
+    // empty entry when the working directory is `bin` itself.
+    for (entry, cwd) in [("bin", root.path()), ("", bin.as_path())] {
+        let path = std::env::join_paths([entry]).expect("the PATH joins");
+        let hidden = HostPath::hiding_in(&path, "gh", cwd);
+        let [only] = hidden.dirs.as_slice() else {
+            panic!("{entry:?} is kept: {:?}", hidden.dirs);
+        };
+        assert!(only.is_absolute(), "{entry:?}: {only:?}");
+        assert!(only.join("git").exists(), "{entry:?}: git stays");
+        assert!(!only.join("gh").exists(), "{entry:?}: gh is hidden");
+    }
 }
 
 /// The forge CLI runs from the absolute path the check judged: a relative
@@ -58655,7 +58759,7 @@ fn relative_path_with(entry: &str, tool: &str) -> std::ffi::OsString {
 #[test]
 fn the_forge_cli_runs_from_the_path_the_check_judged() {
     let caller = tempfile::tempdir().expect("a caller dir exists");
-    let path_with = relative_path_with;
+    let host = HostPath::hiding("gh");
     // The forge CLI runs from the absolute path the check judged: a relative
     // override and a relative PATH entry both name the caller's file, even
     // though the forge calls run in the target.
@@ -58682,17 +58786,10 @@ fn the_forge_cli_runs_from_the_path_the_check_judged() {
     std::fs::create_dir_all(caller.path().join("shadow")).expect("the dir creates");
     std::fs::write(caller.path().join("shadow/gh"), "#!/bin/sh\nexit 1\n")
         .expect("the shadow writes");
-    let shadowed = {
-        let rest = path_with("ghbin", "gh");
-        std::env::join_paths(
-            std::iter::once(PathBuf::from("shadow")).chain(std::env::split_paths(&rest)),
-        )
-        .expect("the PATH joins")
-    };
     for (override_bin, path) in [
-        (Some("./ghbin/gh"), path_with("nowhere", "gh")),
-        (None, path_with("ghbin", "gh")),
-        (None, shadowed),
+        (Some("./ghbin/gh"), host.led_by(&["nowhere"])),
+        (None, host.led_by(&["ghbin"])),
+        (None, host.led_by(&["shadow", "ghbin"])),
     ] {
         let mut command = rk_scrubbed();
         command
