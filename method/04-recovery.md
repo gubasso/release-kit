@@ -76,6 +76,18 @@ The `+` refspec replaces each tag that differs. `--prune` removes each local `v*
 
 Each command changes only the clone. It moves no tag on the forge, so it keeps the rule never to move or delete a protected tag.
 
+## A release request stands armed
+
+`rk release status` reports `request-armed` for an open release request that merges itself once its checks pass. An rk before 0.9.15 armed the request that way. A release happens only on the operator's order, so the arm is a defect, and the report exits non-zero.
+
+Disarm every open release request, and leave the project's own requests as they are:
+
+```sh
+rk setup step merge-on-order --target . --apply
+```
+
+The symptom names the one call that disarms that request by hand. Then run `rk release status` again. The request stays open until the operator merges it.
+
 ## The changelog shipped wrong
 
 A published entry is never edited. Land the correction on the trunk as an ordinary commit to the changelog file. It ships with the next release. The prevention is step 3 of [operate](./03-operate.md), the only point where a correction reaches the release it describes.

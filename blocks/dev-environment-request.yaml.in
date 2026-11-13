@@ -54,9 +54,8 @@ RK_DEV_SETUP_STEPSRK_DEV_GIT_USER
               echo "eligible=false" >> "$GITHUB_OUTPUT"
               ;;
           esac
-      # The request half writes the whole JSON report as the pr output. The
-      # arm below reads the first request number in it, which is the one
-      # request release-plz maintains, and reads none where it opened none.
+      # The request half opens or refreshes the one request and leaves it
+      # open: a release waits for the operator's order.
       - name: release-pr
         id: release-pr
         if: steps.candidate.outputs.held != 'true' && steps.eligible.outputs.eligible == 'true'
@@ -64,6 +63,4 @@ RK_DEV_SETUP_STEPSRK_DEV_GIT_USER
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -eu
-          output="$(RK_DEV_RUN release-plz release-pr --git-token "$GITHUB_TOKEN" --repo-url "https://github.com/$GITHUB_REPOSITORY" -o json)"
-          printf '%s\n' "$output"
-          printf 'pr=%s\n' "$(printf '%s' "$output" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          RK_DEV_RUN release-plz release-pr --git-token "$GITHUB_TOKEN" --repo-url "https://github.com/$GITHUB_REPOSITORY"

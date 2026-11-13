@@ -22,7 +22,6 @@
   - [`landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone](#landinga-block-destination-owns-its-marked-lines-alone--a-block-destination-owns-its-marked-lines-alone)
   - [`landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone](#landinga-landed-hook-serves-the-release-convention-alone--a-landed-hook-serves-the-release-convention-alone)
   - [`landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content](#landingthe-landed-guards-hold-the-message-content--the-landed-guards-hold-the-message-content)
-  - [`landing:the-arming-identity-is-the-bot` — The arming identity is the bot](#landingthe-arming-identity-is-the-bot--the-arming-identity-is-the-bot)
   - [`landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message](#landingthe-changelog-quality-gate-is-the-squash-message--the-changelog-quality-gate-is-the-squash-message)
   - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative and reads as plain prose](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative-and-reads-as-plain-prose)
   - [`landing:a-landing-writes-what-the-catalog-selects` — A landing writes what the catalog selects](#landinga-landing-writes-what-the-catalog-selects--a-landing-writes-what-the-catalog-selects)
@@ -75,7 +74,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-release-style-is-a-landing-parameter` — The release style is a landing parameter
 
-Where the release mode is `automatic`, the release style MUST be recorded in the manifest as `trunk` or `lines`, reported by every parameter-bearing report, rendered into the landed release workflow as the one value that arms or does not arm the bot's request, resolved as the runbooks' style axis, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field carries no style, and `rk upgrade` MUST refuse until `profile.release.style` in the config or `--release-style` answers it, because neither value is a compatibility-safe reading of a target nobody asked.
+Where the release mode is `automatic`, the release style MUST be recorded in the manifest as `trunk` or `lines`, reported by every parameter-bearing report, resolved as the runbooks' style axis, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field carries no style, and `rk upgrade` MUST refuse until `profile.release.style` in the config or `--release-style` answers it, because neither value is a compatibility-safe reading of a target nobody asked.
 
 #### Scenario: A pre-style record upgrades
 
@@ -253,27 +252,15 @@ Where the target selects the workflow guards, the landed commit-msg hook MUST re
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
-### `landing:the-arming-identity-is-the-bot` — The arming identity is the bot
-
-Where the recorded style arms the release request, the landed workflow MUST arm it with the bot identity's token, MUST NOT arm it with the forge's default CI token, and MUST re-arm on every refresh of the request, because a merge made under the default token starts no workflow — leaving the bump merged, untagged, and unpublished with nothing reporting a failure — and because a forge that refreshes by replacing the request drops the arming with the request it replaces.
-
-#### Scenario: The arm is made with the default CI token
-
-- GIVEN a release request armed by a job authenticating as the forge's default CI token
-- WHEN every required check passes and the forge merges
-- THEN the bump lands, no workflow run starts, no tag and no publish follow, and nothing reports it — which arming under the bot identity is what prevents
-
-Verify: `cargo nextest run -E 'binary(cli)'`
-
 ### `landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message
 
-Where the recorded style arms the release request, the changelog's quality MUST be held at the point the entry is generated from — under `squash` the squash title the landed title check holds to the scoped convention and the body the landed content guard judges, and under `rebase` each commit message the landed commit gate judges — because an armed request offers no window in which a human edit on its branch survives to the merge.
+The changelog's quality MUST be held at the point the entry is generated from — under `squash` the squash title the landed title check holds to the scoped convention and the body the landed content guard judges, and under `rebase` each commit message the landed commit gate judges — because the bot regenerates the release request on every trunk push and drops a hand edit on its branch. A hand correction on the request branch MUST be the last step before the operator orders the merge.
 
-#### Scenario: An entry reads badly on an armed request
+#### Scenario: An entry reads badly on the open request
 
-- GIVEN an armed trunk-style project whose generated entry misstates a change
-- WHEN the operator looks for the correction window
-- THEN there is none while the request stands armed: the correction is a disarm before the checks finish, or a changelog commit landed on the trunk that ships with the next release
+- GIVEN a trunk-style project whose open release request carries an entry that misstates a change
+- WHEN the operator corrects it
+- THEN the correction is a commit on the request branch pushed as the last step before the merge, because any trunk push before the merge regenerates the request without it
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

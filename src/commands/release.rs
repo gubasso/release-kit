@@ -126,6 +126,15 @@ pub fn run(args: &ReleaseArgs) -> Result<(), RkError> {
             timeout,
             json,
         } => status(target, wait.as_deref(), *timeout, Output::new(*json)),
+        ReleaseAction::Merge {
+            target,
+            apply,
+            timeout,
+            json,
+        } => render_done(
+            &release_engine::merge::run(target, *apply, *timeout)?,
+            Output::new(*json),
+        ),
         ReleaseAction::Request { target, json } => {
             render_done(&release_engine::request::run(target)?, Output::new(*json))
         }
@@ -264,7 +273,12 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
                     failures: std::cell::RefCell::new(Vec::new()),
                 };
                 let line_names: Vec<&str> = lines.iter().map(|row| row.line.as_str()).collect();
-                let observed = reader.observe(&local, wait, timeout, &line_names);
+                let mut observed = reader.observe(&local, wait, timeout, &line_names);
+                observed.symptoms.extend(release_state::armed_request(
+                    &observed.request,
+                    pair.forge,
+                    &pair.repo,
+                ));
                 (
                     ForgeState {
                         name: Some(pair.forge.as_str().to_owned()),
@@ -295,7 +309,11 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
         ));
     }
     render(out, &manifest, &forge, &observed, &lines);
-    let failure = observed.wait.as_ref().and_then(wait_failure);
+    let failure = observed
+        .wait
+        .as_ref()
+        .and_then(wait_failure)
+        .or_else(|| armed_failure(&observed.symptoms));
     out.emit(&Report {
         schema: SCHEMA,
         landed: true,
@@ -438,6 +456,19 @@ fn wait_failure(wait: &Wait) -> Option<RkError> {
         )
         .expected("every run on the release commit concluded success")
         .action("rk method recovery names the path for the symptom this report shows"),
+    ))
+}
+
+/// An armed release request, as the error the verb exits with after it
+/// rendered the report: a release waits for the operator's order.
+fn armed_failure(symptoms: &[Symptom]) -> Option<RkError> {
+    let armed = symptoms
+        .iter()
+        .find(|symptom| symptom.code == release_state::REQUEST_ARMED)?;
+    Some(RkError::check_failed(
+        Diagnostic::new(Reason::StateDrift, armed.evidence.clone())
+            .expected("no release request stands armed to merge itself")
+            .action("rk setup step merge-on-order --apply disarms every open release request"),
     ))
 }
 

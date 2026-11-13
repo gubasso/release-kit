@@ -120,7 +120,7 @@ Verify: `cargo nextest run -E 'test(merge_form)'`
 
 ### `git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge
 
-The release request MUST integrate at the forge in both integration modes, because merging it is the one event that authorizes the tag, the publish, the provenance, and the artifacts, and no verb MAY offer a local path to a release. The tag protections MUST be identical under both modes. On GitHub the trunk's strict required-check rule MUST hold the release request in both modes; local integration MUST admit its deliberate direct push through the repository-administrator bypass while leaving the release App governed by that rule. The local-mode workflow MUST additionally retry a ready request after either its named workflow or the successful push-side request job completes. It MUST authenticate the candidate from the forge's current, fully paginated answer rather than the event that woke it — open, not a draft, based on the trunk, headed from the same repository, and authored by the release identity — MUST judge the named check for the exact head commit it merges, and MUST leave the request open with a successful no-op on every other answer, including a merge the trunk's own rules refuse on policy. A forge whose own mechanism requires the whole pipeline names no check and needs no such gate.
+The release request MUST integrate at the forge in both integration modes, because merging it is the one event that authorizes the tag, the publish, the provenance, and the artifacts, and no verb MAY offer a local path to a release. The tag protections MUST be identical under both modes. On GitHub the trunk's strict required-check rule MUST hold the release request in both modes; local integration MUST admit its deliberate direct push through the repository-administrator bypass while leaving the release App governed by that rule. No landed job and no rk verb that CI runs MAY arm or merge a release request by itself, in any combination of driver, forge, integration mode, and release style, because a release happens only on the operator's order: the request stays open and collects changes until that order merges it. The one job that merges a trunk release request MUST be the merge job that `rk release merge` dispatches, which no push and no other workflow's completion reaches, and it MUST run as the release App on GitHub and as the bot on GitLab, neither of which bypasses the trunk ruleset. It MUST refuse unless the caller holds the administrator role on GitHub or the maintainer role on GitLab, because any writer can dispatch a workflow, and unless the request is open, not a draft, based on the trunk, headed from this repository, authored by the release App or the bot, still at the head and the trunk tip the dispatch names, and its required check on GitHub, or its head pipeline on GitLab, passed for that head. It MUST merge with that head pinned in the write. A release line's request keeps the merge by a person.
 
 #### Scenario: A local-integration target reaches a release
 
@@ -128,13 +128,19 @@ The release request MUST integrate at the forge in both integration modes, becau
 - WHEN the release-bearing protections are resolved for it
 - THEN the tag protections match a forge-integration target's, and the release still merges at the forge
 
-#### Scenario: A release request is gated under either authority
+#### Scenario: A release request waits for the operator's order
 
-- GIVEN two GitHub targets differing only in their recorded integration mode
+- GIVEN every automatic pair of driver and forge, under both integration modes and both release styles
 - WHEN each renders its release automation
-- THEN both trunks arm the request behind the strict required check, the local-integration target also renders a retry job that judges the same recorded check name, and neither merges a request whose check has not concluded successfully
+- THEN no job arms the release request, the one merge call is in the merge job that only a dispatch reaches, and no job wakes on another workflow completing
 
-Verify: `cargo nextest run -E 'test(the_tag_floors_hold_under_both_integration_modes) or test(the_release_request_is_gated_under_both_integration_modes)'`
+#### Scenario: The request moved after the operator read it
+
+- GIVEN a merge dispatch whose head or trunk tip no longer matches the forge, or whose caller holds no administrator or maintainer role
+- WHEN the merge job runs
+- THEN it fails, names the proof that refused, and merges nothing
+
+Verify: `cargo nextest run -E 'test(the_tag_floors_hold_under_both_integration_modes) or test(no_automatic_job_arms_or_merges) or test(a_merge_pipeline_runs_only_the_merge_job) or test(an_administrator_caller_merges_only_through_the_job) or test(the_merge_job_refuses_a_request_refreshed_after_the_preview) or test(the_merge_job_refuses_a_moved_base) or test(a_dispatch_by_a_non_admin_refuses)'`
 
 ### `git:the-pre-merge-commit-hook-is-the-pre-integrate-contract` — The pre-merge-commit hook is the pre-integrate contract
 
@@ -281,8 +287,8 @@ A merge MUST carry the trunk it was tested against. On GitHub the protection dom
 #### Scenario: A local release request becomes stale
 
 - GIVEN a locally integrated GitHub target whose administrator advanced the trunk after the release request's check passed
-- WHEN the release App attempts the squash merge
-- THEN the strict required-check rule refuses it because the App is not the repository-administrator bypass actor, and the gate logs the refusal and leaves the request open
+- WHEN a merge of the release request is attempted as the release App
+- THEN the strict required-check rule refuses it because the App is not the repository-administrator bypass actor, and the request stays open
 
 #### Scenario: The local integrator rewrites the trunk
 
@@ -290,4 +296,4 @@ A merge MUST carry the trunk it was tested against. On GitHub the protection dom
 - WHEN that administrator force-pushes or deletes the trunk
 - THEN the safety ruleset refuses it, because the bypass names no actor there
 
-Verify: `cargo nextest run -E 'test(a_loose_status_check_policy_faults) or test(the_merge_queue_fault_names_its_consequence) or test(the_strict_status_check_policy_holds_the_shape) or test(a_local_trunk_excuses_the_request_rules_and_never_the_safety_rules) or test(a_merge_the_trunk_refuses_on_policy_is_a_successful_no_op)'`
+Verify: `cargo nextest run -E 'test(a_loose_status_check_policy_faults) or test(the_merge_queue_fault_names_its_consequence) or test(the_strict_status_check_policy_holds_the_shape) or test(a_local_trunk_excuses_the_request_rules_and_never_the_safety_rules)'`

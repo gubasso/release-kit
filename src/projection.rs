@@ -1369,17 +1369,16 @@ fn release_lines(baseline: &[u8], release: bool) -> Vec<u8> {
 /// title fragment under `squash` and the commit fragment under `rebase`.
 pub const GITLAB_GATE_FRAGMENT_TOKEN: &[u8] = b"RK_GITLAB_GATE_FRAGMENT";
 
-/// The merge flag a GitHub release arm passes to `gh pr merge`: the one
+/// The merge flag a GitHub release merge passes to `gh pr merge`: the one
 /// method the trunk ruleset allows under the recorded merge form.
 pub const MERGE_FLAG_TOKEN: &[u8] = b"RK_MERGE_FLAG";
 
-/// The `squash` answer a GitLab release arm passes to the merge call:
+/// The `squash` answer a GitLab release merge passes to the merge call:
 /// `true` under `squash`, `false` under `rebase`, whose project squashes
 /// nothing.
 pub const SQUASH_ON_MERGE_TOKEN: &[u8] = b"RK_SQUASH_ON_MERGE";
 
-/// The recorded release style: `trunk` arms the bot's request in the
-/// landed release workflow, `lines` leaves every request unarmed.
+/// The recorded release style, `trunk` or `lines`.
 pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 
 /// The packages a bash release pipeline installs before it builds, from
@@ -1452,112 +1451,69 @@ pub const LINE_PREFIX_TOKEN: &[u8] = b"RK_LINE_PREFIX";
 /// This one substitutes first: the plain token is its own prefix.
 pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
 
-/// The check the release gate judges.
+/// The check the trunk ruleset requires before a release request merges.
 pub const REQUIRED_CHECK_TOKEN: &[u8] = b"RK_REQUIRED_CHECK";
-
-/// The workflow whose completion wakes the release gate.
-pub const REQUIRED_WORKFLOW_TOKEN: &[u8] = b"RK_REQUIRED_WORKFLOW";
 
 /// The head-branch shape the release driver gives its own request.
 pub const BRANCH_SHAPE_TOKEN: &[u8] = b"RK_BRANCH_SHAPE";
 
-/// The id of the job that opens and refreshes the release request.
-pub const REQUEST_JOB_TOKEN: &[u8] = b"RK_REQUEST_JOB";
-
-/// The gate's trigger block, added to a release workflow's `on` key.
-pub const RELEASE_GATE_TRIGGER: &str = "blocks/release-gate-trigger.yaml.in";
-
-/// The gate's own job, added to a release workflow.
-pub const RELEASE_GATE_JOB: &str = "blocks/release-gate-job.yaml.in";
-
-/// What a release driver's own release request is shaped like, and which
-/// job maintains it, where this release drives that driver on GitHub.
+/// What a release driver's own release request is shaped like, where this
+/// release drives that driver.
 ///
 /// The branch shape is a structural second guard and never a proof of
-/// identity: the gate authenticates a request by its author, its base, and
+/// identity: a merge authenticates a request by its author, its base, and
 /// its head repository, all read back from the forge.
 #[must_use]
-pub fn release_driver_shape(driver: Option<&str>) -> Option<(&'static str, &'static str)> {
+pub fn release_driver_shape(driver: Option<&str>) -> Option<&'static str> {
     match driver {
         // release-plz names its own branch, and the release half already
         // recognizes a bump by this prefix.
-        Some("rust") => Some(("release-plz-", "release-plz-pr")),
+        Some("rust") => Some("release-plz-"),
         // The engine keeps one request per base on rk-release/<base>.
-        Some("bash" | "python") => Some((crate::release_engine::REQUEST_PREFIX, "release-request")),
+        Some("bash" | "python") => Some(crate::release_engine::REQUEST_PREFIX),
         _ => None,
     }
 }
 
-/// The three replaceable spans of a release workflow under the rendering
-/// that gates its request, each as its ordered begin and end marker.
-///
-/// The markers are YAML comments, because a reader may open the snippet
-/// before any landing renders it, and each begin marker carries the
-/// newline and the indentation in front of it, so a landing that replaces
-/// nothing strips the pair and leaves the authored bytes exactly.
-///
-/// The spans are in file order: the trigger the gate wakes on, the
-/// standing arm the gate replaces, and the gate's own job.
-#[must_use]
-pub const fn release_gate_spans() -> [(&'static [u8], &'static [u8]); 3] {
-    // A workflow whose request half arms inside rk release request carries
-    // no arm span, and its pair of markers simply matches nothing.
-    [
-        (b"\n# RK_GATE_TRIGGER_BEGIN", b"\n# RK_GATE_TRIGGER_END"),
-        (b"\n# RK_GATE_ARM_BEGIN", b"\n# RK_GATE_ARM_END"),
-        (b"\n# RK_GATE_JOB_BEGIN", b"\n# RK_GATE_JOB_END"),
-    ]
-}
+/// The merge job's GitHub block, added to every GitHub release workflow.
+pub const RELEASE_MERGE_GITHUB: &str = "blocks/release-merge-job.github.yaml.in";
 
-/// Whether this parameter set renders a release workflow that gates its
-/// own request.
-///
-/// One shape does: GitHub, an automatic release, the trunk style, and
-/// local integration, at a driver this release ships a request shape for.
-/// Under forge integration the trunk ruleset requires the check before the
-/// merge, so the authored standing arm is exact.
-#[must_use]
-fn release_gates(params: &Params) -> bool {
-    params.forge() == Some("github")
-        && params.integration() == crate::landing::Integration::Local
-        && params.release_mode() == ReleaseMode::Automatic
-        && params.style() == Some(crate::landing::Style::Trunk)
-        && !params.required_check().is_empty()
-        && !params.required_workflow().is_empty()
-        && release_driver_shape(params.driver()).is_some()
-}
+/// The merge job's GitLab block, added to every GitLab release pipeline.
+pub const RELEASE_MERGE_GITLAB: &str = "blocks/release-merge-job.gitlab.yaml.in";
 
-/// The replacement for each release gate span under one parameter set, or
-/// `None` where the authored standing arm stands.
+/// The merge job's span in a release workflow or pipeline, as its ordered
+/// begin and end marker.
 ///
-/// One shape renders the gate: GitHub, an automatic release, the trunk
-/// style, and local integration, at a driver this release ships a request
-/// shape for. Under forge integration the trunk ruleset requires the check
-/// before the merge, so the authored arm is exact and every marker strips.
+/// The markers are YAML comments, so a reader may open the snippet before
+/// any landing renders it, and the begin marker carries the newline in
+/// front of it, so a rendering that adds no job strips the pair and leaves
+/// the authored bytes exactly.
+pub const RELEASE_MERGE_SPAN: (&[u8], &[u8]) = (b"\n# RK_MERGE_JOB_BEGIN", b"\n# RK_MERGE_JOB_END");
+
+/// The merge job for this parameter set's forge, or `None` where the
+/// parameters name no forge that ships one.
+///
+/// Every automatic pair lands a release workflow or pipeline, and each one
+/// carries the job: it is the only path that merges a release request, and
+/// only the operator's dispatch starts it.
 ///
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
-fn release_gate_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 3], RkError> {
-    if !release_gates(params) {
-        return Ok([None, None, None]);
-    }
-    // A span's interior opens where its begin marker's newline stood, so
-    // each replacement states its own leading newline and no trailing one.
-    let opened = |block: &str| -> Result<Vec<u8>, RkError> {
-        let text = embedded_block(block)?;
-        Ok(substitute_tokens(
-            format!("\n{}", text.trim_end_matches('\n')).as_bytes(),
-            params,
-        ))
+fn release_merge_replacement(params: &Params) -> Result<Option<Vec<u8>>, RkError> {
+    let block = match params.forge() {
+        Some("github") => RELEASE_MERGE_GITHUB,
+        Some("gitlab") => RELEASE_MERGE_GITLAB,
+        _ => return Ok(None),
     };
-    Ok([
-        Some(opened(RELEASE_GATE_TRIGGER)?),
-        // The standing arm goes: the gate merges, and an armed request
-        // would merge on the forge's own answer rather than on this one.
-        Some(Vec::new()),
-        Some(opened(RELEASE_GATE_JOB)?),
-    ])
+    // The span's interior opens where its begin marker's newline stood,
+    // so the replacement states its own leading newline and no trailing
+    // one.
+    let text = embedded_block(block)?;
+    Ok(Some(substitute_tokens(
+        format!("\n{}", text.trim_end_matches('\n')).as_bytes(),
+        params,
+    )))
 }
 
 /// The run prefix a release job calls a project tool through.
@@ -1931,18 +1887,17 @@ fn replace_span(baseline: &[u8], begin: &[u8], end: &[u8], value: Option<&[u8]>)
 #[must_use]
 pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
     let mut out = substitute_tokens(baseline, params);
-    // The release gate's spans resolve after the tokens and before the
-    // policy's, and each replacement carries the same token pass, so a
-    // composed block answers the same parameters the authored file does.
-    // A block this binary cannot read leaves the authored arm standing,
-    // which is the rendering every other shape already takes.
-    if let Ok(values) = release_gate_replacements(params) {
-        for ((begin, end), value) in release_gate_spans().iter().zip(values) {
-            out = replace_span(&out, begin, end, value.as_deref());
-        }
-    }
-    // The development environment's spans resolve in the same place. A
-    // block this binary cannot read leaves the authored steps standing.
+    // The merge job resolves after the tokens, and its block carries the
+    // same token pass. A block this binary cannot read leaves the markers'
+    // empty interior, which renders no job.
+    let (begin, end) = RELEASE_MERGE_SPAN;
+    let merge = release_merge_replacement(params).ok().flatten();
+    out = replace_span(&out, begin, end, merge.as_deref());
+    // The development environment's spans resolve after the tokens and
+    // before the policy's, and each replacement carries the same token
+    // pass, so a composed block answers the same parameters the authored
+    // file does. A block this binary cannot read leaves the authored steps
+    // standing.
     let environment = dev_environment_replacements(params).unwrap_or_default();
     // A span may stand more than once in a file, as the rust GitLab
     // pipeline's `rk` install does in its request and its candidate jobs,
@@ -1990,8 +1945,8 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     }
     out = substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes());
     // The merge form's three renderings: which gate fragment a GitLab
-    // root pipeline includes, and how each release arm asks its forge to
-    // merge, so the arm asks for the one method the protection allows.
+    // root pipeline includes, and how a release merge asks its forge to
+    // merge, so it asks for the one method the protection allows.
     let (fragment, flag, squash): (&str, &[u8], &[u8]) = match params.merge_form() {
         crate::landing::MergeForm::Squash => (GITLAB_TITLE_FRAGMENT, b"--squash", b"true"),
         crate::landing::MergeForm::Rebase => (GITLAB_COMMIT_FRAGMENT, b"--rebase", b"false"),
@@ -2003,9 +1958,8 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     // shape names the trunk inside itself; the trunk token is its own
     // prefix, in the same way the escaped line prefix goes before the
     // plain one.
-    let (shape, job) = release_driver_shape(params.driver()).unwrap_or_default();
+    let shape = release_driver_shape(params.driver()).unwrap_or_default();
     out = substitute(&out, BRANCH_SHAPE_TOKEN, shape.as_bytes());
-    out = substitute(&out, REQUEST_JOB_TOKEN, job.as_bytes());
     out = substitute(&out, TRUNK_BRANCH_TOKEN, params.trunk().as_bytes());
     let escaped = params.line_prefix().replace('/', "\\/");
     out = substitute(&out, LINE_PREFIX_RE_TOKEN, escaped.as_bytes());
@@ -2014,10 +1968,7 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     // operator-owned names through that encoding keeps spaces, comments,
     // quotes, and backslashes data rather than YAML structure.
     let required_check = serde_json::Value::String(params.required_check().to_owned()).to_string();
-    let required_workflow =
-        serde_json::Value::String(params.required_workflow().to_owned()).to_string();
     out = substitute(&out, REQUIRED_CHECK_TOKEN, required_check.as_bytes());
-    out = substitute(&out, REQUIRED_WORKFLOW_TOKEN, required_workflow.as_bytes());
     out = substitute(
         &out,
         SELF_VERSION_TOKEN,

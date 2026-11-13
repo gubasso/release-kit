@@ -1,0 +1,11 @@
+<!-- BEGIN release-kit -->
+
+## Releases
+
+- This repository runs the release-kit convention. `rk method invariants` states what must stay true.
+- The title of every commit that reaches the trunk MUST be a scoped Conventional Commit, because the version and the changelog come from it.
+- Never author a tag, and never hand-edit a generated artifact workflow.
+- Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names. Before reading a gap in `rk setup check` as a setup defect, run `rk setup status`. A credential this runtime cannot reach leaves a step unknown, which is an observation boundary and not drift. Never ask the operator to mount, expose, recreate, or rotate a secret only so an agent check can pass.
+- The full method is `rk method --list`. The recovery paths are `rk method recovery`.
+
+<!-- END release-kit -->

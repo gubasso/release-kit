@@ -45,9 +45,9 @@ pub struct ProfileFlags {
     #[arg(long, value_name = "NAME")]
     pub release_driver: Option<String>,
 
-    /// The release style of an automatic release: trunk (the bot's
-    /// request carries auto-merge from creation) or lines (every request
-    /// waits for a human's merge).
+    /// The release style of an automatic release: trunk (the trunk's
+    /// request merges on the operator's order) or lines (the project keeps
+    /// release lines, and every request waits for a human's merge).
     #[arg(long, alias = "style", value_name = "STYLE")]
     pub release_style: Option<String>,
 
@@ -80,17 +80,10 @@ pub struct ProfileFlags {
     #[arg(long, value_name = "FORM")]
     pub merge_form: Option<String>,
 
-    /// The check the release gate believes: the context the trunk ruleset
-    /// requires under forge integration, and the context the rendered
-    /// release gate judges under local integration. GitHub only.
+    /// The check the trunk ruleset requires before a release request
+    /// merges. GitHub only.
     #[arg(long, value_name = "NAME")]
     pub required_check: Option<String>,
-
-    /// The workflow whose completion wakes the release gate under local
-    /// integration, named by its `name:` key rather than its filename.
-    /// GitHub only.
-    #[arg(long, value_name = "NAME")]
-    pub required_workflow: Option<String>,
 
     /// The packages the release job of an automatic bash release installs
     /// before it runs the verify command, separated by spaces. Recorded as
@@ -114,7 +107,6 @@ impl ProfileFlags {
             && self.integration.is_none()
             && self.merge_form.is_none()
             && self.required_check.is_none()
-            && self.required_workflow.is_none()
             && self.build_packages.is_none()
     }
 
@@ -159,7 +151,6 @@ impl ProfileFlags {
                 .map(MergeForm::parse)
                 .transpose()?,
             required_check: self.required_check.as_deref(),
-            required_workflow: self.required_workflow.as_deref(),
             build_packages: self.build_packages.as_deref(),
             ..crate::profile::Inputs::default()
         })

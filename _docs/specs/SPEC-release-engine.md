@@ -6,7 +6,7 @@
 - [Requirements](#requirements)
   - [`release-engine:the-adapter-owns-the-version-file` — The adapter owns the version file](#release-enginethe-adapter-owns-the-version-file--the-adapter-owns-the-version-file)
   - [`release-engine:one-request-per-base` — One request per base](#release-engineone-request-per-base--one-request-per-base)
-  - [`release-engine:the-request-arms-where-the-projection-arms` — The request arms where the projection arms](#release-enginethe-request-arms-where-the-projection-arms--the-request-arms-where-the-projection-arms)
+  - [`release-engine:the-request-never-arms` — The request never arms](#release-enginethe-request-never-arms--the-request-never-arms)
   - [`release-engine:the-request-never-numbers-a-candidate` — The request never numbers a candidate](#release-enginethe-request-never-numbers-a-candidate--the-request-never-numbers-a-candidate)
   - [`release-engine:a-request-follows-the-packed-files` — A request follows the packed files](#release-enginea-request-follows-the-packed-files--a-request-follows-the-packed-files)
   - [`release-engine:a-request-needs-a-releasing-commit` — A request needs a releasing commit](#release-enginea-request-needs-a-releasing-commit--a-request-needs-a-releasing-commit)
@@ -56,17 +56,17 @@ The request action MUST keep at most one open release request per base branch, o
 
 Verify: `cargo nextest run -E 'test(the_request_opens_one_request_and_refreshes_it_in_place) or test(the_request_closes_a_stale_request_when_nothing_remains) or test(an_open_request_on_a_later_page_is_refreshed_and_closed)'`
 
-### `release-engine:the-request-arms-where-the-projection-arms` — The request arms where the projection arms
+### `release-engine:the-request-never-arms` — The request never arms
 
-Where the record's style is `trunk` and the base is the trunk, the request action MUST arm the request on every refresh with the bot credential, except on GitHub under local integration, where the rendered gate job merges it, and MUST leave a request under the `lines` style or on a release line unarmed, because the engine arms exactly where the landed projection arms.
+The request action MUST open or refresh the request and MUST NOT arm it or merge it, under every style, on every base, and on either forge, because a release happens only on the operator's order. Its report MUST carry no arm field.
 
-#### Scenario: A locally integrated GitHub target
+#### Scenario: A trunk request on either forge
 
-- GIVEN a GitHub target recorded with the trunk style and local integration
+- GIVEN a target recorded with the trunk style, on GitHub or on GitLab, under either integration mode
 - WHEN `rk release request` opens the request
-- THEN the request is not armed, and the same target under forge integration, or on GitLab, is armed
+- THEN the forge receives no arm call, and the request stays open
 
-Verify: `cargo nextest run -E 'test(the_request_arms_only_where_the_projection_arms) or test(only_the_trunk_style_on_the_trunk_arms)'`
+Verify: `cargo nextest run -E 'test(the_request_engine_never_arms)'`
 
 ### `release-engine:the-request-never-numbers-a-candidate` — The request never numbers a candidate
 
@@ -160,7 +160,7 @@ Verify: `cargo nextest run -E 'test(the_declaration_follows_cargo_semantics) or 
 
 ### `release-engine:the-request-pushes-as-the-bot` — The request pushes as the bot
 
-The request action MUST push and arm with the bot credential the job sets, `GH_TOKEN` on GitHub and `GITLAB_TOKEN` on GitLab, and MUST refuse with `default-ci-token` before any push where that credential is the default CI token, `GITHUB_TOKEN` or `CI_JOB_TOKEN`, alone or under the bot's name, because a push with the default token starts no pipeline and the release half would never run.
+The request action MUST push and open the request with the bot credential the job sets, `GH_TOKEN` on GitHub and `GITLAB_TOKEN` on GitLab, and MUST refuse with `default-ci-token` before any push where that credential is the default CI token, `GITHUB_TOKEN` or `CI_JOB_TOKEN`, alone or under the bot's name, because a push with the default token starts no pipeline and the release half would never run.
 
 #### Scenario: A job forwards only the default token
 

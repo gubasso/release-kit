@@ -7,7 +7,7 @@ The eight steps of [release lines](../method/09-release-lines.md) as commands: t
 ```bash
 rk status --target .
 # check: prints the lines style
-# trunk style: this project ships from the trunk; rk upgrade --target . --release-style lines --apply changes it, and the diff is the arming line in the release workflow
+# trunk style: this project ships from the trunk; rk upgrade --target . --release-style lines --apply changes it, and the diff is the style in .release-kit/config.toml and the record
 # no style in the record: the record predates the parameter; the upgrade refuses until --release-style names one
 ```
 
@@ -86,7 +86,7 @@ rk lines mint <line>
 On github:
 
 ```bash
-gh workflow run <workflow> --repo <repo> --ref release/<line> -f line=<line> -f expect=<sha>
+gh workflow run <workflow> --repo <repo> --ref release/<line> -f action=candidate -f line=<line> -f expect=<sha>
 gh run list --repo <repo> --workflow <workflow> --branch release/<line> --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId'
 gh run watch <run-id> --repo <repo> --exit-status
 # check: the dispatch run, not the push run the mint starts, ends in success
@@ -141,7 +141,7 @@ rk lines rc <line>
 
 ### 8a. Promote the candidate
 
-Promote through the same dispatch or job as step 5, with `promote=true` on GitHub or `PROMOTE=true` on GitLab. It writes the candidate's stable version, and it refuses while the line holds a commit the candidate did not test. Then run `rk guide release` steps 3 to 6 against the line. A line's request is never armed, so the merge is yours, per that runbook's step 4.
+Promote through the same dispatch or job as step 5, with `promote=true` on GitHub or `PROMOTE=true` on GitLab. It writes the candidate's stable version, and it refuses while the line holds a commit the candidate did not test. Then run `rk guide release` steps 3, 5, and 6 against the line. No landed job merges a line's request, and `rk release merge` reads the trunk alone, so merge the line's request by hand once its checks pass, as `rk guide backport` step 8 does.
 
 On github:
 

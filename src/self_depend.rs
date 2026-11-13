@@ -13,6 +13,7 @@
 //! gates around it, `venue` where a release is published, and `matrix`
 //! which manager and venue pairs render.
 
+pub mod check;
 pub mod discover;
 pub mod fragments;
 pub mod guard;
@@ -86,12 +87,13 @@ pub struct Observed {
     /// Whether `.envrc` exists. Direnv is not a manager: it loads a
     /// shell and pins nothing, so the file is reported outside the list.
     pub envrc: Presence,
-    /// Whether `.envrc` carries the sync line.
-    pub envrc_sync: bool,
+    /// Whether `.envrc` carries the check line.
+    pub envrc_check: bool,
+    /// Whether `.envrc` still carries the retired sync line, which an
+    /// older rk seeded and which `rk self-depend clean --apply` swaps.
+    pub envrc_old_sync: bool,
     /// Whether a transaction marker for this checkout survives.
     pub pending: bool,
-    /// The day of the last sync attempt for this checkout, where stamped.
-    pub stamp: Option<String>,
     /// What a predecessor bump mechanism left in the target.
     pub leftovers: Vec<leftovers::Leftover>,
     /// The host-install answer the target configuration records, where it
@@ -216,10 +218,15 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
     };
     let envrc_path = target.join(".envrc");
     let envrc = Presence::of(&envrc_path);
-    let envrc_sync = envrc.is_present() && has_sync_line(&std::fs::read_to_string(&envrc_path)?);
+    let envrc_text = if envrc.is_present() {
+        std::fs::read_to_string(&envrc_path)?
+    } else {
+        String::new()
+    };
+    let envrc_check = has_check_line(&envrc_text);
+    let envrc_old_sync = has_sync_line(&envrc_text);
     let key = state_key(&target);
     let pending = marker_path(&key).is_some_and(|marker| txn::marker_is_pending(&marker));
-    let stamp = read_stamp(&key);
     let leftovers = leftovers::scan(&target)?;
     // A configuration this binary cannot read refuses here as it does for
     // every verb that reads one, rather than reading as no answer.
@@ -236,20 +243,28 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
         managers,
         wired,
         envrc,
-        envrc_sync,
+        envrc_check,
+        envrc_old_sync,
         pending,
-        stamp,
         leftovers,
         acquisition,
     })
 }
 
-/// Whether an `.envrc` text carries the sync line: a line whose
+/// Whether an `.envrc` text carries the retired sync line: a line whose
 /// trimmed start is the verb, whatever flags follow.
 #[must_use]
 pub fn has_sync_line(text: &str) -> bool {
     text.lines()
         .any(|line| line.trim_start().starts_with("rk self-depend sync"))
+}
+
+/// Whether an `.envrc` text carries the check line: a line whose trimmed
+/// start is the verb, whatever follows.
+#[must_use]
+pub fn has_check_line(text: &str) -> bool {
+    text.lines()
+        .any(|line| line.trim_start().starts_with("rk self-depend check"))
 }
 
 /// The `release-kit` node's locked commit and ref, from a `flake.lock`.
@@ -302,10 +317,11 @@ pub fn lock_path(key: &str) -> Option<PathBuf> {
     state_dir().map(|dir| dir.join(format!("{key}.lock")))
 }
 
-/// The daily stamp for one checkout.
+/// The directory the version check caches its answers under:
+/// `<cache root>/self-depend`.
 #[must_use]
-pub fn stamp_path(key: &str) -> Option<PathBuf> {
-    state_dir().map(|dir| dir.join(format!("{key}.stamp")))
+pub fn check_cache_dir() -> Option<PathBuf> {
+    crate::applog::cache_root().map(|root| root.join("self-depend"))
 }
 
 /// The directory a transaction backs the two files up into.
@@ -318,14 +334,6 @@ pub fn backup_dir(key: &str) -> Option<PathBuf> {
 #[must_use]
 pub fn marker_path(key: &str) -> Option<PathBuf> {
     state_dir().map(|dir| dir.join(key).join("pending.json"))
-}
-
-/// The day the last sync attempt was stamped, where one was.
-#[must_use]
-pub fn read_stamp(key: &str) -> Option<String> {
-    let text = std::fs::read_to_string(stamp_path(key)?).ok()?;
-    let day = text.trim();
-    (day.len() == 10).then(|| day.to_owned())
 }
 
 /// Fold the three tag shapes — `v0.2.16`, `0.2.16`, and the release URL

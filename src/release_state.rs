@@ -157,6 +157,59 @@ pub const PUBLISHED_NO_ARTIFACTS: &str = "published-no-artifacts";
 /// The code for an artifact no attestation covers.
 pub const ARTIFACT_WITHOUT_ATTESTATION: &str = "artifact-without-attestation";
 
+/// The code for an open release request that stands armed to merge
+/// itself.
+pub const REQUEST_ARMED: &str = "request-armed";
+
+/// The recovery section for an armed release request.
+const RECOVERY_REQUEST_ARMED: &str = "A release request stands armed";
+
+/// The symptom for an open release request that stands armed to merge
+/// itself, with the call that disarms it, or `None` where it does not.
+///
+/// SATISFIES release-state:an-armed-request-fails-the-report
+///
+/// A release merges only on the operator's order, so an arm that rk 0.9.14
+/// or older left standing is a defect the report names, with the one call
+/// that removes it.
+#[must_use]
+pub fn armed_request(request: &Request, forge: Forge, repo: &str) -> Option<Symptom> {
+    if request.armed != Answer::Yes {
+        return None;
+    }
+    let number = request.number?;
+    Some(Symptom {
+        code: REQUEST_ARMED,
+        evidence: format!(
+            "release request {} stands armed to merge itself, and a release waits for the operator's order; {} disarms it",
+            request_name(forge, number),
+            disarm_command(forge, repo, number)
+        ),
+        recovery: RECOVERY_REQUEST_ARMED,
+    })
+}
+
+/// A request's number as its forge spells it: `#12` or `!12`.
+#[must_use]
+pub fn request_name(forge: Forge, number: u64) -> String {
+    match forge {
+        Forge::Github => format!("#{number}"),
+        Forge::Gitlab => format!("!{number}"),
+    }
+}
+
+/// The one call that disarms an armed request, as an operator types it.
+#[must_use]
+pub fn disarm_command(forge: Forge, repo: &str, number: u64) -> String {
+    match forge {
+        Forge::Github => format!("gh pr merge {number} --disable-auto --repo {repo}"),
+        Forge::Gitlab => format!(
+            "glab api -X POST projects/{}/merge_requests/{number}/cancel_merge_when_pipeline_succeeds",
+            gitlab_project(repo)
+        ),
+    }
+}
+
 /// The code for a release tag with no complete release page.
 pub const TAG_WITHOUT_RELEASE: &str = "tag-without-release";
 

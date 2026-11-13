@@ -591,7 +591,6 @@ mod tests {
                                     security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                                     security_scope: String::new(),
                                     required_check: "gate".to_owned(),
-                                    required_workflow: "ci".to_owned(),
                                     dev_environment: None,
                                 },
                                 files: Vec::new(),
@@ -669,9 +668,8 @@ mod tests {
                 release_mode: Some(ReleaseMode::Automatic),
                 release_driver: Some(tech),
                 style,
-                // GitLab refuses both answers, because it names no check.
+                // GitLab refuses the answer, because it names no check.
                 required_check: (resolved.forge == "github").then_some("gate"),
-                required_workflow: (resolved.forge == "github").then_some("ci"),
                 build_packages: None,
                 trunk: None,
                 checkout_mode: Some(checkout_mode),

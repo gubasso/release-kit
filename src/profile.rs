@@ -376,7 +376,6 @@ pub struct Params {
     security_response: String,
     security_scope: String,
     required_check: String,
-    required_workflow: String,
     dev_environment: Option<DevEnvironment>,
 }
 
@@ -404,11 +403,8 @@ pub struct Inputs<'a> {
     pub integration: Option<Integration>,
     /// Merge form override.
     pub merge_form: Option<MergeForm>,
-    /// The check the release gate believes, overriding the configuration.
+    /// The check the trunk ruleset requires, overriding the configuration.
     pub required_check: Option<&'a str>,
-    /// The workflow whose completion wakes the release gate, overriding
-    /// the configuration.
-    pub required_workflow: Option<&'a str>,
     /// The build packages override, an automatic bash release alone.
     pub build_packages: Option<&'a str>,
     /// Nix packaging request override.
@@ -534,18 +530,9 @@ impl Params {
             security_contact: record.parameters.security_contact.clone(),
             security_response: record.parameters.security_response.clone(),
             security_scope: record.parameters.security_scope.clone(),
-            // A record predating the two answers carries neither, and
-            // the compiled default is what such a landing renders now.
-            required_check: gate_answer(
-                record,
-                |(check, _)| check,
-                |parameters| &parameters.required_check,
-            ),
-            required_workflow: gate_answer(
-                record,
-                |(_, workflow)| workflow,
-                |parameters| &parameters.required_workflow,
-            ),
+            // A record predating the answer carries none, and the
+            // compiled default is what such a landing renders now.
+            required_check: gate_answer(record),
             dev_environment: record.parameters.dev_environment.clone(),
         }
     }
@@ -745,13 +732,6 @@ impl Params {
         self.dev_environment.as_ref()
     }
 
-    /// The workflow whose completion wakes the release gate, empty where
-    /// this target renders no gate that waits on one.
-    #[must_use]
-    pub fn required_workflow(&self) -> &str {
-        &self.required_workflow
-    }
-
     /// The canonical identity and Git workflow flags, as `rk init` and
     /// `rk adopt` take them: every resolved answer stated, so a follow-up
     /// command a preview prints applies the decision that was previewed.
@@ -797,10 +777,6 @@ impl Params {
         if !self.required_check.is_empty() {
             out.push_str(" --required-check ");
             push_shell_word(&mut out, &self.required_check);
-        }
-        if !self.required_workflow.is_empty() {
-            out.push_str(" --required-workflow ");
-            push_shell_word(&mut out, &self.required_workflow);
         }
         out
     }
@@ -900,7 +876,6 @@ impl Params {
             security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
             security_scope: String::new(),
             required_check: "gate".to_owned(),
-            required_workflow: "ci".to_owned(),
             dev_environment: None,
         }
     }
@@ -991,50 +966,37 @@ fn invalid_release(message: impl std::fmt::Display) -> RkError {
     ))
 }
 
-/// The canonical release gate answers, for the one shape that renders a
-/// gate reading them, or `None` for every other shape.
+/// The canonical required check, for the one shape that names one by
+/// default, or `None` for every other shape.
 ///
-/// One shape consumes them: GitHub, an automatic release, the trunk
-/// style, and local integration. There the rendered release workflow
-/// wakes on a workflow completing and judges a named check, so a landing
-/// that left either empty would render a gate no event can ever satisfy.
-/// The names are this convention's own: `runbooks/setup.md` writes the
-/// gate job as `gate`, and `ci` is the workflow that carries it.
+/// One shape takes it: GitHub, an automatic release, and the trunk style,
+/// under either integration. The merge job that `rk release merge`
+/// dispatches judges this check for the request's head, and the trunk
+/// ruleset requires it. The name is this convention's own:
+/// `runbooks/setup.md` writes the check job as `gate`.
 ///
-/// They are a compiled default and nothing more. A flag, the committed
-/// configuration, and a compatible record each answer ahead of them, the
+/// It is a compiled default and nothing more. A flag, the committed
+/// configuration, and a compatible record each answer ahead of it, the
 /// resolved answer is written back and recorded, and `rk setup check`
 /// proves it against the target's own workflow files. A project whose
 /// names differ states them and the default never applies.
 ///
-/// Every other shape resolves to empty, because no rendered reader
-/// consumes the answer there. Under forge integration the trunk ruleset
-/// holds the release request and `setup.required_check` names the context
-/// that ruleset requires, which is the project's own answer and not this
-/// convention's, so `protect-trunk` keeps asking for it.
+/// Every other shape resolves to empty. GitLab judges the whole pipeline
+/// and names no check.
 #[must_use]
-pub fn gate_defaults(
-    profile: &ProfileSnapshot,
-    git: &GitWorkflow,
-) -> Option<(&'static str, &'static str)> {
+pub fn gate_defaults(profile: &ProfileSnapshot) -> Option<&'static str> {
     let consuming = profile.forge.as_deref() == Some("github")
         && profile.release.mode == ReleaseMode::Automatic
-        && profile.release.style == Some(Style::Trunk)
-        && git.integration == Integration::Local;
-    consuming.then_some(("gate", "ci"))
+        && profile.release.style == Some(Style::Trunk);
+    consuming.then_some("gate")
 }
 
-/// One gate answer read back from a record, falling to the compiled
+/// The required check read back from a record, falling to the compiled
 /// default where the record predates the field.
-fn gate_answer(
-    record: &manifest::Manifest,
-    pick: impl Fn((&'static str, &'static str)) -> &'static str,
-    held: impl Fn(&manifest::Parameters) -> &String,
-) -> String {
-    let recorded = held(&record.parameters);
+fn gate_answer(record: &manifest::Manifest) -> String {
+    let recorded = &record.parameters.required_check;
     if recorded.is_empty() {
-        gate_defaults(&record.profile, &record.git)
-            .map_or_else(String::new, |pair| pick(pair).to_owned())
+        gate_defaults(&record.profile).map_or_else(String::new, str::to_owned)
     } else {
         recorded.clone()
     }
@@ -1727,23 +1689,14 @@ pub fn resolve(
         crate::config::canonical_scope(&security_scope).map_err(crate::config::invalid)?;
     sources.insert("security.scope", source);
 
-    // The release gate's two answers. Neither has an observation: nothing
-    // in the target proposes a name. The compiled default is the
-    // convention's own pair, and it applies to the one shape that renders
-    // a gate reading them.
-    let gate_default = gate_defaults(
-        &ProfileSnapshot {
-            technologies: technologies.clone(),
-            forge: forge.clone(),
-            release: release.clone(),
-        },
-        &GitWorkflow {
-            trunk: trunk.clone(),
-            checkout_mode,
-            integration,
-            merge_form,
-        },
-    );
+    // The required check has no observation: nothing in the target
+    // proposes a name. The compiled default is the convention's own, and
+    // it applies to the one shape whose merge job judges it.
+    let gate_default = gate_defaults(&ProfileSnapshot {
+        technologies: technologies.clone(),
+        forge: forge.clone(),
+        release: release.clone(),
+    });
     let (required_check, source) = answered([
         (flags.required_check.map(str::to_owned), Source::Flag),
         (
@@ -1760,34 +1713,12 @@ pub fn resolve(
         ),
         (None, Source::Observation),
         (
-            Some(gate_default.map_or_else(String::new, |(check, _)| check.to_owned())),
+            Some(gate_default.map_or_else(String::new, str::to_owned)),
             Source::Default,
         ),
     ])
     .unwrap_or((String::new(), Source::Default));
     sources.insert("setup.required_check", source);
-    let (required_workflow, source) = answered([
-        (flags.required_workflow.map(str::to_owned), Source::Flag),
-        (
-            config
-                .map(|c| c.setup.required_workflow.clone())
-                .filter(|name| !name.is_empty()),
-            Source::Config,
-        ),
-        (
-            record
-                .map(|r| r.parameters.required_workflow.clone())
-                .filter(|name| !name.is_empty()),
-            Source::Record,
-        ),
-        (None, Source::Observation),
-        (
-            Some(gate_default.map_or_else(String::new, |(_, workflow)| workflow.to_owned())),
-            Source::Default,
-        ),
-    ])
-    .unwrap_or((String::new(), Source::Default));
-    sources.insert("setup.required_workflow", source);
     // The development environment has no flag and no observation: only the
     // operator answers it, and nothing reads a manager file to propose one.
     // A table whose run is empty states no answer and clears the record's.
@@ -1808,20 +1739,13 @@ pub fn resolve(
     }
     sources.insert("dev_environment", source);
     // GitLab requires the whole pipeline through one project setting and
-    // names no individual check, so neither answer has a reader there.
+    // names no individual check, so the answer has no reader there.
     // Refusing the flag says that; discarding it silently would let an
-    // operator believe a gate was configured.
-    if forge.as_deref() == Some("gitlab") {
-        for (flag, supplied) in [
-            ("--required-check", flags.required_check),
-            ("--required-workflow", flags.required_workflow),
-        ] {
-            if supplied.is_some() {
-                return Err(RkError::Usage(format!(
-                    "{flag} is not a GitLab answer: the forge requires the whole pipeline through one project setting and names no individual check"
-                )));
-            }
-        }
+    // operator believe a check was configured.
+    if forge.as_deref() == Some("gitlab") && flags.required_check.is_some() {
+        return Err(RkError::Usage(
+            "--required-check is not a GitLab answer: the forge requires the whole pipeline through one project setting and names no individual check".to_owned(),
+        ));
     }
 
     let mut unknown: Vec<String> = technologies
@@ -1870,7 +1794,6 @@ pub fn resolve(
             security_response,
             security_scope,
             required_check,
-            required_workflow,
             dev_environment,
         },
         sources,

@@ -18,12 +18,13 @@ use serde::Serialize;
 use camino::Utf8Path;
 
 use crate::cli::self_depend::{
-    AddArgs, Caller, CleanArgs, SelfDependAction, SelfDependArgs, StatusArgs, SyncArgs,
+    AddArgs, Caller, CheckArgs, CleanArgs, SelfDependAction, SelfDependArgs, StatusArgs, SyncArgs,
 };
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::output::Output;
 use crate::probes::{self, ProbeStatus};
+use crate::self_depend::check;
 use crate::self_depend::discover::{self, Discovery};
 use crate::self_depend::fragments::{self, Fragment};
 use crate::self_depend::guard::{self, Acquired};
@@ -34,7 +35,7 @@ use crate::self_depend::txn::{self, AbortFailure, Recovery, StepFailure};
 use crate::self_depend::venue::Venue;
 use crate::self_depend::{self, Observed, Presence, pin};
 
-/// The `rk.self-depend-status/2` document.
+/// The `rk.self-depend-status/3` document.
 #[derive(Debug, Serialize)]
 struct StatusReport<'a> {
     /// The shape version of this document.
@@ -58,11 +59,10 @@ struct StatusReport<'a> {
     /// Whether `.envrc` exists. Direnv is not a manager: it loads a
     /// shell and pins nothing, so it sits outside the list.
     envrc: Presence,
-    /// Whether `.envrc` carries the sync line.
-    envrc_sync: bool,
-    /// The day of the last sync attempt, where stamped.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stamp: Option<&'a str>,
+    /// Whether `.envrc` carries the check line.
+    envrc_check: bool,
+    /// Whether `.envrc` still carries the retired sync line.
+    envrc_old_sync: bool,
     /// Whether an interrupted transaction awaits recovery.
     pending: bool,
     /// The two host probes the sync depends on.
@@ -73,7 +73,7 @@ struct StatusReport<'a> {
     next: &'a [String],
 }
 
-/// The `rk.self-depend-add/2` document.
+/// The `rk.self-depend-add/3` document.
 #[derive(Debug, Serialize)]
 struct AddReport<'a> {
     /// The shape version of this document.
@@ -155,15 +155,13 @@ struct Manual {
     reason: &'static str,
 }
 
-/// The `rk.self-depend-sync/2` document.
+/// The `rk.self-depend-sync/3` document.
 #[derive(Debug, Serialize)]
 struct SyncReport<'a> {
     /// The shape version of this document.
     schema: &'static str,
     /// `preview` or `apply`.
     mode: &'static str,
-    /// `envrc` or `operator`.
-    caller: &'static str,
     /// The target, canonical.
     target: &'a str,
     /// The manager whose pin the run reads and moves, where one was
@@ -171,8 +169,8 @@ struct SyncReport<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     manager: Option<Manager>,
     /// The closed outcome vocabulary: `bumped`, `current`, `ahead`,
-    /// `would-bump`, `pending-recovery`, `recovery-failed`, `skipped-ci`,
-    /// `skipped-disabled`, `skipped-stamped`, `skipped-locked`,
+    /// `would-bump`, `pending-recovery`, `recovery-failed`,
+    /// `refused-in-envrc`, `skipped-locked`,
     /// `lock-unavailable`, `not-wired`, `unpinned`, `no-manager`,
     /// `ambiguous-pin`, `refused-dirty`, `unreachable`, `unparsable`,
     /// `update-failed`, `build-failed`, `restore-failed`,
@@ -199,9 +197,6 @@ struct SyncReport<'a> {
     /// before this run.
     #[serde(skip_serializing_if = "Option::is_none")]
     recovered: Option<&'a [String]>,
-    /// The day this checkout's last attempt was stamped.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stamp: Option<&'a str>,
     /// What plausibly follows.
     next: &'a [String],
 }
@@ -233,7 +228,6 @@ struct SyncRun {
     steps: Option<Vec<Step>>,
     restored: Option<Vec<String>>,
     recovered: Option<Vec<String>>,
-    stamp: Option<String>,
 }
 
 /// The two Soft probes the sync spawns, as `ok` or `failed`.
@@ -258,6 +252,7 @@ pub fn run(args: &SelfDependArgs) -> Result<(), RkError> {
         SelfDependAction::Add(args) => add(args),
         SelfDependAction::Clean(args) => clean(args),
         SelfDependAction::Sync(args) => sync(args),
+        SelfDependAction::Check(args) => check(args),
     }
 }
 
@@ -292,12 +287,14 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
         out.result_line(manager_line(entry));
     }
     out.result_line(format!(
-        ".envrc {}, sync line {}",
+        ".envrc {}, check line {}",
         word(observed.envrc),
-        if observed.envrc_sync { "yes" } else { "no" }
+        if observed.envrc_check { "yes" } else { "no" }
     ));
-    if let Some(stamp) = &observed.stamp {
-        out.result_line(format!("last sync attempt {stamp}"));
+    if observed.envrc_old_sync {
+        out.result_line(
+            ".envrc still carries the retired sync line, which moves no pin from 0.9.15 on",
+        );
     }
     if observed.pending {
         out.result_line("an interrupted sync awaits recovery");
@@ -309,15 +306,15 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
     let next = status_next(&observed);
     out.next(&next);
     out.emit(&StatusReport {
-        schema: "rk.self-depend-status/2",
+        schema: "rk.self-depend-status/3",
         target: observed.target.as_str(),
         state,
         acquisition: observed.acquisition.as_ref(),
         wired: observed.wired,
         managers: &managers,
         envrc: observed.envrc,
-        envrc_sync: observed.envrc_sync,
-        stamp: observed.stamp.as_deref(),
+        envrc_check: observed.envrc_check,
+        envrc_old_sync: observed.envrc_old_sync,
         pending: observed.pending,
         host,
         leftovers: &observed.leftovers,
@@ -568,7 +565,7 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
     let next = add_next(&observed, pair, &file, args.apply, &written);
     out.next(&next);
     out.emit(&AddReport {
-        schema: "rk.self-depend-add/2",
+        schema: "rk.self-depend-add/3",
         mode,
         target: observed.target.as_str(),
         tag: &tag,
@@ -619,32 +616,39 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
 /// caller ends a stamped day before the lock, the fetch, and nix; then
 /// the lock; then the observation and the dirty check; then the decision.
 fn sync(args: &SyncArgs) -> Result<(), RkError> {
+    if args.caller == Caller::Envrc {
+        return Err(RkError::Usage(
+            "--caller envrc is retired: the .envrc line runs `rk self-depend check`, which warns of a newer release and moves no pin; a sync is the operator's act".to_owned(),
+        ));
+    }
     let out = Output::new(args.json);
     let mut observed = self_depend::observe(&args.target)?;
     let key = observed.key();
-    let mut run = SyncRun {
-        stamp: observed.stamp.clone(),
-        ..SyncRun::default()
-    };
+    let mut run = SyncRun::default();
     let mut held = None;
-    if guard::switched_off() {
-        run.outcome = "skipped-disabled";
-        run.detail = Some(format!("{}=0 is set", guard::SWITCH_VAR));
-    } else if guard::in_ci() {
-        run.outcome = "skipped-ci";
-        run.detail = Some("a CI variable is set; the sync never runs on a runner".to_owned());
+    if args.apply && guard::in_envrc() {
+        // SATISFIES packaging:a-pin-moves-only-on-the-operators-order
+        run.outcome = "refused-in-envrc";
+        run.detail = Some(format!(
+            "{} is set: an .envrc evaluation or `direnv exec`, so nothing moves; run `nix develop -c rk self-depend sync --apply` from a shell",
+            guard::IN_ENVRC_VAR
+        ));
+        out.warn(format!(
+            "rk self-depend sync: {}",
+            run.detail.as_deref().unwrap_or_default()
+        ));
     } else {
         gate_and_decide(args, &mut observed, &key, &mut run, &mut held, out)?;
     }
     render_sync(out, args, &observed, &run)?;
     drop(held);
-    exit_for(args.caller, &run)
+    exit_for(&run)
 }
 
-/// The stamp, the lock, the recovery, the dirty check, and the
-/// decision, in that order; `held` keeps the lock alive until the report
-/// is rendered. The recovery runs under the lock, so two entries never
-/// restore the same marker at once.
+/// The lock, the recovery, the dirty check, and the decision, in that
+/// order; `held` keeps the lock alive until the report is rendered. The
+/// recovery runs under the lock, so two runs never restore the same
+/// marker at once.
 fn gate_and_decide(
     args: &SyncArgs,
     observed: &mut Observed,
@@ -653,23 +657,6 @@ fn gate_and_decide(
     held: &mut Option<guard::Lock>,
     out: Output,
 ) -> Result<(), RkError> {
-    let envrc = args.caller == Caller::Envrc;
-    let today = guard::today();
-    // A pending marker outranks the stamp: an interrupted run recovers on
-    // the next entry, not on the next day.
-    if args.apply && envrc && !observed.pending && observed.stamp.as_deref() == Some(today.as_str())
-    {
-        run.outcome = "skipped-stamped";
-        run.detail = Some(format!("today's attempt already happened ({today})"));
-        return Ok(());
-    }
-    if args.apply && envrc {
-        // A stamp that cannot be written is not the run's failure: the
-        // lock under the same root answers for the broken state root.
-        if guard::write_stamp(key).is_ok() {
-            run.stamp = Some(today);
-        }
-    }
     if args.apply {
         match guard::acquire(key) {
             Acquired::Held(lock) => *held = Some(lock),
@@ -1043,23 +1030,6 @@ fn transact(target: &Utf8Path, rewritten: &str, steps: &mut Vec<Step>) -> Option
     None
 }
 
-/// Whether an outcome is "nothing to do", which the `.envrc` caller
-/// reports in silence.
-const fn is_quiet(outcome: &str) -> bool {
-    matches!(
-        outcome.as_bytes(),
-        b"current"
-            | b"ahead"
-            | b"no-manager"
-            | b"not-wired"
-            | b"unpinned"
-            | b"skipped-ci"
-            | b"skipped-disabled"
-            | b"skipped-stamped"
-            | b"skipped-locked"
-    )
-}
-
 /// Render the human lines and emit the document.
 fn render_sync(
     out: Output,
@@ -1068,41 +1038,30 @@ fn render_sync(
     run: &SyncRun,
 ) -> Result<(), RkError> {
     use std::fmt::Write as _;
-    let quiet = args.caller == Caller::Envrc && is_quiet(run.outcome);
     if let Some(recovered) = &run.recovered {
         out.result_line(format!(
             "recovered an interrupted sync: restored {}",
             recovered.join(", ")
         ));
     }
-    if !quiet {
-        out.result_line(sync_line(run));
-        if let Some(steps) = &run.steps {
-            for step in steps {
-                let mut line = format!("  {} {}", step.status, step.step);
-                if let Some(detail) = &step.detail {
-                    let _ = write!(line, ": {detail}");
-                }
-                out.result_line(line);
+    out.result_line(sync_line(run));
+    if let Some(steps) = &run.steps {
+        for step in steps {
+            let mut line = format!("  {} {}", step.status, step.step);
+            if let Some(detail) = &step.detail {
+                let _ = write!(line, ": {detail}");
             }
-        }
-        if let Some(restored) = &run.restored {
-            out.result_line(format!("restored {}", restored.join(", ")));
+            out.result_line(line);
         }
     }
-    let next = if quiet {
-        Vec::new()
-    } else {
-        sync_next(observed, run)
-    };
+    if let Some(restored) = &run.restored {
+        out.result_line(format!("restored {}", restored.join(", ")));
+    }
+    let next = sync_next(observed, run);
     out.next(&next);
     out.emit(&SyncReport {
-        schema: "rk.self-depend-sync/2",
+        schema: "rk.self-depend-sync/3",
         mode: if args.apply { "apply" } else { "preview" },
-        caller: match args.caller {
-            Caller::Envrc => "envrc",
-            Caller::Operator => "operator",
-        },
         target: observed.target.as_str(),
         manager: run.manager,
         outcome: run.outcome,
@@ -1112,7 +1071,6 @@ fn render_sync(
         steps: run.steps.as_deref(),
         restored: run.restored.as_deref(),
         recovered: run.recovered.as_deref(),
-        stamp: run.stamp.as_deref(),
         next: &next,
     })
 }
@@ -1151,7 +1109,7 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
             "the next shell reload takes the new rk; nothing here commits".to_owned(),
         ],
         "would-bump" => vec![format!(
-            "rk self-depend sync --caller operator --apply --target {target} moves the pin, locks it, and proves the build"
+            "rk self-depend sync --apply --target {target} moves the pin, locks it, and proves the build"
         )],
         "current" => vec![format!(
             "rk self-depend status --target {target} reports the wiring"
@@ -1160,7 +1118,7 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
             "a pin past the latest release is a deliberate state; nothing moves it back".to_owned(),
         ],
         "pending-recovery" => vec![format!(
-            "rk self-depend sync --caller operator --apply --target {target} restores both files first"
+            "rk self-depend sync --apply --target {target} restores both files first"
         )],
         "no-manager" | "not-wired" | "unpinned" => vec![format!(
             "rk self-depend add --target {target} prints the fragments; --apply seeds the files a target lacks"
@@ -1171,16 +1129,12 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         "refused-dirty" => vec![format!(
             "git -C {target} status -- {files} names the edits; commit or stash them, then rerun"
         )],
-        "skipped-disabled" => vec![format!(
-            "unset {} to let the sync run again",
-            guard::SWITCH_VAR
-        )],
-        "skipped-stamped" => vec![format!(
-            "rk self-depend sync --caller operator --apply --target {target} runs the attempt now, whatever the stamp says"
+        "refused-in-envrc" => vec![format!(
+            "nix develop -c rk self-depend sync --apply --target {target}, from a shell"
         )],
         "skipped-locked" => vec!["let the other run finish; nothing here is owed".to_owned()],
         "prerequisite-unmet" => vec![
-            "install or upgrade each tool the detail names; the sync runs again on the next entry".to_owned(),
+            "install or upgrade each tool the detail names, then rerun the sync".to_owned(),
         ],
         "lock-unavailable" => vec!["make the state root writable: rk doctor reports it".to_owned()],
         "unreachable" | "unparsable" => vec![
@@ -1195,7 +1149,7 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         "update-failed" | "build-failed" => vec![
             "both files are as they were; the failing step's last line is above".to_owned(),
             format!(
-                "rk self-depend sync --caller operator --apply --target {target} retries after the fix"
+                "rk self-depend sync --apply --target {target} retries after the fix"
             ),
         ],
         _ => Vec::new(),
@@ -1208,14 +1162,19 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
     next
 }
 
-/// The exit for a finished run: the `.envrc` caller exits 0 on every
-/// reported outcome, and the operator caller takes the matrix.
-fn exit_for(caller: Caller, run: &SyncRun) -> Result<(), RkError> {
-    if caller == Caller::Envrc {
-        return Ok(());
-    }
+/// The exit for a finished run: the exit-code matrix of the operator's
+/// sync.
+fn exit_for(run: &SyncRun) -> Result<(), RkError> {
     let detail = run.detail.clone().unwrap_or_default();
     match run.outcome {
+        // Exit 1: a refusal of the operator's own order would read as the
+        // tool's failure, and this is the guard working.
+        "refused-in-envrc" => Err(RkError::check_failed(
+            Diagnostic::new(Reason::DestructiveRefusal, detail)
+                .expected("a sync run from a shell, never from an .envrc evaluation")
+                .action("run nix develop -c rk self-depend sync --apply from a shell")
+                .target_state("nothing was written"),
+        )),
         "prerequisite-unmet" => Err(RkError::refusal(
             Diagnostic::new(Reason::PrerequisiteUnmet, detail)
                 .expected("every tool rk self-depend sync runs, on PATH and at or above its floor")
@@ -1253,6 +1212,118 @@ fn exit_for(caller: Caller, run: &SyncRun) -> Result<(), RkError> {
             Err(RkError::Io(std::io::Error::other(detail)))
         }
         _ => Ok(()),
+    }
+}
+
+/// The `rk.self-depend-check/1` document.
+#[derive(Debug, Serialize)]
+struct CheckReport<'a> {
+    /// The shape version of this document.
+    schema: &'static str,
+    /// The target, canonical, where it was read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<&'a str>,
+    /// `disabled`, `ci`, `unread`, `no-pin`, `cached`, `refreshed`,
+    /// `locked`, or `unwritable`.
+    outcome: &'static str,
+    /// The pinned version, where one manager pins it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pin: Option<&'a str>,
+    /// The latest release the cache holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest: Option<&'a str>,
+    /// The cache file, where a cache root resolves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache: Option<String>,
+    /// Whether this run read the network.
+    fetched: bool,
+    /// Each warning printed on stderr.
+    warnings: &'a [String],
+}
+
+/// Warn where a newer release is out, from the cache, refreshing it where
+/// a refresh is due. Every outcome exits 0, so the shell that runs it on
+/// directory entry still loads, and nothing but the cache is written.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+fn check(args: &CheckArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let emit = |outcome: &'static str,
+                target: Option<&str>,
+                pin: Option<&str>,
+                cache: Option<&check::Cache>,
+                path: Option<&std::path::Path>,
+                fetched: bool,
+                warnings: &[String]| {
+        for line in warnings {
+            out.warn(line);
+        }
+        out.emit(&CheckReport {
+            schema: "rk.self-depend-check/1",
+            target,
+            outcome,
+            pin,
+            latest: cache.and_then(|cache| cache.latest.as_deref()),
+            cache: path.map(|path| path.display().to_string()),
+            fetched,
+            warnings,
+        })
+    };
+    if guard::switched_off() {
+        return emit("disabled", None, None, None, None, false, &[]);
+    }
+    if guard::in_ci() {
+        return emit("ci", None, None, None, None, false, &[]);
+    }
+    let observed = match self_depend::observe(&args.target) {
+        Ok(observed) => observed,
+        Err(error) => {
+            let warnings = vec![format!(
+                "rk self-depend check could not read {}: {error}",
+                args.target
+            )];
+            return emit("unread", None, None, None, None, false, &warnings);
+        }
+    };
+    let target = Some(observed.target.as_str());
+    let Some(pin) = checked_pin(&observed) else {
+        return emit("no-pin", target, None, None, None, false, &[]);
+    };
+    let Some(paths) = check::Paths::for_key(&observed.key()) else {
+        let warnings = vec![
+            "rk cannot record its version check: neither XDG_CACHE_HOME nor HOME is set."
+                .to_owned(),
+        ];
+        return emit(
+            "unwritable",
+            target,
+            Some(&pin),
+            None,
+            None,
+            false,
+            &warnings,
+        );
+    };
+    let run = check::run(&paths, std::time::SystemTime::now());
+    let warnings = check::warnings(Some(&pin), run.cache.as_ref(), &run.outcome, &paths.cache);
+    emit(
+        run.outcome.word(),
+        target,
+        Some(&pin),
+        run.cache.as_ref(),
+        Some(&paths.cache),
+        run.fetched,
+        &warnings,
+    )
+}
+
+/// The version the one wired manager pins, where exactly one manager
+/// names release-kit with exactly one version.
+fn checked_pin(observed: &Observed) -> Option<String> {
+    let entry = observed.entry(observed.wired?)?;
+    match &entry.read {
+        PinRead::One { version, .. } => Some(version.clone()),
+        _ => None,
     }
 }
 
@@ -1301,7 +1372,7 @@ fn clean(args: &CleanArgs) -> Result<(), RkError> {
         }
         for file in &rewritten {
             out.result_line(format!(
-                "rewrote {file}: the sync line replaces the invocation"
+                "rewrote {file}: the check line replaces the invocation"
             ));
         }
         for entry in &manual {
@@ -1486,11 +1557,11 @@ fn add_next(
     }
     if flake_pair {
         next.push(format!(
-            "rk self-depend sync --caller operator --apply --target {target} writes the lock and proves the build; commit flake.lock, then direnv allow"
+            "rk self-depend sync --apply --target {target} writes the lock and proves the build; commit flake.lock, then direnv allow"
         ));
     } else {
         next.push(format!(
-            "rk self-depend sync --caller operator --apply --target {target} moves the pin in {file}; the manager's own install takes it from there"
+            "rk self-depend sync --apply --target {target} moves the pin in {file}; the manager's own install takes it from there"
         ));
     }
     next
@@ -1557,9 +1628,21 @@ const fn probe_word(probe: &probes::ProbeResult) -> &'static str {
 /// What plausibly follows a status.
 fn status_next(observed: &Observed) -> Vec<String> {
     let target = &observed.target;
+    let mut next = status_next_by_state(observed);
+    if observed.envrc_old_sync {
+        next.push(format!(
+            "the .envrc still runs the retired sync line: rk self-depend clean --target {target} --apply swaps it for the check line, after the pin moves, as guidance/0.9.15.md step 36 states"
+        ));
+    }
+    next
+}
+
+/// The step that follows each rollup state.
+fn status_next_by_state(observed: &Observed) -> Vec<String> {
+    let target = &observed.target;
     match observed.state() {
         "pending-recovery" => vec![format!(
-            "rk self-depend sync --caller operator --target {target} recovers the interrupted run"
+            "rk self-depend sync --target {target} recovers the interrupted run"
         )],
         "host" => vec![format!(
             "each host installs rk {} or newer itself; rk self-depend add --target {target} --manager <manager> moves the project onto a pin",
@@ -1578,7 +1661,7 @@ fn status_next(observed: &Observed) -> Vec<String> {
             "rk self-depend clean --target {target} previews the removal of the predecessor mechanism; --apply removes it"
         )],
         _ => vec![format!(
-            "rk self-depend sync --caller operator --target {target} reports whether the pin is current"
+            "rk self-depend sync --target {target} reports whether the pin is current"
         )],
     }
 }
@@ -1586,11 +1669,11 @@ fn status_next(observed: &Observed) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddHostReport, AddReport, CleanReport, Host, Manual, Mode, StatusReport, Step, SyncReport,
-        Venue,
+        AddHostReport, AddReport, CheckReport, CleanReport, Host, Manual, Mode, StatusReport, Step,
+        SyncReport, Venue,
     };
 
-    /// The complete `rk.self-depend-sync/1` shape, held by snapshot.
+    /// The complete `rk.self-depend-sync/3` shape, held by snapshot.
     #[test]
     fn the_self_depend_sync_schema_snapshot_holds() {
         let steps = vec![
@@ -1609,9 +1692,8 @@ mod tests {
         let recovered = vec!["flake.nix".to_owned()];
         let next = vec!["both files are as they were".to_owned()];
         let report = SyncReport {
-            schema: "rk.self-depend-sync/2",
+            schema: "rk.self-depend-sync/3",
             mode: "apply",
-            caller: "operator",
             target: "/srv/widget",
             manager: Some(Manager::Flake),
             outcome: "build-failed",
@@ -1621,17 +1703,15 @@ mod tests {
             steps: Some(&steps),
             restored: Some(&restored),
             recovered: Some(&recovered),
-            stamp: Some("2026-09-04"),
             next: &next,
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-sync/2","mode":"apply","caller":"operator","target":"/srv/widget","manager":"flake","outcome":"build-failed","from":"v0.2.15","to":"v0.2.16","detail":"build failed: error: builder failed","steps":[{"step":"rewrite-pin","status":"ok"},{"step":"build","status":"failed","detail":"error: builder failed"}],"restored":["flake.nix","flake.lock"],"recovered":["flake.nix"],"stamp":"2026-09-04","next":["both files are as they were"]}"#
+            r#"{"schema":"rk.self-depend-sync/3","mode":"apply","target":"/srv/widget","manager":"flake","outcome":"build-failed","from":"v0.2.15","to":"v0.2.16","detail":"build failed: error: builder failed","steps":[{"step":"rewrite-pin","status":"ok"},{"step":"build","status":"failed","detail":"error: builder failed"}],"restored":["flake.nix","flake.lock"],"recovered":["flake.nix"],"next":["both files are as they were"]}"#
         );
         let bare = SyncReport {
-            schema: "rk.self-depend-sync/2",
+            schema: "rk.self-depend-sync/3",
             mode: "preview",
-            caller: "envrc",
             target: "/srv/widget",
             manager: None,
             outcome: "no-manager",
@@ -1641,13 +1721,51 @@ mod tests {
             steps: None,
             restored: None,
             recovered: None,
-            stamp: None,
             next: &[],
         };
         assert_eq!(
             serde_json::to_string(&bare).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-sync/2","mode":"preview","caller":"envrc","target":"/srv/widget","outcome":"no-manager","next":[]}"#,
+            r#"{"schema":"rk.self-depend-sync/3","mode":"preview","target":"/srv/widget","outcome":"no-manager","next":[]}"#,
             "an unknown value is omitted, never null"
+        );
+    }
+
+    /// The complete `rk.self-depend-check/1` shape, held by snapshot.
+    #[test]
+    fn the_self_depend_check_schema_snapshot_holds() {
+        let warnings = vec![
+            "rk 0.9.16 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"
+                .to_owned(),
+        ];
+        let report = CheckReport {
+            schema: "rk.self-depend-check/1",
+            target: Some("/srv/widget"),
+            outcome: "cached",
+            pin: Some("v0.9.15"),
+            latest: Some("v0.9.16"),
+            cache: Some(
+                "/srv/cache/release-kit/self-depend/widget-0123456789abcdef.json".to_owned(),
+            ),
+            fetched: false,
+            warnings: &warnings,
+        };
+        assert_eq!(
+            serde_json::to_string(&report).expect("a report serializes"),
+            r#"{"schema":"rk.self-depend-check/1","target":"/srv/widget","outcome":"cached","pin":"v0.9.15","latest":"v0.9.16","cache":"/srv/cache/release-kit/self-depend/widget-0123456789abcdef.json","fetched":false,"warnings":["rk 0.9.16 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"]}"#
+        );
+        let bare = CheckReport {
+            schema: "rk.self-depend-check/1",
+            target: None,
+            outcome: "disabled",
+            pin: None,
+            latest: None,
+            cache: None,
+            fetched: false,
+            warnings: &[],
+        };
+        assert_eq!(
+            serde_json::to_string(&bare).expect("a report serializes"),
+            r#"{"schema":"rk.self-depend-check/1","outcome":"disabled","fetched":false,"warnings":[]}"#
         );
     }
 
@@ -1724,7 +1842,7 @@ mod tests {
         let written = vec![".envrc".to_owned()];
         let next = vec!["direnv allow".to_owned()];
         let report = AddReport {
-            schema: "rk.self-depend-add/2",
+            schema: "rk.self-depend-add/3",
             mode: "apply",
             target: "/srv/widget",
             tag: "v0.2.16",
@@ -1743,10 +1861,10 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-add/2","mode":"apply","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","manager":"flake","venue":"flake","support":"fragment","file":"flake.nix","file_present":"present","envrc":"absent","written":[".envrc"],"refusal":"the target already carries flake.nix","fragments":[{"id":"flake-input","file":"flake.nix","role":"the pinned release-kit input","placement":"insert-into-attrset","anchor":{"kind":"attrset","path":"inputs","needle":"inputs = {"},"text":"release-kit = {};","present":false}],"next":["direnv allow"]}"#
+            r#"{"schema":"rk.self-depend-add/3","mode":"apply","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","manager":"flake","venue":"flake","support":"fragment","file":"flake.nix","file_present":"present","envrc":"absent","written":[".envrc"],"refusal":"the target already carries flake.nix","fragments":[{"id":"flake-input","file":"flake.nix","role":"the pinned release-kit input","placement":"insert-into-attrset","anchor":{"kind":"attrset","path":"inputs","needle":"inputs = {"},"text":"release-kit = {};","present":false}],"next":["direnv allow"]}"#
         );
         let manual = AddReport {
-            schema: "rk.self-depend-add/2",
+            schema: "rk.self-depend-add/3",
             mode: "preview",
             target: "/srv/widget",
             tag: "v0.2.16",
@@ -1765,13 +1883,13 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&manual).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-add/2","mode":"preview","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","manager":"asdf","venue":"crates","support":"manual","reason":"asdf-plugin-unknown","file":".tool-versions","file_present":"absent","envrc":"absent","written":[],"fragments":[],"next":[]}"#,
+            r#"{"schema":"rk.self-depend-add/3","mode":"preview","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","manager":"asdf","venue":"crates","support":"manual","reason":"asdf-plugin-unknown","file":".tool-versions","file_present":"absent","envrc":"absent","written":[],"fragments":[],"next":[]}"#,
             "a manual pair carries its reason and no refusal"
         );
         let bare = Fragment {
-            id: "envrc-sync",
+            id: "envrc-check",
             file: ".envrc".to_owned(),
-            role: "the daily sync on directory entry",
+            role: "the weekly version check on directory entry",
             placement: "append-line",
             anchor: Anchor {
                 kind: "file",
@@ -1783,12 +1901,12 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&bare).expect("a fragment serializes"),
-            r#"{"id":"envrc-sync","file":".envrc","role":"the daily sync on directory entry","placement":"append-line","anchor":{"kind":"file","path":".envrc"},"text":"line"}"#,
+            r#"{"id":"envrc-check","file":".envrc","role":"the weekly version check on directory entry","placement":"append-line","anchor":{"kind":"file","path":".envrc"},"text":"line"}"#,
             "an unjudged presence and a missing needle are omitted, never null"
         );
     }
 
-    /// The complete `rk.self-depend-status/2` shape, held by snapshot,
+    /// The complete `rk.self-depend-status/3` shape, held by snapshot,
     /// per `distribution:machine-output-declares-its-schema`.
     #[test]
     fn the_status_schema_is_versioned_and_snapshot_tested() {
@@ -1830,17 +1948,20 @@ mod tests {
             },
             Entry::absent(Manager::Mise),
         ];
-        let next = vec!["rk self-depend sync --caller operator --target /srv/widget reports whether the pin is current".to_owned()];
+        let next = vec![
+            "rk self-depend sync --target /srv/widget reports whether the pin is current"
+                .to_owned(),
+        ];
         let report = StatusReport {
-            schema: "rk.self-depend-status/2",
+            schema: "rk.self-depend-status/3",
             target: "/srv/widget",
             state: "ready",
             acquisition: None,
             wired: Some(Manager::Flake),
             managers: &managers,
             envrc: Presence::Present,
-            envrc_sync: true,
-            stamp: Some("2026-09-04"),
+            envrc_check: true,
+            envrc_old_sync: false,
             pending: false,
             host: Host {
                 nix: "ok",
@@ -1851,18 +1972,18 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-status/2","target":"/srv/widget","state":"ready","wired":"flake","managers":[{"manager":"flake","present":"present","file":"flake.nix","pin":"pinned","version":"v0.2.16","pin_lines":1,"freshness":"behind","lock":"present","locked_ref":"refs/tags/v0.2.16","locked_rev":"9f3c"},{"manager":"mise","present":"absent","pin":"absent"}],"envrc":"present","envrc_sync":true,"stamp":"2026-09-04","pending":false,"host":{"nix":"ok","direnv":"failed"},"leftovers":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","action":"manual","reason":"a recipe body carries structure a line scan cannot judge"},{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"next":["rk self-depend sync --caller operator --target /srv/widget reports whether the pin is current"]}"#
+            r#"{"schema":"rk.self-depend-status/3","target":"/srv/widget","state":"ready","wired":"flake","managers":[{"manager":"flake","present":"present","file":"flake.nix","pin":"pinned","version":"v0.2.16","pin_lines":1,"freshness":"behind","lock":"present","locked_ref":"refs/tags/v0.2.16","locked_rev":"9f3c"},{"manager":"mise","present":"absent","pin":"absent"}],"envrc":"present","envrc_check":true,"envrc_old_sync":false,"pending":false,"host":{"nix":"ok","direnv":"failed"},"leftovers":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","action":"manual","reason":"a recipe body carries structure a line scan cannot judge"},{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"next":["rk self-depend sync --target /srv/widget reports whether the pin is current"]}"#
         );
         let bare = StatusReport {
-            schema: "rk.self-depend-status/2",
+            schema: "rk.self-depend-status/3",
             target: "/srv/widget",
             state: "no-manager",
             acquisition: None,
             wired: None,
             managers: &[],
             envrc: Presence::Absent,
-            envrc_sync: false,
-            stamp: None,
+            envrc_check: false,
+            envrc_old_sync: false,
             pending: false,
             host: Host {
                 nix: "failed",
@@ -1873,7 +1994,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&bare).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-status/2","target":"/srv/widget","state":"no-manager","managers":[],"envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#,
+            r#"{"schema":"rk.self-depend-status/3","target":"/srv/widget","state":"no-manager","managers":[],"envrc":"absent","envrc_check":false,"envrc_old_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#,
             "an unknown value must be omitted, not serialized as null"
         );
     }
@@ -1886,15 +2007,15 @@ mod tests {
             minimum: "0.8.7".to_owned(),
         };
         let host = StatusReport {
-            schema: "rk.self-depend-status/2",
+            schema: "rk.self-depend-status/3",
             target: "/srv/widget",
             state: "host",
             acquisition: Some(&answer),
             wired: None,
             managers: &[],
             envrc: Presence::Absent,
-            envrc_sync: false,
-            stamp: None,
+            envrc_check: false,
+            envrc_old_sync: false,
             pending: false,
             host: Host {
                 nix: "failed",
@@ -1905,7 +2026,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&host).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-status/2","target":"/srv/widget","state":"host","acquisition":{"source":"host","minimum":"0.8.7"},"managers":[],"envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#
+            r#"{"schema":"rk.self-depend-status/3","target":"/srv/widget","state":"host","acquisition":{"source":"host","minimum":"0.8.7"},"managers":[],"envrc":"absent","envrc_check":false,"envrc_old_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#
         );
         let added = AddHostReport {
             schema: "rk.self-depend-add-host/1",

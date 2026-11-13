@@ -33,7 +33,11 @@ fn main() -> ExitCode {
     let status = result
         .as_ref()
         .map_or_else(|e| e.reason().as_str(), |()| "ok");
-    applog::record(name(&cli.command), status, started.elapsed().as_millis());
+    // The version check runs on every directory entry and writes nothing
+    // but its cache, so it leaves no record in the application log.
+    if !is_version_check(&cli.command) {
+        applog::record(name(&cli.command), status, started.elapsed().as_millis());
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -143,6 +147,13 @@ const fn name(command: &Commands) -> &'static str {
     }
 }
 
+/// Whether the invocation is `rk self-depend check`, the one verb that
+/// leaves no application log record.
+const fn is_version_check(command: &Commands) -> bool {
+    use release_kit::cli::self_depend::SelfDependAction;
+    matches!(command, Commands::SelfDepend(args) if matches!(args.action, SelfDependAction::Check(_)))
+}
+
 /// Whether the invocation asked for machine output, which decides how an
 /// error renders on stderr.
 const fn wants_json(command: &Commands) -> bool {
@@ -200,6 +211,7 @@ const fn wants_json(command: &Commands) -> bool {
         },
         Commands::Release(args) => match &args.action {
             ReleaseAction::Status { json, .. }
+            | ReleaseAction::Merge { json, .. }
             | ReleaseAction::Request { json, .. }
             | ReleaseAction::Build { json, .. }
             | ReleaseAction::Eligible { json, .. }
@@ -232,6 +244,7 @@ const fn wants_json(command: &Commands) -> bool {
             SelfDependAction::Add(args) => args.json,
             SelfDependAction::Clean(args) => args.json,
             SelfDependAction::Sync(args) => args.json,
+            SelfDependAction::Check(args) => args.json,
         },
         _ => false,
     }

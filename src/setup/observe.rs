@@ -902,17 +902,33 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Missing => StepState::not(format!("the forge does not know {repo}")),
             Api::Failed(err) => StepState::unknown(err),
         }),
-        "auto-merge" => Ok(match api_get(ctx, run, &format!("repos/{repo}"))? {
-            Api::Ok(body) => {
-                if body["allow_auto_merge"].as_bool().unwrap_or(false) {
-                    StepState::ok("a request may merge itself once its checks pass")
-                } else {
-                    StepState::not("a request cannot merge itself; the auto-merge switch is off")
-                }
+        "merge-on-order" => {
+            // Every page is read: an armed request past the first page
+            // still faults, and a listing that does not exhaust decides
+            // nothing.
+            let requests = match open_requests(ctx, run, &format!("repos/{repo}/pulls?state=open"))?
+            {
+                Ok(requests) => requests,
+                Err(state) => return Ok(state),
+            };
+            if let Some(fault) = armed_fault(ctx, &requests, "head", "ref") {
+                return Ok(StepState::not(fault));
             }
-            Api::Missing => StepState::not(format!("the forge does not know {repo}")),
-            Api::Failed(err) => StepState::unknown(err),
-        }),
+            // The switch serves the project's own requests too, so it is
+            // reported and never judged: no landed job arms anything.
+            let switch = match api_get(ctx, run, &format!("repos/{repo}"))? {
+                Api::Ok(body) => body["allow_auto_merge"]
+                    .as_bool()
+                    .map_or("unread", |on| if on { "on" } else { "off" }),
+                Api::Missing => {
+                    return Ok(StepState::not(format!("the forge does not know {repo}")));
+                }
+                Api::Failed(_) => "unread",
+            };
+            Ok(StepState::ok(format!(
+                "no release request stands armed to merge itself; the repository's allow_auto_merge switch is {switch}, and no landed job uses it"
+            )))
+        }
         "ci-permissions" => Ok(
             match api_get(
                 ctx,
@@ -1101,14 +1117,13 @@ pub fn github_install_bot(ctx: &Ctx, jwt: &str) -> StepState {
 /// reports it.
 ///
 /// Contents and pull requests carry the release itself: the tag, the bump
-/// branch, and the request. A rendered release gate reads a check run
-/// beside them, and that rendering is the one shape that needs the third
-/// permission, so a target that renders no gate is not asked for it.
+/// branch, and the request. The merge job that `rk release merge`
+/// dispatches reads the required check run beside them, and every
+/// automatic release lands that job, so an automatic release needs the
+/// third permission and no other target is asked for it.
 fn minimum_grant(ctx: &Ctx) -> Vec<(&'static str, &'static str)> {
     let mut grant = vec![("contents", "write"), ("pull_requests", "write")];
-    if ctx.integration() == crate::landing::Integration::Local
-        && ctx.profile.release.style == Some(crate::landing::Style::Trunk)
-    {
+    if ctx.profile.release.mode == crate::profile::ReleaseMode::Automatic {
         grant.push(("checks", "read"));
     }
     grant
@@ -1444,26 +1459,11 @@ fn gate_faults(ctx: &Ctx) -> Option<String> {
         return None;
     }
     let check = ctx.required_check.as_deref()?;
-    let shape = workflow_jobs::faults(
+    workflow_jobs::faults(
         &workflow_jobs::read_gate(&ctx.target, check, ctx.trunk()),
         check,
         ctx.trunk(),
-    );
-    // Under local integration the release gate waits on a workflow
-    // completing and then judges this check. A trigger cannot name a check
-    // and a required context cannot name a workflow, so nothing but this
-    // reader proves the two answers describe one file.
-    let waking = (ctx.integration() == crate::landing::Integration::Local)
-        .then_some(ctx.required_workflow.as_deref())
-        .flatten()
-        .and_then(|workflow| {
-            workflow_jobs::waking_workflow_fault(&ctx.target, workflow, check, ctx.trunk())
-        });
-    match (shape, waking) {
-        (None, None) => None,
-        (Some(one), None) | (None, Some(one)) => Some(one),
-        (Some(shape), Some(waking)) => Some(format!("{shape}; {waking}")),
-    }
+    )
 }
 
 /// What the repository's merge settings hold.
@@ -1584,10 +1584,53 @@ fn github_ruleset_body(ctx: &Ctx, run: &mut Runner, name: &str) -> Result<Rulese
     }
 }
 
-/// The GitLab limitation the `auto-merge` step reports: the forge has no
-/// project-level switch, so the observation reads the pipeline requirement
-/// the trunk protection asserts.
-const GITLAB_AUTO_MERGE_LIMITATION: &str = "the forge offers no project-level auto-merge switch: availability follows the pipeline requirement protect-trunk asserts, and turning that requirement off removes auto-merge with nothing here reporting it";
+/// The fault for each open release request that stands armed to merge
+/// itself, with the call that disarms it, or `None` where none does.
+///
+/// A request is the release driver's own where its head branch carries
+/// the driver's prefix. `head` and `field` name where the request states
+/// its head branch: `head.ref` on GitHub, `source_branch` on GitLab.
+///
+/// SATISFIES forge-setup:an-armed-release-request-faults
+fn armed_fault(ctx: &Ctx, requests: &Value, head: &str, field: &str) -> Option<String> {
+    let prefix = crate::projection::release_driver_shape(ctx.driver())?;
+    let github = ctx.forge == Some(Forge::Github);
+    let armed: Vec<String> = requests
+        .as_array()?
+        .iter()
+        .filter(|request| {
+            let branch = if field.is_empty() {
+                &request[head]
+            } else {
+                &request[head][field]
+            };
+            branch.as_str().is_some_and(|name| name.starts_with(prefix))
+        })
+        .filter(|request| {
+            if github {
+                !request["auto_merge"].is_null()
+            } else {
+                request["merge_when_pipeline_succeeds"] == true
+                    || request["auto_merge_enabled"] == true
+            }
+        })
+        .filter_map(|request| {
+            let number = request[if github { "number" } else { "iid" }].as_u64()?;
+            let forge = ctx.forge?;
+            Some(format!(
+                "{} disarms with {}",
+                crate::release_state::request_name(forge, number),
+                crate::release_state::disarm_command(forge, &ctx.repo, number)
+            ))
+        })
+        .collect();
+    (!armed.is_empty()).then(|| {
+        format!(
+            "an open release request stands armed to merge itself, and a release waits for the operator's order: {}; rk setup step merge-on-order --apply disarms every one",
+            armed.join("; ")
+        )
+    })
+}
 
 /// The GitLab limitation `protect-tags` and `protections-check` report.
 const GITLAB_TAG_LIMITATION: &str =
@@ -1600,7 +1643,7 @@ const GITLAB_TAG_LIMITATION: &str =
 const MERGE_QUEUE_FAULT: &str = "a merge queue is enabled on the trunk; this convention lands no workflow that triggers on merge_group, so the queue waits on a required check that never reports and drops the request when its CI timeout expires. rk setup step protect-trunk --apply rewrites the ruleset without it";
 
 /// The freshness defect is independent of an absent required check.
-const STALE_MERGE_FAULT: &str = "the trunk permits a merge from a branch that does not carry the trunk's tip; an armed release request can therefore ship a version computed against a trunk that moved. rk setup step protect-trunk --apply rewrites the ruleset with the freshness requirement";
+const STALE_MERGE_FAULT: &str = "the trunk permits a merge from a branch that does not carry the trunk's tip; a release request can therefore ship a version computed against a trunk that moved. rk setup step protect-trunk --apply rewrites the ruleset with the freshness requirement";
 
 /// The GitLab limitation `protect-trunk` and `protections-check` report:
 /// the title gate rides the request's own pipeline on this forge.
@@ -1766,6 +1809,42 @@ fn gitlab_all(
         all.extend(list);
         if short {
             return Ok(Ok(all));
+        }
+    }
+    Ok(Err(StepState::unknown(
+        "the listing did not exhaust within ten pages; nothing was decided",
+    )))
+}
+
+/// Every open request, read page by page until a parsed page shorter
+/// than the page size proves the listing exhausted. A missing listing, a
+/// body that is no array, a failed read, or a bound reached on a full
+/// page decides nothing, so no armed request hides behind an unread page.
+fn open_requests(
+    ctx: &Ctx,
+    run: &mut Runner,
+    path: &str,
+) -> Result<Result<Value, StepState>, RkError> {
+    let mut all = Vec::new();
+    for page in 1..=10u32 {
+        let list = match api_get(ctx, run, &format!("{path}&per_page=100&page={page}"))? {
+            Api::Ok(Value::Array(list)) => list,
+            Api::Ok(_) => {
+                return Ok(Err(StepState::unknown(
+                    "the open requests did not read as a list; nothing was decided",
+                )));
+            }
+            Api::Missing => {
+                return Ok(Err(StepState::unknown(
+                    "the forge refused the listing of open requests; nothing was decided",
+                )));
+            }
+            Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+        };
+        let short = list.len() < 100;
+        all.extend(list);
+        if short {
+            return Ok(Ok(Value::Array(all)));
         }
     }
     Ok(Err(StepState::unknown(
@@ -2023,25 +2102,40 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),
             Api::Failed(err) => StepState::unknown(err),
         }),
-        "auto-merge" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
-            Api::Ok(body) => {
-                if body["only_allow_merge_if_pipeline_succeeds"]
-                    .as_bool()
-                    .unwrap_or(false)
-                {
-                    StepState::ok_with_limitation(
-                        "a request may merge itself once its pipeline passes",
-                        GITLAB_AUTO_MERGE_LIMITATION,
-                    )
-                } else {
-                    StepState::not(
-                        "the pipeline requirement auto-merge rides on is off; protect-trunk asserts it",
-                    )
+        "merge-on-order" => {
+            match api_get(ctx, run, &format!("projects/{project}"))? {
+                Api::Ok(body) => {
+                    if !body["only_allow_merge_if_pipeline_succeeds"]
+                        .as_bool()
+                        .unwrap_or(false)
+                    {
+                        return Ok(StepState::not(
+                            "the pipeline requirement that holds a person's merge behind a passing pipeline is off; rk setup step merge-on-order --apply asserts it",
+                        ));
+                    }
                 }
+                Api::Missing => {
+                    return Ok(StepState::not(format!(
+                        "the forge does not know {}",
+                        ctx.repo
+                    )));
+                }
+                Api::Failed(err) => return Ok(StepState::unknown(err)),
             }
-            Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),
-            Api::Failed(err) => StepState::unknown(err),
-        }),
+            let path = format!("projects/{project}/merge_requests?state=opened");
+            Ok(match open_requests(ctx, run, &path)? {
+                Ok(requests) => armed_fault(ctx, &requests, "source_branch", "")
+                    .map_or_else(
+                        || {
+                            StepState::ok(
+                                "no release request stands armed to merge itself, and a merge waits for a passing pipeline",
+                            )
+                        },
+                        StepState::not,
+                    ),
+                Err(state) => state,
+            })
+        }
         "ci-permissions" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
             Api::Ok(body) => {
                 if body["jobs_enabled"] == true {

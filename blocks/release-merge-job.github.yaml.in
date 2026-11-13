@@ -1,0 +1,108 @@
+  # The operator's order to release, and nothing else. rk release merge
+  # dispatches this job with the request, the trunk tip, and the head it
+  # read; no push and no other event reaches it. It runs as the release
+  # app, which is no bypass actor of the trunk ruleset, so the ruleset's
+  # strict check still decides at the write whether the request carries the
+  # trunk it was tested against.
+  #
+  # It trusts no value the dispatch carries beyond what it compares. Every
+  # fact it acts on is read back from the forge: the caller holds the admin
+  # role, and the request is open, not a draft, based on the trunk, headed
+  # from this repository, authored by the release app, and still at the
+  # head and the base the operator read. The branch shape is a second,
+  # structural guard and never the proof of identity.
+  release-merge:
+    if: >-
+      github.repository_owner == 'OWNER'
+      && github.event_name == 'workflow_dispatch'
+      && inputs.action == 'merge'
+    runs-on: ubuntu-latest
+    permissions: {}
+    concurrency:
+      group: release-merge
+      cancel-in-progress: false
+    steps:
+      # The token is minted before the proofs, because the app's own slug
+      # and every read below come from it. Minting grants nothing on its
+      # own: the merge is the only write this job makes, and every proof
+      # precedes it. Reading the check run is what adds permission-checks.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        with:
+          # client-id takes the client ID or the numeric App ID; GitHub accepts either as the JWT issuer: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-checks: read
+      - name: merge the release request the operator ordered
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
+          CALLER: ${{ github.triggering_actor }}
+          REQUEST: ${{ inputs.request }}
+          BASE: ${{ inputs.base }}
+          HEAD: ${{ inputs.head }}
+          TRUNK: RK_TRUNK_BRANCH
+          GATE_CHECK: RK_REQUIRED_CHECK
+          BRANCH_SHAPE: RK_BRANCH_SHAPE
+        run: |
+          set -eu
+          refuse() {
+            echo "::error::$1; nothing merged."
+            exit 1
+          }
+          # The dispatch's own inputs, each in its one exact shape.
+          case "$REQUEST" in
+            '' | *[!0-9]*) refuse "the dispatch names no request number" ;;
+          esac
+          for sha in "$BASE" "$HEAD"; do
+            if ! printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+              refuse "the dispatch names no full base and head commit"
+            fi
+          done
+          if [ -z "$GATE_CHECK" ]; then
+            refuse "the record names no required check for the trunk"
+          fi
+          # Any write collaborator can dispatch a workflow, so the caller's
+          # role is what makes this job serve the operator's order alone.
+          role="$(gh api "repos/{owner}/{repo}/collaborators/$CALLER/permission" --jq .permission)"
+          if [ "$role" != "admin" ]; then
+            refuse "$CALLER holds the $role role, and only an administrator orders a release"
+          fi
+          # The request, read back from the forge. The REST answer is what
+          # states the app's login as the app's own slug with the bot
+          # suffix; the forge CLI's list renders it as app/<slug>.
+          facts="$(gh api "repos/{owner}/{repo}/pulls/$REQUEST" \
+            --jq '"\(.state) \(.draft) \(.merged) \(.base.ref) \(.head.repo.full_name) \(.user.type) \(.user.login) \(.head.ref) \(.head.sha)"')"
+          read -r state draft merged base repo kind login ref sha <<EOF
+          $facts
+          EOF
+          [ "$merged" = "false" ] || refuse "#$REQUEST is already merged"
+          [ "$state" = "open" ] || refuse "#$REQUEST is $state"
+          [ "$draft" = "false" ] || refuse "#$REQUEST is a draft"
+          [ "$base" = "$TRUNK" ] || refuse "#$REQUEST is based on $base, not on $TRUNK"
+          [ "$repo" = "$GH_REPO" ] || refuse "#$REQUEST is headed from $repo, not from $GH_REPO"
+          if [ "$kind" != "Bot" ] || [ "$login" != "$APP_LOGIN" ]; then
+            refuse "#$REQUEST is authored by $login, not by $APP_LOGIN"
+          fi
+          case "$ref" in
+            "$BRANCH_SHAPE"*) ;;
+            *) refuse "#$REQUEST is headed from $ref, which is no release branch" ;;
+          esac
+          [ "$sha" = "$HEAD" ] || refuse "#$REQUEST moved to $sha after the operator read $HEAD"
+          tip="$(gh api "repos/{owner}/{repo}/branches/$TRUNK" --jq .commit.sha)"
+          [ "$tip" = "$BASE" ] || refuse "$TRUNK moved to $tip after the operator read $BASE"
+          # The named check for that exact head, latest result only.
+          verdict="$(gh api "repos/{owner}/{repo}/commits/$HEAD/check-runs" -X GET \
+            -f check_name="$GATE_CHECK" -f filter=latest \
+            --jq 'if (.check_runs | length) == 1
+                  then "\(.check_runs[0].status) \(.check_runs[0].conclusion)"
+                  else "\(.check_runs | length) results" end')"
+          [ "$verdict" = "completed success" ] || refuse "the check $GATE_CHECK at $HEAD reads: $verdict"
+          # The match moves the stale-head proof into the write itself, and
+          # the trunk's strict rule makes the base proof part of the same
+          # write. This job holds no bypass of either.
+          gh pr merge "$REQUEST" --match-head-commit "$HEAD" RK_MERGE_FLAG --delete-branch
+          echo "merged pull request #$REQUEST at $HEAD."

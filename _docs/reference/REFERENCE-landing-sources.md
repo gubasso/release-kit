@@ -113,20 +113,20 @@ Verified 2026-11-12 with git 2.56.0, prek 0.5.7, and pre-commit 4.5.1. `git comm
 - <https://pre-commit.com/#pre-merge-commit>
 - <https://prek.j178.dev/reference/workspace/>
 
-## Arming the release request
+## The bot identity of the release request
 
-Three upstream facts carry the arming steps the landed release workflows render. GitHub states that with the exception of `workflow_dispatch` and `repository_dispatch`, events triggered by `GITHUB_TOKEN` do not create workflow runs at all, so an arm made with the default token merges a bump that starts no publish. The release-plz action at the pinned commit declares a `pr` output — the release request it opened or refreshed, a JSON object carrying `number`, `head_branch`, `base_branch`, and `html_url` — and release-plz refreshes by force-push on GitHub and by closing the outdated request and opening a fresh one on GitLab, which is why an arm is re-applied on every run. The release-please action sets its outputs dynamically rather than in `action.yml`: `prs_created` is true if any pull request was created or updated, and `pr` is a JSON string of the PullRequest object, unset when none exists.
+Three upstream facts carry the request jobs the landed release workflows render. GitHub states that with the exception of `workflow_dispatch` and `repository_dispatch`, events triggered by `GITHUB_TOKEN` do not create workflow runs at all, so a bump pushed or merged with the default token starts no publish. The release-plz action at the pinned commit declares a `pr` output — the release request it opened or refreshed, a JSON object carrying `number`, `head_branch`, `base_branch`, and `html_url` — and release-plz refreshes by force-push on GitHub and by closing the outdated request and opening a fresh one on GitLab, which is why rk 0.9.14 and older re-applied its arm on every run. The release-please action sets its outputs dynamically rather than in `action.yml`: `prs_created` is true if any pull request was created or updated, and `pr` is a JSON string of the PullRequest object, unset when none exists.
 
 - <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>
 - <https://release-plz.dev/docs/github/output>
 - <https://github.com/release-plz/action/blob/66b324fd6c72d05d2a08568492ecdd62bfb8a62b/action.yml>
 - <https://github.com/googleapis/release-please-action/blob/45996ed1f6d02564a971a2fa1b5860e934307cf7/README.md>
 
-Bearing: `landing:the-arming-identity-is-the-bot`, both scenarios, and the arming steps in every landed release workflow. The default-token fact is the single most load-bearing citation in the arming design: it is why the arm sits in the job that already mints the bot token.
+Bearing: `release-engine:the-request-pushes-as-the-bot`, and the bot token every landed request job takes. The default-token fact is why no request job runs under the forge's default CI token.
 
 ## Gating the release request
 
-The forge behavior that carries the release gate under local integration was verified on 2026-09-16. GitHub's recursion guard is the first fact: events raised by a job running under `GITHUB_TOKEN` create no workflow run, and `workflow_run` is documented as the trigger that observes another workflow finishing, which is why a check-run event cannot carry the gate and this one can. The `workflow_run` trigger requires a `workflows` key naming a workflow by its `name`, so the waking answer is a workflow name and never a filename. The check-runs endpoint for a commit takes `check_name` and `filter=latest`, which is how the gate reads one current result for the exact head it judged.
+The forge behavior that carried the release gate of rk 0.9.14 and older under local integration was verified on 2026-09-16. GitHub's recursion guard is the first fact: events raised by a job running under `GITHUB_TOKEN` create no workflow run, and `workflow_run` is documented as the trigger that observes another workflow finishing, which is why a check-run event cannot carry the gate and this one can. The `workflow_run` trigger requires a `workflows` key naming a workflow by its `name`, so the waking answer is a workflow name and never a filename. The check-runs endpoint for a commit takes `check_name` and `filter=latest`, which is how the gate reads one current result for the exact head it judged.
 
 The release-driver branch forms were verified against their pinned sources and a live Python request on 2026-09-21. Release-plz opens `release-plz-<...>`, the bash pipeline writes `chore/release-v<version>` itself, and the pinned release-please branch module builds `release-please--branches--<targetBranch>`, with an optional `--components--<component>` or `--groups--<group>` suffix. The live Python request carries the root form against `main`, which confirms the branch module's answer outside its source.
 

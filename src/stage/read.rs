@@ -91,8 +91,6 @@ pub fn inputs(parameters: &Parameters) -> Inputs<'_> {
         merge_form: Some(parameters.git.merge_form),
         required_check: (!parameters.required_check.is_empty())
             .then_some(parameters.required_check.as_str()),
-        required_workflow: (!parameters.required_workflow.is_empty())
-            .then_some(parameters.required_workflow.as_str()),
         build_packages: release
             .build
             .as_ref()

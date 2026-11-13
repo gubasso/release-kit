@@ -353,7 +353,6 @@ fn manifest_requesting(
             security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
             security_scope: String::new(),
             required_check: String::new(),
-            required_workflow: String::new(),
             dev_environment: None,
         },
         files: Vec::new(),
@@ -1040,7 +1039,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
-         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --integration local --merge-form squash --required-check gate --required-workflow ci --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
+         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --integration local --merge-form squash --required-check gate --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
          \x20 rk stage --target {path} stages the complete candidate for a byte comparison\n"
     );
     let output = rk()
@@ -1058,10 +1057,10 @@ fn init_preview_human_lines_are_snapshot_held() {
         .expect("config preview");
     let end = text.find("Next:\n").expect("next block");
     assert!(text[start..end].contains("schema_version = 2"));
-    // The consuming shape: this landing renders a release gate, so the
-    // compiled default answers both keys and the configuration states them.
+    // The shape that names a check by default: the compiled default
+    // answers the key and the configuration states it.
     assert!(text[start..end].contains("required_check = \"gate\""));
-    assert!(text[start..end].contains("required_workflow = \"ci\""));
+    assert!(!text[start..end].contains("required_workflow"));
     assert_eq!(format!("{}{}", &text[..start], &text[end..]), expected);
 }
 
@@ -2967,7 +2966,7 @@ fn the_release_skill_holds_no_workflow_task() {
 fn the_release_skill_keeps_each_rule_in_its_owner() {
     let manual = release_skill("SKILL.md");
     for held in [
-        "Never re-arm a request the operator disarmed",
+        "Never arm a release request",
         "Never author a tag",
         "Never push the trunk",
         "Run a release action only where the request names it",
@@ -3959,12 +3958,12 @@ fn the_setup_skill_offers_the_freshness_wire_to_a_wired_target() {
         .nth(1)
         .expect("step B");
     for phrase in [
-        "Where `wired` names a manager and `envrc_sync` is false",
+        "Where `wired` names a manager and `envrc_check` is false",
         "AskUserQuestion",
         "rk self-depend add --manager <wired> --target . --json",
         "as a gated edit",
         "writes only a file the target lacks",
-        "How many files that diff carries is the manager's own answer",
+        "it writes nothing but its cache, and it never moves the pin",
         "ask this question before that apply rather than after it",
     ] {
         assert!(step_b.contains(phrase), "step B drops '{phrase}'");
@@ -3989,7 +3988,7 @@ fn the_setup_skill_offers_the_freshness_wire_to_a_wired_target() {
     let skill = setup_skill();
     let pre_flight = section_of(&skill, "Pre-flight").expect("the pre-flight");
     assert!(
-        pre_flight.contains("A pin with no sync line, at `setup` or `migration`"),
+        pre_flight.contains("A pin with no check line, at `setup` or `migration`"),
         "the pre-flight routes a wired first landing to provision"
     );
     let asked = route
@@ -4042,7 +4041,7 @@ fn the_provision_task_obtains_rk_before_it_runs_rk() {
 
 /// An operator working without an agent meets the same two decisions,
 /// and the runbook serves the refusal too: the flake apply places the
-/// sync line whatever the operator answered, so the refusal is an edit.
+/// check line whatever the operator answered, so the refusal is an edit.
 #[test]
 fn the_setup_runbook_carries_the_acquisition_decision_and_its_refusal() {
     let runbook =
@@ -4052,8 +4051,8 @@ fn the_setup_runbook_carries_the_acquisition_decision_and_its_refusal() {
         "`state no-manager`",
         "pass `--manager` to `add` with the manager chosen",
         "Decide the wire before running it",
-        "drop the sync line from the seeded `.envrc`",
-        "`envrc_sync` false, which is the refusal recorded in the tree",
+        "drop the check line from the seeded `.envrc`",
+        "`envrc_check` false, which is the refusal recorded in the tree",
     ] {
         assert!(
             runbook.contains(phrase),
@@ -4084,7 +4083,7 @@ fn an_unwired_target_takes_the_chosen_manager_and_reports_it_back() {
         "the read-back the skill requires does not name the chosen manager"
     );
     assert_eq!(
-        wired["envrc_sync"], false,
+        wired["envrc_check"], false,
         "this manager answered the freshness question the skill asks separately"
     );
 
@@ -4103,7 +4102,7 @@ fn an_unwired_target_takes_the_chosen_manager_and_reports_it_back() {
     let seeded = flake.json(&["self-depend", "status"]);
     assert_eq!(seeded["wired"], "flake");
     assert_eq!(
-        seeded["envrc_sync"], true,
+        seeded["envrc_check"], true,
         "the flake apply left the sync line unplaced, so the disclosure is wrong"
     );
 
@@ -4122,7 +4121,7 @@ fn an_unwired_target_takes_the_chosen_manager_and_reports_it_back() {
         "dropping the line dropped the pin"
     );
     assert_eq!(
-        refused["envrc_sync"], false,
+        refused["envrc_check"], false,
         "the refusal the skill offers leaves the status unchanged"
     );
 }
@@ -4525,12 +4524,12 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
 /// The forge-mutating step names: every one exists in both trees under the
 /// same name, per `forge-setup:every-supported-forge-runs-every-step`.
 const FORGE_STEPS: [&str; 12] = [
-    "auto-merge",
     "bot-secrets",
     "ci-permissions",
     "default-branch",
     "install-bot",
     "merge-cleanup",
+    "merge-on-order",
     "private-vulnerability-reporting",
     "protect-release-lines",
     "protect-tags",
@@ -4612,6 +4611,7 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_BOT_TOKEN",
         "RK_BOT_INSTALLATION",
         "RK_LINE_PREFIX",
+        "RK_REQUEST_PREFIX",
         "RK_TRUNK_RULESET",
         "RK_SAFETY_RULESET",
         "RK_TAG_RULESET",
@@ -4937,9 +4937,9 @@ fn guide_substitutes_the_repo_and_keeps_the_pr_placeholders() {
         text.contains("<release pr>"),
         "the pr number must stay a placeholder"
     );
-    assert!(text.contains("gh pr merge"), "the github variant is kept");
+    assert!(text.contains("gh pr checks"), "the github variant is kept");
     assert!(
-        !text.contains("glab mr merge"),
+        !text.contains("glab ci status"),
         "the gitlab variant is dropped"
     );
     assert!(
@@ -5379,6 +5379,15 @@ branch_json() {
 }
 case "$cmd" in
 auth) exit 0;;
+pr)
+  # Disarming one request: its auto_merge reads null afterwards.
+  sub="$1"; shift
+  if [[ "$sub" == merge && " $* " == *" --disable-auto "* ]]; then
+    n="$1"
+    jq --argjson n "$n" 'map(if .number == $n then .auto_merge = null else . end)' \
+      "$STATE/pulls" > "$STATE/.pulls" && mv -f "$STATE/.pulls" "$STATE/pulls"
+  fi
+  exit 0;;
 secret)
   sub="$1"; shift
   if [[ "$sub" == set ]]; then
@@ -5402,7 +5411,7 @@ api)
     case "$1" in
       -X) method="$2"; shift;;
       -f|-F) fields+=("$2"); shift;;
-      -q) query="$2"; shift;;
+      -q|--jq) query="$2"; shift;;
       --input) shift;;
       --paginate) ;;
       -*) ;;
@@ -5410,6 +5419,7 @@ api)
     esac
     shift
   done
+  page=1; [[ "$path" =~ [?\&]page=([0-9]+) ]] && page="${BASH_REMATCH[1]}"
   path="${path#/}"; path="${path%%\?*}"
   calls="$(cat "$STATE/api_calls" 2>/dev/null || echo 0)"; calls=$((calls + 1)); put_state api_calls "$calls"
   if [[ -f "$STATE/fail_call_$calls" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
@@ -5425,6 +5435,12 @@ api)
     [[ -f "$STATE/reporting_no_change" ]] || put_state reporting_enabled true
     if [[ -f "$STATE/reporting_readback_error" ]]; then put_state reporting_get_error 500; fi
     exit 0;;
+  # The open requests, seeded per test, each with its auto_merge.
+  "GET repos/acme/widget/pulls")
+    if [[ -f "$STATE/pulls_missing.page$page" ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    if ((page > 1)); then pulls="$STATE/pulls.page$page"; else pulls="$STATE/pulls"; fi
+    body="$(cat "$pulls" 2>/dev/null || echo '[]')"
+    if [[ -z "$query" ]]; then echo "$body"; else jq -r "$query" <<<"$body"; fi;;
   "GET repos/acme/widget")
     if [[ -f "$STATE/visibility_error" ]]; then echo "HTTP $(cat "$STATE/visibility_error")" >&2; exit 1; fi
     if [[ -f "$STATE/visibility_body" ]]; then cat "$STATE/visibility_body"; exit 0; fi
@@ -5659,6 +5675,18 @@ api)
     done
     touch "$STATE/protected_master"; echo '{}';;
   "PATCH "*"/protected_branches/master")
+    echo '{}';;
+  # The open merge requests, seeded per test, and the cancel that
+  # disarms one of them.
+  "GET projects/"*"/merge_requests"*)
+    page=1; [[ "$path" =~ [?\&]page=([0-9]+) ]] && page="${BASH_REMATCH[1]}"
+    if [[ -f "$STATE/mrs_missing.page$page" ]]; then echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi
+    if ((page > 1)); then mrs="$STATE/mrs.page$page"; else mrs="$STATE/mrs"; fi
+    cat "$mrs" 2>/dev/null || echo '[]';;
+  "POST projects/"*"/cancel_merge_when_pipeline_succeeds")
+    n="${path%/cancel_merge_when_pipeline_succeeds}"; n="${n##*/}"
+    jq -c --argjson n "$n" 'map(if .iid == $n then .merge_when_pipeline_succeeds = false else . end)' \
+      "$STATE/mrs" > "$STATE/.mrs" && mv -f "$STATE/.mrs" "$STATE/mrs"
     echo '{}';;
   "PUT projects/"*)
     for f in "${fields[@]}"; do
@@ -6600,10 +6628,10 @@ fn a_step_found_wrong_now_supersedes_a_compatible_proof() {
 /// A token is minted no wider than the installation it comes from, so the
 /// observation reads the installation's own permissions and names each one
 /// the target's rendered release automation needs and the installation
-/// lacks. The third permission is asked for only where a rendered gate
-/// reads a check run.
+/// lacks. The merge job reads the required check run, so an automatic
+/// release asks for `checks: read` under either integration.
 ///
-/// SATISFIES forge-setup:the-setup-permits-a-request-to-merge-itself
+/// SATISFIES forge-setup:an-armed-release-request-faults
 #[test]
 fn install_bot_requires_the_release_apps_minimum_grant() {
     let fixture = ForgeFixture::new();
@@ -6629,26 +6657,26 @@ fn install_bot_requires_the_release_apps_minimum_grant() {
             .env("RK_BOT_PRIVATE_KEY_FILE", &key);
         command
     };
-    // A locally integrated trunk renders a gate that reads a check run, so
-    // the older two-permission installation is short of its minimum.
-    let out = check(&fixture, "local").assert().get_output().clone();
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(text.contains("checks: read"), "{text}");
-    assert!(text.contains("settings page"), "{text}");
-
-    // The same installation satisfies a target that renders no gate.
+    for integration in ["local", "forge"] {
+        let out = check(&fixture, integration).assert().get_output().clone();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("checks: read"), "{integration}: {text}");
+        assert!(text.contains("settings page"), "{integration}: {text}");
+    }
     std::fs::remove_file(fixture.state("old_grant")).expect("the widened grant stands");
-    let out = check(&fixture, "forge").assert().get_output().clone();
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(!text.contains("does not hold"), "{text}");
+    for integration in ["local", "forge"] {
+        let out = check(&fixture, integration).assert().get_output().clone();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!text.contains("does not hold"), "{integration}: {text}");
+    }
 }
 
 /// The grant: the observation answers 404 as the App, rk reads the
@@ -7235,7 +7263,7 @@ fn setup_check_reports_per_step_and_exits_1_on_violations() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("ok package-check"), "{text}");
     assert!(text.contains("unsatisfied default-branch"), "{text}");
-    assert!(text.contains("unsatisfied auto-merge"), "{text}");
+    assert!(text.contains("ok merge-on-order"), "{text}");
     assert!(text.contains("unsatisfied protect-tags"), "{text}");
     assert!(text.contains("skipped protect-release-lines"), "{text}");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -7945,7 +7973,7 @@ fn a_loose_status_check_policy_faults() {
     for part in [
         "unsatisfied protect-trunk",
         "does not carry the trunk's tip",
-        "an armed release request",
+        "a release request can therefore ship",
         "version computed against a trunk that moved",
         "rk setup step protect-trunk --apply",
     ] {
@@ -14094,7 +14122,7 @@ fn secret_names(text: &str) -> std::collections::BTreeSet<String> {
 
 /// Every app-token step a GitHub landing renders passes the bot identity
 /// through `client-id`, on each driver, under both integration modes, so
-/// the release gate of a local integration is covered, and through a
+/// the merge job of every pair is covered, and through a
 /// recorded development environment, which renders the release jobs
 /// through its own prefix.
 #[test]
@@ -14126,11 +14154,9 @@ fn a_rendered_app_token_step_passes_the_identity_as_client_id() {
                     "{tech}/{integration} {name}: every app-token step passes client-id"
                 );
             }
-            // Two release halves, the gate under local integration, and the
-            // release-candidate job every pair carries.
-            let candidate = 1;
-            let expected = if integration == "local" { 3 } else { 2 } + candidate;
-            assert_eq!(minted, expected, "{tech}/{integration}");
+            // Two release halves, the release-candidate job, and the merge
+            // job every pair carries, under either integration.
+            assert_eq!(minted, 4, "{tech}/{integration}");
         }
     }
     let target = land_pair("rust", "github");
@@ -18862,88 +18888,226 @@ fn the_gate_and_the_guard_file_hold_the_same_set() {
     assert_eq!(heredoc, declared, "the two copies must hold the same set");
 }
 
-/// SATISFIES forge-setup:the-setup-permits-a-request-to-merge-itself: the
-/// forge with no project-level switch reports the pipeline requirement as
-/// the stand-in, never a bare pass.
+/// GitLab keeps the pipeline requirement, because it still holds a
+/// person's merge behind a passing pipeline: the check reports it off, and
+/// the step asserts it.
+///
+/// SATISFIES forge-setup:an-armed-release-request-faults
 #[test]
-fn a_gitlab_check_reports_the_auto_merge_limitation() {
+fn the_gitlab_pipeline_requirement_stays() {
     let fixture = ForgeFixture::new();
-    fixture.seed("pipeline_required", "true");
+    fixture.seed("pipeline_required", "false");
+    let text = |out: &std::process::Output| String::from_utf8_lossy(&out.stdout).into_owned();
     let out = fixture
         .rk(&["setup", "check"])
         .args(["--repo", "acme/widget", "--forge", "gitlab"])
-        .assert()
-        .code(1)
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8_lossy(&out);
+        .output()
+        .expect("rk runs");
     assert!(
-        text.contains("ok auto-merge") && text.contains("no project-level auto-merge switch"),
-        "the check must name the stand-in for the missing switch: {text}"
+        text(&out).contains("unsatisfied merge-on-order — the pipeline requirement"),
+        "{}",
+        text(&out)
+    );
+    fixture
+        .rk(&["setup", "step", "merge-on-order"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("pipeline_required"))
+            .expect("the state reads")
+            .trim(),
+        "true"
+    );
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .output()
+        .expect("rk runs");
+    assert!(
+        text(&out).contains("ok merge-on-order — no release request stands armed"),
+        "{}",
+        text(&out)
     );
 }
 
-/// SATISFIES landing:the-arming-identity-is-the-bot: every release workflow
-/// that arms the request gates it on the rendered style, authenticates the
-/// arm as the bot — never the forge's default CI token — and re-arms in the
-/// job that maintains the request, so a forge that replaces the request
-/// re-arms the replacement.
+/// An open release request that rk 0.9.14 or older armed faults the setup
+/// check, with the call that disarms it, and the step disarms it, on each
+/// forge. A request outside the release branch shape is the project's own
+/// and stays as it is.
+///
+/// SATISFIES forge-setup:an-armed-release-request-faults
 #[test]
-fn every_arming_step_authenticates_as_the_bot() {
+fn the_setup_step_disarms_an_open_request() {
+    for forge in ["github", "gitlab"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("pipeline_required", "true");
+        let (state, seeded, call) = if forge == "github" {
+            (
+                "pulls",
+                r#"[{"number":7,"head":{"ref":"rk-release/master"},"auto_merge":{"merge_method":"squash"}},{"number":8,"head":{"ref":"feat/own"},"auto_merge":{"merge_method":"squash"}}]"#,
+                "gh pr merge 7 --disable-auto --repo acme/widget",
+            )
+        } else {
+            (
+                "mrs",
+                r#"[{"iid":7,"source_branch":"rk-release/master","milestone":{"id":1,"iid":70},"merge_when_pipeline_succeeds":true},{"iid":8,"source_branch":"feat/own","milestone":null,"merge_when_pipeline_succeeds":true}]"#,
+                "merge_requests/7/cancel_merge_when_pipeline_succeeds",
+            )
+        };
+        fixture.seed(state, seeded);
+        let check = |fixture: &ForgeFixture| {
+            let out = fixture
+                .rk(&["setup", "check"])
+                .args(["--repo", "acme/widget", "--forge", forge])
+                .output()
+                .expect("rk runs");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let before = check(&fixture);
+        assert!(
+            before.contains("unsatisfied merge-on-order") && before.contains(call),
+            "{forge}: {before}"
+        );
+        assert!(
+            !before.contains("#8 disarms") && !before.contains("/8/"),
+            "{forge}: {before}"
+        );
+        fixture
+            .rk(&["setup", "step", "merge-on-order"])
+            .args(["--repo", "acme/widget", "--forge", forge, "--apply"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("applied merge-on-order"));
+        let after = check(&fixture);
+        assert!(after.contains("ok merge-on-order"), "{forge}: {after}");
+        let held: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(fixture.state(state)).expect("the state reads"),
+        )
+        .expect("JSON");
+        let own = &held[1];
+        if forge == "github" {
+            assert!(held[0]["auto_merge"].is_null(), "{held}");
+            assert!(
+                !own["auto_merge"].is_null(),
+                "the project's own request stays armed"
+            );
+        } else {
+            assert_eq!(held[0]["merge_when_pipeline_succeeds"], false, "{held}");
+            assert_eq!(own["merge_when_pipeline_succeeds"], true, "{held}");
+        }
+    }
+}
+
+/// An armed release request past the first page of open requests still
+/// faults the setup check, on each forge: the observation reads every
+/// page, not the first hundred requests alone.
+///
+/// SATISFIES forge-setup:an-armed-release-request-faults
+#[test]
+fn an_armed_request_on_a_later_page_faults() {
+    for forge in ["github", "gitlab"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("pipeline_required", "true");
+        let own = |n: u32| {
+            if forge == "github" {
+                format!(r#"{{"number":{n},"head":{{"ref":"feat/own-{n}"}},"auto_merge":null}}"#)
+            } else {
+                format!(
+                    r#"{{"iid":{n},"source_branch":"feat/own-{n}","merge_when_pipeline_succeeds":false}}"#
+                )
+            }
+        };
+        let first = (100..200).map(own).collect::<Vec<_>>().join(",");
+        let (state, armed, call) = if forge == "github" {
+            (
+                "pulls",
+                r#"[{"number":7,"head":{"ref":"rk-release/master"},"auto_merge":{"merge_method":"squash"}}]"#,
+                "gh pr merge 7 --disable-auto --repo acme/widget",
+            )
+        } else {
+            (
+                "mrs",
+                r#"[{"iid":7,"source_branch":"rk-release/master","merge_when_pipeline_succeeds":true}]"#,
+                "merge_requests/7/cancel_merge_when_pipeline_succeeds",
+            )
+        };
+        fixture.seed(state, &format!("[{first}]"));
+        fixture.seed(&format!("{state}.page2"), armed);
+        let out = fixture
+            .rk(&["setup", "check"])
+            .args(["--repo", "acme/widget", "--forge", forge])
+            .output()
+            .expect("rk runs");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("unsatisfied merge-on-order") && text.contains(call),
+            "{forge}: {text}"
+        );
+    }
+}
+
+/// A listing of open requests that does not read decides nothing, on each
+/// forge: a refused later page, and a first page that is no list, each
+/// leave merge-on-order unknown, never satisfied.
+///
+/// SATISFIES forge-setup:an-armed-release-request-faults
+#[test]
+fn an_unread_request_listing_decides_nothing() {
+    for forge in ["github", "gitlab"] {
+        let state = if forge == "github" { "pulls" } else { "mrs" };
+        let own = |n: u32| {
+            if forge == "github" {
+                format!(r#"{{"number":{n},"head":{{"ref":"feat/own-{n}"}},"auto_merge":null}}"#)
+            } else {
+                format!(
+                    r#"{{"iid":{n},"source_branch":"feat/own-{n}","merge_when_pipeline_succeeds":false}}"#
+                )
+            }
+        };
+        let first = format!("[{}]", (100..200).map(own).collect::<Vec<_>>().join(","));
+        for (page_one, missing_page) in [(first.as_str(), Some(2)), ("{}", None)] {
+            let fixture = ForgeFixture::new();
+            fixture.seed("pipeline_required", "true");
+            fixture.seed(state, page_one);
+            if let Some(page) = missing_page {
+                fixture.seed(&format!("{state}_missing.page{page}"), "");
+            }
+            let out = fixture
+                .rk(&["setup", "check"])
+                .args(["--repo", "acme/widget", "--forge", forge])
+                .output()
+                .expect("rk runs");
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                text.contains("unknown merge-on-order") && !text.contains("ok merge-on-order"),
+                "{forge} {missing_page:?}: {text}"
+            );
+        }
+    }
+}
+
+/// Every job that maintains the release request authenticates as the
+/// bot, never the forge's default CI token: a push under the default
+/// token starts no workflow, so the bump would release nothing.
+#[test]
+fn every_request_job_authenticates_as_the_bot() {
     let path = "snippets/rust/github/.github/workflows/release-plz.yml";
     let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
+    let job = workflow_job(&text, "release-plz-pr");
     assert!(
-        text.contains("RELEASE_STYLE: RK_STYLE"),
-        "{path}: the rendered style is the arm's gate"
-    );
-    assert!(
-        text.contains("gh pr merge") && text.contains("--auto RK_MERGE_FLAG --delete-branch"),
-        "{path}: the arm sets auto-merge with the protected merge method, which the merge form renders"
-    );
-    let arm_at = text
-        .find("arm the release request")
-        .or_else(|| text.find("standing arm"))
-        .expect("the arming step exists");
-    let arm = &text[arm_at..];
-    assert!(
-        arm.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
-        "{path}: the arm authenticates as the bot"
-    );
-    assert!(
-        arm.contains("a line's request is never armed"),
-        "{path}: the arm must step aside off the trunk"
-    );
-    assert!(
-        !arm.contains("secrets.GITHUB_TOKEN") && !arm.contains("github.token"),
-        "{path}: an arm under the default token merges a bump that starts no workflow"
+        job.contains("GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}"),
+        "{path}: {job}"
     );
     let path = "snippets/rust/gitlab/.gitlab-ci.yml";
     let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
     assert!(
-        text.contains("RELEASE_STYLE: RK_STYLE"),
-        "{path}: the rendered style is the arm's gate"
+        text.contains("release-pr --forge gitlab --git-token \"$RELEASE_BOT_TOKEN\""),
+        "{path}"
     );
-    assert!(
-        text.contains("auto_merge=true&merge_when_pipeline_succeeds=true"),
-        "{path}: the arm sets auto-merge under both parameter names"
-    );
-    assert!(
-        !text.contains("CI_JOB_TOKEN"),
-        "{path}: an arm under the job token merges a bump that releases nothing"
-    );
-    let arm_at = text.find("standing arm").expect("the arming block exists");
-    assert!(
-        text[arm_at..].contains("PRIVATE-TOKEN: $RELEASE_BOT_TOKEN"),
-        "{path}: the arm authenticates as the bot"
-    );
-    assert!(
-        text[arm_at..].contains("a line's request is never armed"),
-        "{path}: the arm must step aside off the trunk"
-    );
-    // The engine pairs arm inside rk release request, which reads the style
-    // and the base from the record. The job that runs it hands it the bot's
-    // token and never the default one, and the pipeline arms nothing itself.
+    assert!(!text.contains("CI_JOB_TOKEN"), "{path}");
+    // The engine pairs maintain the request inside rk release request. The
+    // job that runs it hands it the bot's token and never the default one.
     for driver in ["bash", "python"] {
         let github = std::fs::read_to_string(repo_path(&format!(
             "snippets/{driver}/github/.github/workflows/release.yml"
@@ -18967,8 +19131,6 @@ fn every_arming_step_authenticates_as_the_bot() {
             "{driver}: {gitlab}"
         );
         for text in [&github, &gitlab] {
-            assert!(!text.contains("gh pr merge"), "{driver}: {text}");
-            assert!(!text.contains("auto_merge=true"), "{driver}: {text}");
             assert!(!text.contains("CI_JOB_TOKEN"), "{driver}: {text}");
             assert!(!text.contains("secrets.GITHUB_TOKEN"), "{driver}: {text}");
             assert!(!text.contains("github.token"), "{driver}: {text}");
@@ -19130,24 +19292,12 @@ fn app_token_mints() -> Vec<(String, String, Vec<String>)> {
 }
 
 /// SATISFIES landing:the-release-style-is-a-landing-parameter: the recorded
-/// style renders into the landed release workflow as the one substituted
-/// value, so a style change is a one-word reviewed diff and the lines style
-/// arms nothing.
+/// style is a landing parameter the record carries, and neither style
+/// renders an arm into the landed release workflow.
 #[test]
 fn init_renders_the_recorded_style_into_the_release_workflow() {
     let trunk = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(trunk.path()).success();
-    let workflow = std::fs::read_to_string(trunk.path().join(".github/workflows/release-plz.yml"))
-        .expect("the landed workflow reads");
-    assert!(
-        workflow.contains("RELEASE_STYLE: trunk"),
-        "the default style arms the request: {workflow}"
-    );
-    assert!(
-        !workflow.contains("RK_STYLE"),
-        "no style token survives rendering"
-    );
-
     let lines = tempfile::tempdir().expect("a scratch dir exists");
     rk().args(["init", "--tech", "rust", "--forge", "github"])
         .args(["--repo", "acme/widget", "--style", "lines", "--target"])
@@ -19155,14 +19305,20 @@ fn init_renders_the_recorded_style_into_the_release_workflow() {
         .arg("--apply")
         .assert()
         .success();
-    let workflow = std::fs::read_to_string(lines.path().join(".github/workflows/release-plz.yml"))
-        .expect("the landed workflow reads");
-    assert!(
-        workflow.contains("RELEASE_STYLE: lines"),
-        "the lines style renders unarmed"
-    );
-    let manifest = read_manifest(lines.path());
-    assert_eq!(manifest["profile"]["release"]["style"], "lines");
+    for (dir, style) in [(&trunk, "trunk"), (&lines, "lines")] {
+        let workflow =
+            std::fs::read_to_string(dir.path().join(".github/workflows/release-plz.yml"))
+                .expect("the landed workflow reads");
+        assert!(
+            !workflow.contains("RK_STYLE"),
+            "no style token survives rendering"
+        );
+        assert!(!workflow.contains("--auto"), "{style}: {workflow}");
+        assert_eq!(
+            read_manifest(dir.path())["profile"]["release"]["style"],
+            style
+        );
+    }
 }
 
 /// Git against a scratch repository with the hook environment scrubbed:
@@ -22298,6 +22454,65 @@ impl SelfDependFixture {
         git_in(self.target(), &["commit", "-qm", "chore: seed"]);
     }
 
+    /// This checkout's version-check cache under the scratch cache root.
+    fn cache_file(&self) -> PathBuf {
+        self.home
+            .path()
+            .join("cache/release-kit/self-depend")
+            .join(format!("{}.json", self.key()))
+    }
+
+    /// Seed the version-check cache: the last attempt and the last success
+    /// as seconds ago, the latest release, and the last error.
+    fn seed_cache(
+        &self,
+        attempted: u64,
+        succeeded: Option<u64>,
+        latest: Option<&str>,
+        error: Option<&str>,
+    ) {
+        let at = |secs: u64| {
+            humantime::format_rfc3339_seconds(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(secs),
+            )
+            .to_string()
+        };
+        let path = self.cache_file();
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the cache dir creates");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "attempted": at(attempted),
+                "succeeded": succeeded.map(at),
+                "latest": latest,
+                "error": error,
+            })
+            .to_string(),
+        )
+        .expect("the cache seeds");
+    }
+
+    /// One check's report and its stderr.
+    fn check(&self) -> (Option<i32>, serde_json::Value, String) {
+        let out = self
+            .rk(&["self-depend", "check"])
+            .arg("--json")
+            .output()
+            .expect("rk runs");
+        let report = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+            panic!(
+                "one JSON object expected on stdout: {}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (
+            out.status.code(),
+            report,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
     /// The per-checkout state directory under the scratch state root.
     fn state_dir(&self) -> PathBuf {
         self.home.path().join("release-kit/devshell")
@@ -22317,6 +22532,15 @@ impl SelfDependFixture {
     fn sync_json_with_path(&self, args: &[&str], path: &Path) -> (Option<i32>, serde_json::Value) {
         let mut command = self.rk(args);
         command.env("PATH", path);
+        Self::report_of(&mut command)
+    }
+
+    /// A run's parsed report under extra environment variables.
+    fn json_with(&self, args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, serde_json::Value) {
+        let mut command = self.rk(args);
+        for (key, value) in env {
+            command.env(key, value);
+        }
         Self::report_of(&mut command)
     }
 
@@ -22401,6 +22625,11 @@ impl SelfDependFixture {
             .env("RK_NIX_BIN", self.mock.path().join("nix"))
             .env("RK_HTTP_ORIGIN", self.http.origin())
             .env("RK_DIRENV_BIN", self.mock.path().join("direnv"))
+            .env("XDG_CACHE_HOME", self.home.path().join("cache"))
+            // `direnv exec`, which runs this suite in the devshell, leaves
+            // the evaluation's marker in the environment, and a sync under
+            // it refuses by design.
+            .env_remove("DIRENV_IN_ENVRC")
             .env_remove("RK_DEVSHELL_SYNC");
         for var in [
             "CI",
@@ -22452,7 +22681,7 @@ fn the_envrc_line_block_names_the_new_verb() {
         .expect("the envrc line block is embedded")
         .contents_utf8()
         .expect("utf-8");
-    assert_eq!(block.trim(), "rk self-depend sync --apply || true");
+    assert_eq!(block.trim(), "rk self-depend check || true");
 }
 
 /// The seeded `.envrc` carries the same command under the shell load.
@@ -22463,7 +22692,8 @@ fn the_seed_envrc_names_the_new_verb() {
         .expect("the seed envrc block is embedded")
         .contents_utf8()
         .expect("utf-8");
-    assert!(block.contains("rk self-depend sync --apply || true"));
+    assert!(block.contains("rk self-depend check || true"));
+    assert!(!block.contains("rk self-depend sync"));
     assert!(!block.contains("rk devshell"));
 }
 
@@ -22677,12 +22907,12 @@ fn the_envrc_is_reported_outside_the_manager_list() {
     let fixture = SelfDependFixture::new();
     std::fs::write(
         fixture.target().join(".envrc"),
-        "use flake\nrk self-depend sync --apply || true\n",
+        "use flake\nrk self-depend check || true\n",
     )
     .expect("writes");
     let report = fixture.json(&["self-depend", "status"]);
     assert_eq!(report["envrc"], "present");
-    assert_eq!(report["envrc_sync"], true);
+    assert_eq!(report["envrc_check"], true);
     let names: Vec<&str> = report["managers"]
         .as_array()
         .expect("managers")
@@ -22751,7 +22981,7 @@ fn self_depend_status_reports_a_target_with_no_flake() {
                 .and(predicate::str::contains("rk self-depend add")),
         );
     let report = fixture.json(&["self-depend", "status"]);
-    assert_eq!(report["schema"], "rk.self-depend-status/2");
+    assert_eq!(report["schema"], "rk.self-depend-status/3");
     assert_eq!(report["state"], "no-manager");
     let flake = manager_entry(&report, "flake");
     assert_eq!(flake["present"], "absent");
@@ -22770,7 +23000,7 @@ fn self_depend_status_reports_a_wired_target_offline() {
     fixture.write_flake("v0.2.16");
     std::fs::write(
         fixture.target().join(".envrc"),
-        "use flake\nrk self-depend sync --apply || true\n",
+        "use flake\nrk self-depend check || true\n",
     )
     .expect(".envrc writes");
     let report = fixture.json(&["self-depend", "status"]);
@@ -22783,7 +23013,7 @@ fn self_depend_status_reports_a_wired_target_offline() {
     assert_eq!(flake["locked_rev"], "rev-of-v0.2.16");
     assert_eq!(flake["locked_ref"], "refs/tags/v0.2.16");
     assert_eq!(report["envrc"], "present");
-    assert_eq!(report["envrc_sync"], true);
+    assert_eq!(report["envrc_check"], true);
     assert_eq!(report["host"]["nix"], "ok");
     assert_eq!(report["host"]["direnv"], "ok");
     assert!(fixture.curl_log().is_empty(), "status fetches nothing");
@@ -22915,14 +23145,12 @@ fn self_depend_add_previews_four_fragments_and_writes_nothing() {
                 .and(predicate::str::contains(
                     "--- devshell-package into flake.nix",
                 ))
-                .and(predicate::str::contains("--- envrc-sync into .envrc"))
+                .and(predicate::str::contains("--- envrc-check into .envrc"))
                 .and(predicate::str::contains(format!(
                     "github:gubasso/release-kit/v{}",
                     env!("CARGO_PKG_VERSION")
                 )))
-                .and(predicate::str::contains(
-                    "rk self-depend sync --apply || true",
-                )),
+                .and(predicate::str::contains("rk self-depend check || true")),
         );
     assert!(!fixture.target().join("flake.nix").exists());
     assert!(!fixture.target().join(".envrc").exists());
@@ -22934,7 +23162,7 @@ fn self_depend_add_previews_four_fragments_and_writes_nothing() {
 fn self_depend_add_json_carries_each_fragment_with_its_anchor_and_placement() {
     let fixture = SelfDependFixture::new();
     let report = fixture.json(&["self-depend", "add", "--tag", "0.2.15"]);
-    assert_eq!(report["schema"], "rk.self-depend-add/2");
+    assert_eq!(report["schema"], "rk.self-depend-add/3");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["tag"], "v0.2.15");
     assert_eq!(report["tag_source"], "argument");
@@ -22950,7 +23178,7 @@ fn self_depend_add_json_carries_each_fragment_with_its_anchor_and_placement() {
             "flake-input",
             "outputs-argument",
             "devshell-package",
-            "envrc-sync"
+            "envrc-check"
         ]
     );
     let placements: Vec<&str> = fragments
@@ -22978,7 +23206,7 @@ fn self_depend_add_json_carries_each_fragment_with_its_anchor_and_placement() {
         fragments[2]["text"],
         "release-kit.packages.${system}.default"
     );
-    assert_eq!(fragments[3]["text"], "rk self-depend sync --apply || true");
+    assert_eq!(fragments[3]["text"], "rk self-depend check || true");
     // No flake and no .envrc: every fragment is known to be missing.
     for fragment in fragments {
         assert_eq!(fragment["present"], false, "{}", fragment["id"]);
@@ -23013,8 +23241,8 @@ fn self_depend_add_marks_the_fragments_a_half_wired_flake_already_has() {
         by_id("devshell-package")["anchor"]["needle"],
         "packages = ["
     );
-    assert_eq!(by_id("envrc-sync")["present"], false);
-    assert!(by_id("envrc-sync").get("needle").is_none());
+    assert_eq!(by_id("envrc-check")["present"], false);
+    assert!(by_id("envrc-check").get("needle").is_none());
     // An ellipsis in the head cannot be judged: the field is omitted.
     std::fs::write(
         fixture.target().join("flake.nix"),
@@ -23048,12 +23276,12 @@ fn self_depend_add_apply_seeds_a_flake_and_envrc_where_there_is_none() {
     assert!(flake.contains("inputs.nixpkgs.follows = \"nixpkgs\";"));
     assert_eq!(
         fixture.read(".envrc"),
-        "use flake\nrk self-depend sync --apply || true\n"
+        "use flake\nrk self-depend check || true\n"
     );
     let status = fixture.json(&["self-depend", "status"]);
     assert_eq!(status["state"], "ready");
     assert_eq!(manager_entry(&status, "flake")["version"], "v0.2.15");
-    assert_eq!(status["envrc_sync"], true);
+    assert_eq!(status["envrc_check"], true);
     assert_eq!(
         manager_entry(&status, "flake")["lock"],
         "absent",
@@ -23127,7 +23355,7 @@ fn self_depend_add_apply_creates_only_absent_files() {
         .as_array()
         .expect("fragments")
         .iter()
-        .find(|f| f["id"] == "envrc-sync")
+        .find(|f| f["id"] == "envrc-check")
         .expect("the fragment")
         .clone();
     assert_eq!(
@@ -23177,7 +23405,7 @@ fn self_depend_add_apply_refuses_every_owned_manager_file() {
         assert_eq!(out.status.code(), Some(73), "{manager}");
         let report: serde_json::Value =
             serde_json::from_slice(&out.stdout).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.self-depend-add/2");
+        assert_eq!(report["schema"], "rk.self-depend-add/3");
         assert_eq!(report["manager"], manager);
         assert_eq!(report["support"], "fragment");
         assert_eq!(report["file"], file);
@@ -23321,21 +23549,13 @@ fn self_depend_sync_moves_a_mise_pin() {
     )
     .expect("writes");
     fixture.commit_all();
-    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync"]);
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "would-bump");
     assert_eq!(report["manager"], "mise");
     assert_eq!(report["from"], "0.2.15");
     assert_eq!(report["to"], "0.2.16");
-    let (code, report) = fixture.sync_json(&[
-        "self-depend",
-        "sync",
-        "--apply",
-        "--caller",
-        "operator",
-        "--tag",
-        "v0.2.16",
-    ]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply", "--tag", "v0.2.16"]);
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "bumped");
     assert_eq!(report["from"], "0.2.15");
@@ -23365,8 +23585,7 @@ fn self_depend_sync_moves_a_mise_pin() {
         "[tools]\n\"cargo:release-kit\" = \"0.2.14\"\n",
     )
     .expect("writes");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(73));
     assert_eq!(report["outcome"], "refused-dirty");
     assert!(
@@ -23575,8 +23794,8 @@ fn self_depend_clean_apply_swaps_the_envrc_invocation_for_the_sync_line() {
     assert_eq!(report["rewritten"], serde_json::json!([".envrc"]));
     assert_eq!(
         fixture.read(".envrc"),
-        "use flake\n\n# Bump the release-kit pin once a day on entry.\nrk self-depend sync --apply || true\n\nsource_env_if_exists .envrc.local\n",
-        "the sync line takes the first removed position and every other line is byte-identical"
+        "use flake\n\n# Bump the release-kit pin once a day on entry.\nrk self-depend check || true\n\nsource_env_if_exists .envrc.local\n",
+        "the check line takes the first removed position and every other line is byte-identical"
     );
 }
 
@@ -23771,15 +23990,15 @@ fn self_depend_sync_preview_reports_the_bump_and_spawns_no_nix() {
     let flake = fixture.read("flake.nix");
     let lock = fixture.read("flake.lock");
     fixture
-        .rk(&["self-depend", "sync", "--caller", "operator"])
+        .rk(&["self-depend", "sync"])
         .assert()
         .success()
         .stdout(predicate::str::contains("would-bump v0.2.15 -> v0.2.16"));
     let (code, report) = fixture.sync_json(&["self-depend", "sync"]);
     assert_eq!(code, Some(0));
-    assert_eq!(report["schema"], "rk.self-depend-sync/2");
+    assert_eq!(report["schema"], "rk.self-depend-sync/3");
     assert_eq!(report["mode"], "preview");
-    assert_eq!(report["caller"], "envrc");
+    assert!(report.get("caller").is_none(), "{report}");
     assert_eq!(report["outcome"], "would-bump");
     assert_eq!(report["from"], "v0.2.15");
     assert_eq!(report["to"], "v0.2.16");
@@ -23794,8 +24013,7 @@ fn self_depend_sync_apply_rewrites_the_pin_updates_the_lock_and_builds() {
     let fixture = SelfDependFixture::new();
     fixture.write_flake("v0.2.15");
     fixture.commit_all();
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "bumped");
     assert_eq!(report["from"], "v0.2.15");
@@ -23852,19 +24070,12 @@ fn a_same_version_sync_writes_nothing_and_spawns_no_nix() {
     fixture.commit_all();
     let flake = fixture.read("flake.nix");
     let lock = fixture.read("flake.lock");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(0));
     assert_eq!(report["outcome"], "current");
     assert_eq!(fixture.read("flake.nix"), flake);
     assert_eq!(fixture.read("flake.lock"), lock);
     assert!(fixture.nix_log().is_empty(), "nothing to do spawns no nix");
-    // The same run from .envrc is silent on stdout.
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
 }
 
 #[test]
@@ -23873,8 +24084,7 @@ fn a_pin_ahead_of_the_latest_release_is_reported_and_never_rewritten() {
     fixture.write_flake("v0.3.0");
     fixture.commit_all();
     let flake = fixture.read("flake.nix");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(0));
     assert_eq!(report["outcome"], "ahead");
     assert_eq!(report["from"], "v0.3.0");
@@ -23891,8 +24101,7 @@ fn a_failed_flake_update_restores_both_files() {
     fixture.seed("nix_fail_update", "1");
     let flake = fixture.read("flake.nix");
     let lock = fixture.read("flake.lock");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(70), "{report}");
     assert_eq!(report["outcome"], "update-failed");
     assert_eq!(
@@ -23912,14 +24121,7 @@ fn a_failed_flake_update_restores_both_files() {
     assert!(!fixture.nix_log().contains("build"), "the build never ran");
     assert!(!fixture.state_dir().join(fixture.key()).exists());
     let out = fixture
-        .rk(&[
-            "self-depend",
-            "sync",
-            "--apply",
-            "--caller",
-            "operator",
-            "--json",
-        ])
+        .rk(&["self-depend", "sync", "--apply", "--json"])
         .output()
         .expect("rk runs");
     let diagnostic: serde_json::Value =
@@ -23940,8 +24142,7 @@ fn a_failed_devshell_build_restores_both_files() {
     fixture.seed("nix_fail_build", "1");
     let flake = fixture.read("flake.nix");
     let lock = fixture.read("flake.lock");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(70), "{report}");
     assert_eq!(report["outcome"], "build-failed");
     assert_eq!(
@@ -23955,12 +24156,6 @@ fn a_failed_devshell_build_restores_both_files() {
         "the lock the update wrote is rolled back"
     );
     assert!(fixture.nix_log().contains("flake update release-kit"));
-    // From .envrc the same failure is reported and exits 0.
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("build-failed v0.2.15 -> v0.2.16"));
     assert_eq!(fixture.read("flake.nix"), flake);
 }
 
@@ -23975,8 +24170,7 @@ fn self_depend_sync_refuses_a_flake_with_more_than_one_pin_line() {
     )
     .expect("the flake writes");
     fixture.commit_all();
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(73));
     assert_eq!(report["outcome"], "ambiguous-pin");
     assert!(report["detail"].as_str().unwrap().contains("2 lines"));
@@ -23985,11 +24179,6 @@ fn self_depend_sync_refuses_a_flake_with_more_than_one_pin_line() {
         "an ambiguous pin fetches nothing"
     );
     assert!(fixture.nix_log().is_empty());
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("ambiguous-pin"));
 }
 
 #[test]
@@ -23997,15 +24186,7 @@ fn an_explicit_tag_makes_no_network_request() {
     let fixture = SelfDependFixture::new();
     fixture.write_flake("v0.2.15");
     fixture.commit_all();
-    let (code, report) = fixture.sync_json(&[
-        "self-depend",
-        "sync",
-        "--apply",
-        "--caller",
-        "operator",
-        "--tag",
-        "0.9.0",
-    ]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply", "--tag", "0.9.0"]);
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "bumped");
     assert_eq!(report["to"], "v0.9.0");
@@ -24017,15 +24198,7 @@ fn an_explicit_tag_makes_no_network_request() {
     assert!(fixture.read("flake.lock").contains("rev-of-v0.9.0"));
     // An explicit tag is the operator's choice and pins in either direction.
     fixture.commit_all();
-    let (code, report) = fixture.sync_json(&[
-        "self-depend",
-        "sync",
-        "--apply",
-        "--caller",
-        "operator",
-        "--tag",
-        "v0.2.15",
-    ]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply", "--tag", "v0.2.15"]);
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "bumped");
     assert_eq!(report["from"], "v0.9.0");
@@ -24072,8 +24245,7 @@ fn discovery_reads_the_redirect_and_spends_no_api_call() {
     assert!(!line.contains("api.github.com"), "no API host: {line}");
     // A network failure is a reported outcome that writes nothing.
     fixture.seed("curl_fail", "1");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(70));
     assert_eq!(report["outcome"], "unreachable");
     assert!(
@@ -24082,11 +24254,6 @@ fn discovery_reads_the_redirect_and_spends_no_api_call() {
     );
     assert!(fixture.nix_log().is_empty());
     assert!(fixture.read("flake.nix").contains("v0.2.15"));
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("unreachable"));
 }
 
 #[test]
@@ -24117,13 +24284,12 @@ fn an_interrupted_transaction_is_recovered_on_the_next_run() {
     assert_eq!(status["state"], "pending-recovery");
     assert_eq!(status["pending"], true);
     // A preview names the pending run and touches nothing.
-    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync"]);
     assert_eq!(code, Some(0));
     assert_eq!(report["outcome"], "pending-recovery");
     assert!(fixture.read("flake.nix").contains("v0.2.16"));
     // The apply recovers first, then continues to the bump.
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(
         report["recovered"],
@@ -24147,11 +24313,6 @@ fn an_interrupted_transaction_is_recovered_on_the_next_run() {
 /// One arrangement of a devshell fixture, for the outcome tables.
 type Arrange = Box<dyn Fn(&SelfDependFixture)>;
 
-/// Today as the binary stamps it: the first ten characters of UTC now.
-fn today_utc() -> String {
-    release_kit::applog::now_utc()[..10].to_owned()
-}
-
 #[test]
 fn self_depend_sync_refuses_uncommitted_edits_to_the_two_files() {
     let fixture = SelfDependFixture::new();
@@ -24162,8 +24323,7 @@ fn self_depend_sync_refuses_uncommitted_edits_to_the_two_files() {
         "{\"nodes\":{},\"version\":7}\n",
     )
     .expect("the lock edits");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(73), "{report}");
     assert_eq!(report["outcome"], "refused-dirty");
     assert_eq!(report["from"], "v0.2.15");
@@ -24174,7 +24334,7 @@ fn self_depend_sync_refuses_uncommitted_edits_to_the_two_files() {
     assert!(fixture.nix_log().is_empty());
     assert!(fixture.read("flake.nix").contains("v0.2.15"));
     // A preview reports the same refusal, so the operator learns it before an apply.
-    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync"]);
     assert_eq!(code, Some(73));
     assert_eq!(report["outcome"], "refused-dirty");
     // An untracked file, as a fresh seed leaves, counts too.
@@ -24193,14 +24353,7 @@ fn self_depend_sync_judges_the_target_repo_from_inside_a_git_hook() {
     // A clean decoy repository whose hook variables a running hook would export.
     let decoy = branch_fixture();
     let out = fixture
-        .rk(&[
-            "self-depend",
-            "sync",
-            "--apply",
-            "--caller",
-            "operator",
-            "--json",
-        ])
+        .rk(&["self-depend", "sync", "--apply", "--json"])
         .env("GIT_DIR", decoy.path().join(".git"))
         .env("GIT_WORK_TREE", decoy.path())
         .env("GIT_INDEX_FILE", decoy.path().join(".git/index"))
@@ -24228,18 +24381,11 @@ fn a_second_sync_skips_quietly_while_the_first_holds_the_lock() {
         ),
     )
     .expect("the lock plants");
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::is_empty());
-    assert!(fixture.curl_log().is_empty(), "contention fetches nothing");
-    assert!(fixture.nix_log().is_empty());
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(0), "contention is normal, even for the operator");
     assert_eq!(report["outcome"], "skipped-locked");
+    assert!(fixture.curl_log().is_empty(), "contention fetches nothing");
+    assert!(fixture.nix_log().is_empty());
     assert!(
         fixture
             .state_dir()
@@ -24261,18 +24407,12 @@ fn a_lock_that_cannot_be_taken_at_all_is_reported_loudly() {
         .rk(&["self-depend", "sync", "--apply"])
         .output()
         .expect("rk runs");
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "the .envrc caller still exits 0"
-    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("warning: rk self-depend sync: the lock cannot be taken"),
         "unavailability is loud on stderr: {stderr}"
     );
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(74), "{report}");
     assert_eq!(report["outcome"], "lock-unavailable");
     assert!(fixture.curl_log().is_empty());
@@ -24286,201 +24426,19 @@ fn a_stale_lock_whose_owner_is_gone_is_taken() {
     std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
     let lock = fixture.state_dir().join(format!("{}.lock", fixture.key()));
     std::fs::write(&lock, "pid=4294967295\nstarted=2020-01-01T00:00:00Z\n").expect("plants");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "bumped", "the stale lock was taken over");
     assert!(!lock.exists(), "the lock is released after the run");
 }
 
-#[test]
-fn the_daily_stamp_is_written_before_a_failing_attempt() {
-    let fixture = SelfDependFixture::new();
-    fixture.write_flake("v0.2.15");
-    fixture.commit_all();
-    fixture.seed("nix_fail_build", "1");
-    let stamp = fixture.state_dir().join(format!("{}.stamp", fixture.key()));
-    assert!(!stamp.exists());
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("build-failed"));
-    assert_eq!(
-        std::fs::read_to_string(&stamp)
-            .expect("the stamp exists")
-            .trim(),
-        today_utc(),
-        "a failing attempt still costs one fetch and one build a day"
-    );
-    // The next entry skips without a fetch.
-    fixture.seed("curl-log", "");
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
-    assert!(fixture.curl_log().is_empty());
-}
-
-#[test]
-fn a_stamped_day_skips_the_next_directory_entry() {
-    let fixture = SelfDependFixture::new();
-    fixture.write_flake("v0.2.15");
-    fixture.commit_all();
-    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
-    std::fs::write(
-        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
-        format!("{}\n", today_utc()),
-    )
-    .expect("the stamp plants");
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
-    assert!(
-        fixture.curl_log().is_empty(),
-        "a stamped day fetches nothing"
-    );
-    assert!(fixture.nix_log().is_empty());
-    let (_, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
-    assert_eq!(report["outcome"], "skipped-stamped");
-    assert_eq!(report["stamp"], today_utc());
-    // An older stamp lets the attempt run and is rewritten to today.
-    std::fs::write(
-        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
-        "2020-01-01\n",
-    )
-    .expect("the stamp plants");
-    let (_, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
-    assert_eq!(report["outcome"], "bumped");
-    assert_eq!(report["stamp"], today_utc());
-}
-
-#[test]
-fn an_operator_run_ignores_the_daily_stamp() {
-    let fixture = SelfDependFixture::new();
-    fixture.write_flake("v0.2.15");
-    fixture.commit_all();
-    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
-    let stamp = fixture.state_dir().join(format!("{}.stamp", fixture.key()));
-    std::fs::write(&stamp, format!("{}\n", today_utc())).expect("the stamp plants");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
-    assert_eq!(code, Some(0), "{report}");
-    assert_eq!(report["outcome"], "bumped");
-    assert_eq!(
-        report["stamp"],
-        today_utc(),
-        "the stamp is reported, not consulted"
-    );
-    assert!(!fixture.curl_log().is_empty(), "the operator run fetched");
-}
-
-/// Every reported failure outcome from the `.envrc` caller exits 0: the
-/// outcome lives in the report, never in the exit code.
-#[test]
-fn every_envrc_path_exits_zero() {
-    let cases: Vec<(&str, Arrange)> = vec![
-        ("no-manager", Box::new(|_| {})),
-        (
-            "not-wired",
-            Box::new(|f| {
-                std::fs::write(f.target().join("flake.nix"), "{ }\n").expect("writes");
-                f.commit_all();
-            }),
-        ),
-        (
-            "ambiguous-pin",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-                let flake = f.read("flake.nix");
-                std::fs::write(
-                    f.target().join("flake.nix"),
-                    format!("{flake}  url = \"github:gubasso/release-kit/v0.2.14\";\n"),
-                )
-                .expect("writes");
-                f.commit_all();
-            }),
-        ),
-        (
-            "refused-dirty",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-            }),
-        ),
-        (
-            "unreachable",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-                f.commit_all();
-                f.seed("curl_fail", "1");
-            }),
-        ),
-        (
-            "update-failed",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-                f.commit_all();
-                f.seed("nix_fail_update", "1");
-            }),
-        ),
-        (
-            "build-failed",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-                f.commit_all();
-                f.seed("nix_fail_build", "1");
-            }),
-        ),
-        (
-            "lock-unavailable",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-                f.commit_all();
-                f.block_state_root();
-            }),
-        ),
-        (
-            "prerequisite-unmet",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-                f.commit_all();
-                std::fs::remove_file(f.mock.path().join("nix")).expect("the nix stand-in goes");
-            }),
-        ),
-        (
-            "recovery-failed",
-            Box::new(|f| {
-                f.write_flake("v0.2.15");
-                f.commit_all();
-                // A directory where the marker is: it exists and cannot be read.
-                f.block_marker();
-                std::fs::write(
-                    f.state_dir().join(format!("{}.stamp", f.key())),
-                    format!("{}\n", today_utc()),
-                )
-                .expect("the stamp plants");
-            }),
-        ),
-    ];
-    for (expected, arrange) in cases {
-        let fixture = SelfDependFixture::new();
-        arrange(&fixture);
-        let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
-        assert_eq!(report["outcome"], expected, "{report}");
-        assert_eq!(code, Some(0), "{expected} must exit 0 from .envrc");
-    }
-}
-
-/// The same outcomes under `--caller operator` take the exit-code matrix.
+/// Each failing outcome of an operator's sync takes the exit-code matrix.
 #[test]
 #[allow(
     clippy::too_many_lines,
     reason = "the case table is the test, and each row names one exit code"
 )]
-fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
+fn an_operator_sync_fails_loudly() {
     let cases: Vec<(&str, i32, &str, Arrange)> = vec![
         (
             "ambiguous-pin",
@@ -24560,14 +24518,7 @@ fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
         let fixture = SelfDependFixture::new();
         arrange(&fixture);
         let out = fixture
-            .rk(&[
-                "self-depend",
-                "sync",
-                "--apply",
-                "--caller",
-                "operator",
-                "--json",
-            ])
+            .rk(&["self-depend", "sync", "--apply", "--json"])
             .output()
             .expect("rk runs");
         let report: serde_json::Value =
@@ -24591,9 +24542,12 @@ fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
         }
     }
 }
-
+/// A CI variable stops the check before it reads anything, and stops no
+/// sync the operator runs; an explicit no is not CI.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
 #[test]
-fn ci_never_bumps() {
+fn ci_stops_the_check_but_not_an_operator_sync() {
     for var in [
         "CI",
         "GITHUB_ACTIONS",
@@ -24605,78 +24559,43 @@ fn ci_never_bumps() {
         let fixture = SelfDependFixture::new();
         fixture.write_flake("v0.2.15");
         fixture.commit_all();
-        fixture
-            .rk(&["self-depend", "sync", "--apply"])
-            .env(var, "true")
-            .assert()
-            .success()
-            .stdout(predicate::str::is_empty());
+        let (code, report) = fixture.json_with(&["self-depend", "check"], &[(var, "true")]);
+        assert_eq!(code, Some(0), "{var}");
+        assert_eq!(report["outcome"], "ci", "{var}");
         assert!(fixture.curl_log().is_empty(), "{var}: CI fetches nothing");
-        assert!(fixture.nix_log().is_empty(), "{var}: CI spawns nothing");
-        let out = fixture
-            .rk(&[
-                "self-depend",
-                "sync",
-                "--apply",
-                "--caller",
-                "operator",
-                "--json",
-            ])
-            .env(var, "1")
-            .output()
-            .expect("rk runs");
-        let report: serde_json::Value =
-            serde_json::from_slice(&out.stdout).expect("one JSON object");
-        assert_eq!(report["outcome"], "skipped-ci", "{var}");
-        assert_eq!(out.status.code(), Some(0));
+        assert!(!fixture.cache_file().exists(), "{var}: CI writes no cache");
+        let (code, report) = fixture.json_with(&["self-depend", "sync"], &[(var, "1")]);
+        assert_eq!(code, Some(0), "{var}");
+        assert_eq!(report["outcome"], "would-bump", "{var}");
     }
-    // An explicit no is not CI.
     let fixture = SelfDependFixture::new();
     fixture.write_flake("v0.2.15");
     fixture.commit_all();
-    let out = fixture
-        .rk(&["self-depend", "sync", "--json"])
-        .env("CI", "false")
-        .output()
-        .expect("rk runs");
-    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
-    assert_eq!(report["outcome"], "would-bump");
+    let (_, report) = fixture.json_with(&["self-depend", "check"], &[("CI", "false")]);
+    assert_eq!(report["outcome"], "refreshed");
 }
-
+/// `RK_DEVSHELL_SYNC=0` stops the check before it reads anything, and an
+/// operator's sync still moves the pin under it.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+/// SATISFIES packaging:a-pin-moves-only-on-the-operators-order
 #[test]
-fn rk_self_depend_sync_is_disabled_by_its_env_switch() {
+fn the_off_switch_stops_check_but_not_an_operator_sync() {
     let fixture = SelfDependFixture::new();
     fixture.write_flake("v0.2.15");
     fixture.commit_all();
-    fixture
-        .rk(&["self-depend", "sync", "--apply"])
-        .env("RK_DEVSHELL_SYNC", "0")
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
+    let (code, report) = fixture.json_with(&["self-depend", "check"], &[("RK_DEVSHELL_SYNC", "0")]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "disabled");
     assert!(fixture.curl_log().is_empty());
-    assert!(fixture.nix_log().is_empty());
-    let out = fixture
-        .rk(&[
-            "self-depend",
-            "sync",
-            "--apply",
-            "--caller",
-            "operator",
-            "--json",
-        ])
-        .env("RK_DEVSHELL_SYNC", "0")
-        .output()
-        .expect("rk runs");
-    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
-    assert_eq!(report["outcome"], "skipped-disabled");
-    assert!(
-        !fixture
-            .state_dir()
-            .join(format!("{}.stamp", fixture.key()))
-            .exists(),
-        "a switched-off run stamps nothing"
+    assert!(!fixture.cache_file().exists());
+    let (code, report) = fixture.json_with(
+        &["self-depend", "sync", "--apply"],
+        &[("RK_DEVSHELL_SYNC", "0")],
     );
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped", "{report}");
+    assert!(fixture.read("flake.nix").contains("release-kit/v0.2.16"));
 }
 
 /// Every self-depend action answers `--json` with exactly one object on
@@ -24694,7 +24613,7 @@ fn every_self_depend_action_emits_one_json_object() {
         vec!["self-depend", "clean", "--apply"],
         vec!["self-depend", "sync"],
         vec!["self-depend", "sync", "--apply"],
-        vec!["self-depend", "sync", "--caller", "operator"],
+        vec!["self-depend", "sync"],
     ] {
         let out = fixture.rk(&args).arg("--json").output().expect("rk runs");
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -24724,14 +24643,7 @@ fn a_stale_lock_that_cannot_be_removed_is_reported_loudly() {
     std::fs::set_permissions(fixture.state_dir(), std::fs::Permissions::from_mode(0o555))
         .expect("the state dir turns read-only");
     let out = fixture
-        .rk(&[
-            "self-depend",
-            "sync",
-            "--apply",
-            "--caller",
-            "operator",
-            "--json",
-        ])
+        .rk(&["self-depend", "sync", "--apply", "--json"])
         .output()
         .expect("rk runs");
     std::fs::set_permissions(fixture.state_dir(), std::fs::Permissions::from_mode(0o755))
@@ -24766,8 +24678,7 @@ fn recovery_waits_for_the_lock() {
         ),
     )
     .expect("the lock plants");
-    let (code, report) =
-        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
     assert_eq!(code, Some(0));
     assert_eq!(report["outcome"], "skipped-locked");
     assert!(
@@ -24787,7 +24698,7 @@ fn recovery_waits_for_the_lock() {
 /// An interrupted run recovers on the next `.envrc` entry even on a day
 /// the stamp already marks: the marker outranks the stamp.
 #[test]
-fn a_pending_marker_outranks_the_daily_stamp() {
+fn a_pending_marker_is_recovered_by_the_next_sync() {
     let fixture = SelfDependFixture::new();
     fixture.write_flake("v0.2.15");
     fixture.commit_all();
@@ -24802,11 +24713,6 @@ fn a_pending_marker_outranks_the_daily_stamp() {
         r#"{"target":"x","pid":4294967295,"present":{"flake.nix":true,"flake.lock":true}}"#,
     )
     .expect("the marker writes");
-    std::fs::write(
-        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
-        format!("{}\n", today_utc()),
-    )
-    .expect("the stamp plants");
     std::fs::write(
         fixture.target().join("flake.nix"),
         flake.replace("v0.2.15", "v0.2.16"),
@@ -28242,7 +28148,6 @@ fn a_dev_environment_answer_renders_the_github_release_jobs_through_its_prefix()
     );
     assert!(request.contains("id: release-pr"), "{request}");
     assert!(request.contains(">> \"$GITHUB_OUTPUT\""), "{request}");
-    assert!(request.contains("printf 'pr=%s\\n'"), "{request}");
     let recorded = read_manifest(target.path());
     assert_eq!(
         recorded["parameters"]["dev_environment"]["run"],
@@ -28251,18 +28156,15 @@ fn a_dev_environment_answer_renders_the_github_release_jobs_through_its_prefix()
     let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
         .expect("config exists");
     assert!(config.contains("[dev_environment]"), "{config}");
-    // Under forge integration the standing arm stays, and it reads the
-    // request number from the output the request half writes.
+    // Under forge integration the request half runs through the same
+    // prefix, and nothing arms the request it opens.
     rk().args(["upgrade", "--apply", "--integration", "forge", "--target"])
         .arg(target.path())
         .assert()
         .success();
     let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
         .expect("the workflow landed");
-    assert!(
-        workflow.contains("RELEASE_PR: ${{ steps.release-pr.outputs.pr }}"),
-        "{workflow}"
-    );
+    assert!(!workflow.contains("--auto"), "{workflow}");
     assert!(
         workflow.contains("nix develop --command release-plz release-pr"),
         "{workflow}"
@@ -28371,20 +28273,20 @@ fn an_empty_dev_environment_run_clears_the_recorded_answer() {
     );
 }
 
-/// The release gate's two answers resolve by the class P precedence: a
-/// flag over the committed configuration over a compatible record, with
-/// the convention's own pair last.
+/// The required check resolves by the class P precedence: a flag over the
+/// committed configuration over a compatible record, with the
+/// convention's own name last.
 ///
 /// SATISFIES target-config:a-setup-fact-is-committed-once
 #[test]
-fn a_release_gate_answer_resolves_by_the_parameter_precedence() {
+fn a_required_check_resolves_by_the_parameter_precedence() {
     let target = land_pair("rust", "github");
-    // Nothing answered either key, and this is the shape that renders a
-    // gate, so the compiled default did.
+    // Nothing answered the key, and this is the shape that names a check
+    // by default, so the compiled default did.
     let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
         .expect("config exists");
     assert!(config.contains("required_check = \"gate\""), "{config}");
-    assert!(config.contains("required_workflow = \"ci\""), "{config}");
+    assert!(!config.contains("required_workflow"), "{config}");
 
     // The committed answer wins over the default.
     edit_target_config(
@@ -28424,57 +28326,65 @@ fn a_release_gate_answer_resolves_by_the_parameter_precedence() {
     );
 }
 
-/// Both answers reach the record, and `Params::from_record` reads them
-/// back unchanged, so a re-render asks nothing again.
+/// The answer reaches the record, and `Params::from_record` reads it back
+/// unchanged, so a re-render asks nothing again.
 ///
 /// SATISFIES landing:a-rendered-file-is-a-function-of-the-record
 #[test]
-fn a_release_gate_answer_reaches_the_record() {
+fn a_required_check_reaches_the_record() {
     let target = land_pair("rust", "github");
     let recorded = read_manifest(target.path());
     assert_eq!(recorded["parameters"]["required_check"], "gate");
-    assert_eq!(recorded["parameters"]["required_workflow"], "ci");
+    assert!(recorded["parameters"].get("required_workflow").is_none());
 
-    // The record alone answers a landing whose configuration lost the keys.
+    // The record alone answers a landing whose configuration lost the key.
     edit_target_config(target.path(), "required_check = \"gate\"", "");
-    edit_target_config(target.path(), "required_workflow = \"ci\"", "");
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
         .success();
     let recorded = read_manifest(target.path());
     assert_eq!(recorded["parameters"]["required_check"], "gate");
-    assert_eq!(recorded["parameters"]["required_workflow"], "ci");
 }
 
 /// GitLab requires its whole pipeline through one project setting and
-/// names no individual check, so either answer is a usage error rather
-/// than a value silently discarded.
+/// names no individual check, so the answer is a usage error rather than
+/// a value silently discarded. The retired workflow flag is no flag at
+/// all.
 ///
 /// SATISFIES target-config:a-setup-fact-is-committed-once
 #[test]
-fn a_release_gate_answer_is_refused_on_gitlab() {
+fn a_required_check_is_refused_on_gitlab() {
     let target = land_pair("rust", "gitlab");
-    for flag in ["--required-check", "--required-workflow"] {
-        rk().args(["upgrade", "--apply", flag, "gate", "--target"])
-            .arg(target.path())
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(flag))
-            .stderr(predicate::str::contains("names no individual check"));
-    }
+    rk().args(["upgrade", "--apply", "--required-check", "gate", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--required-check"))
+        .stderr(predicate::str::contains("names no individual check"));
+    rk().args([
+        "upgrade",
+        "--apply",
+        "--required-workflow",
+        "ci",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .code(64)
+    .stderr(predicate::str::contains("--required-workflow"));
 }
 
-/// A target whose release shape renders no gate leaves both answers
-/// empty, because no rendered reader consumes them there. Under forge
-/// integration `setup.required_check` stays the project's own answer,
-/// which `protect-trunk` asks for.
+/// A target whose release shape names no check by default leaves the
+/// answer empty: the lines style on GitHub, and GitLab, which judges the
+/// whole pipeline. `setup.required_check` then stays the project's own
+/// answer, which `protect-trunk` asks for.
 ///
 /// SATISFIES target-config:a-setup-fact-is-committed-once
 #[test]
-fn an_unconsumed_release_gate_resolves_empty() {
+fn an_unconsumed_required_check_resolves_empty() {
     for (forge, integration, style) in [
-        ("github", "forge", "trunk"),
+        ("github", "forge", "lines"),
         ("github", "local", "lines"),
         ("gitlab", "local", "trunk"),
     ] {
@@ -28491,38 +28401,32 @@ fn an_unconsumed_release_gate_resolves_empty() {
             recorded["parameters"]["required_check"], "",
             "{forge} {integration} {style}"
         );
-        assert_eq!(
-            recorded["parameters"]["required_workflow"], "",
-            "{forge} {integration} {style}"
-        );
     }
 }
 
-/// The one shape that renders a gate answers both keys from the
-/// convention when nothing else does, so a fresh landing renders a gate
-/// that names something rather than a hole no event can satisfy.
+/// The one shape that names a check by default answers the key from the
+/// convention when nothing else does.
 ///
 /// SATISFIES target-config:a-setup-fact-is-committed-once
 #[test]
-fn a_local_github_trunk_release_defaults_the_gate_answers() {
+fn a_local_github_trunk_release_defaults_the_required_check() {
     let target = land_pair("rust", "github");
     let recorded = read_manifest(target.path());
     assert_eq!(recorded["git"]["integration"], "local");
     assert_eq!(recorded["profile"]["release"]["style"], "trunk");
     assert_eq!(recorded["parameters"]["required_check"], "gate");
-    assert_eq!(recorded["parameters"]["required_workflow"], "ci");
 
-    // The resolved answers are visible rather than compiled-in: the
-    // configuration states them and `rk profile` reports them.
+    // The resolved answer is visible rather than compiled-in: the
+    // configuration states it and `rk profile` reports it.
     rk().args(["profile", "--json", "--target"])
         .arg(target.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("\"required_check\": \"gate\""))
-        .stdout(predicate::str::contains("\"required_workflow\": \"ci\""));
+        .stdout(predicate::str::contains("required_workflow").not());
 }
 
-/// A configuration this release writes marks both gate answers class P,
+/// A configuration this release writes marks the required check class P,
 /// and a comment that drifted from the template is rewritten from it, so
 /// the file's own sentence outlives the answer it once described.
 ///
@@ -28534,19 +28438,17 @@ fn the_committed_comment_carries_the_parameter_class() {
         std::fs::read_to_string(target.join(".release-kit/config.toml")).expect("config exists")
     };
     let config = read(target.path());
-    for key in ["required_check", "required_workflow"] {
-        let line = config
-            .lines()
-            .find(|line| line.starts_with(key))
-            .unwrap_or_else(|| panic!("{key} is written"));
-        assert!(line.contains("# P:"), "{line}");
-    }
+    let line = config
+        .lines()
+        .find(|line| line.starts_with("required_check"))
+        .expect("required_check is written");
+    assert!(line.contains("# P:"), "{line}");
 
     // The old sentence said the name asks for a flag, which stopped being
     // true when the gate started rendering it.
     edit_target_config(
         target.path(),
-        "# P: the check the release gate believes",
+        "# P: the check the trunk ruleset requires",
         "# N: the check the merge must pass; empty asks for --required-check",
     );
     rk().args(["upgrade", "--apply", "--target"])
@@ -28555,7 +28457,7 @@ fn the_committed_comment_carries_the_parameter_class() {
         .success();
     let config = read(target.path());
     assert!(
-        config.contains("# P: the check the release gate believes"),
+        config.contains("# P: the check the trunk ruleset requires"),
         "{config}"
     );
     assert!(
@@ -28564,26 +28466,125 @@ fn the_committed_comment_carries_the_parameter_class() {
     );
 }
 
-/// A committed answer that differs from the record's is untaken
-/// configuration: reported by its full key path and informational under
-/// `--check`.
+/// A configuration that still carries the retired `setup.required_workflow`
+/// refuses by name before any write, in every verb that reads it, with one
+/// diagnostic that names the guidance step removing the key.
 ///
-/// SATISFIES target-config:untaken-configuration-is-reported-and-not-drift
+/// SATISFIES target-config:a-retired-key-refuses-by-name
 #[test]
-fn an_untaken_release_gate_answer_is_informational() {
+fn a_retired_required_workflow_refuses_by_name() {
     let target = land_pair("rust", "github");
-    clear_landing_sentinels(target.path());
     edit_target_config(
         target.path(),
-        "required_workflow = \"ci\"",
-        "required_workflow = \"build\"",
+        "required_check = \"gate\"",
+        "required_check = \"gate\"\nrequired_workflow = \"ci\"",
     );
-    seed_setup_proof(target.path());
-    rk().args(["status", "--check", "--target"])
+    let before =
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("the record reads");
+    for verb in [
+        &["upgrade", "--apply"][..],
+        &["status", "--check"][..],
+        &["profile"][..],
+        &["release", "request"][..],
+    ] {
+        let out = rk()
+            .args(verb)
+            .arg("--target")
+            .arg(target.path())
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            text.contains("setup.required_workflow is retired"),
+            "{verb:?}: {text}"
+        );
+        assert!(text.contains("guidance/0.9.15.md"), "{verb:?}: {text}");
+        assert_eq!(
+            text.matches("setup.required_workflow is retired").count(),
+            1,
+            "{verb:?}: one diagnostic: {text}"
+        );
+    }
+    assert_eq!(
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("the record reads"),
+        before,
+        "nothing was written"
+    );
+}
+
+/// A 0.9.14 configuration that excluded the retired step `auto-merge`
+/// refuses by name before any write: its successor `merge-on-order`
+/// disarms a release request, so the exclusion is never carried over.
+///
+/// SATISFIES target-config:a-retired-key-refuses-by-name
+#[test]
+fn a_retired_auto_merge_exclusion_refuses_by_name() {
+    let target = land_pair("rust", "github");
+    edit_target_config(
+        target.path(),
+        "excluded_steps = {}",
+        "excluded_steps = { auto-merge = \"we merge releases by hand\" }",
+    );
+    let before =
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("the record reads");
+    for verb in [&["upgrade", "--apply"][..], &["status", "--check"][..]] {
+        let out = rk()
+            .args(verb)
+            .arg("--target")
+            .arg(target.path())
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        let text = String::from_utf8_lossy(&out);
+        assert_eq!(
+            text.matches("setup.excluded_steps names auto-merge, which is retired")
+                .count(),
+            1,
+            "{verb:?}: one diagnostic: {text}"
+        );
+        assert!(text.contains("guidance/0.9.15.md"), "{verb:?}: {text}");
+    }
+    assert_eq!(
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("the record reads"),
+        before,
+        "nothing was written"
+    );
+}
+
+/// A record of 0.9.14 or older carries `required_workflow` among its
+/// parameters, and still loads, so the target migrates through
+/// `rk upgrade`, which writes the record without it.
+///
+/// SATISFIES landing:a-rendered-file-is-a-function-of-the-record
+#[test]
+fn an_old_required_workflow_receipt_still_loads() {
+    let target = land_pair("rust", "github");
+    let path = target.path().join(".release-kit/manifest.json");
+    let mut record = read_manifest(target.path());
+    record["parameters"]["required_workflow"] = serde_json::json!("ci");
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&record).expect("JSON")),
+    )
+    .expect("the record writes");
+    rk().args(["status", "--target"])
         .arg(target.path())
         .assert()
-        .success()
-        .stdout(predicate::str::contains("setup.required_workflow"));
+        .success();
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        read_manifest(target.path())["parameters"]
+            .get("required_workflow")
+            .is_none()
+    );
 }
 
 /// An explicit empty contact resets a recorded one; an omitted key leaves
@@ -28728,6 +28729,8 @@ fn a_pre_policy_record_upgrades_without_touching_the_policy() {
 
 /// An edited security answer is pending configuration, not file drift:
 /// `rk status --check` stays at exit 0 and the next upgrade takes it.
+///
+/// SATISFIES target-config:untaken-configuration-is-reported-and-not-drift
 #[test]
 fn an_edited_security_answer_reports_as_pending() {
     let target = land_pair("rust", "github");
@@ -28950,7 +28953,7 @@ fn the_profile_reports_the_scope_with_its_source() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/5");
+    assert_eq!(report["schema"], "rk.profile/6");
     assert_eq!(report["security"]["scope"], SCOPE_TEXT);
     assert_eq!(report["sources"]["security.scope"], "config");
 }
@@ -29223,7 +29226,9 @@ fn a_landing_writes_the_config_beside_the_record() {
         config.capabilities.nix_packaging.expect("nix"),
         manifest["capabilities"]["nix_packaging"]
     );
-    assert!(config.setup.required_check.is_empty());
+    // A GitHub trunk release takes the convention's check by default,
+    // which its merge job judges.
+    assert_eq!(config.setup.required_check, "gate");
     assert!(config.setup.bot.app_id.is_empty());
 }
 
@@ -29288,7 +29293,6 @@ fn an_upgrade_takes_the_config_over_the_record() {
     assert_eq!(record["parameters"]["repo"], "other/widget");
     let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
         .expect("workflow");
-    assert!(workflow.contains("RELEASE_STYLE: lines"));
     assert!(workflow.contains("'other'"));
     seed_setup_proof(target.path());
     rk().args(["status", "--check", "--target"])
@@ -29677,8 +29681,8 @@ fn required_check_comes_from_the_config_on_github() {
     land_rust(target.path()).success();
     set_config_key(
         target.path(),
-        "required_check = \"\"",
         "required_check = \"gate\"",
+        "required_check = \"ci-pass\"",
     );
 
     rk_with_stub_gh()
@@ -29693,7 +29697,7 @@ fn required_check_comes_from_the_config_on_github() {
         .arg(target.path())
         .assert()
         .success()
-        .stdout(predicates::str::contains("RK_REQUIRED_CHECK=gate"));
+        .stdout(predicates::str::contains("RK_REQUIRED_CHECK=ci-pass"));
 }
 
 /// SATISFIES forge-setup:every-supported-forge-runs-every-step
@@ -29703,7 +29707,14 @@ fn required_check_comes_from_the_config_on_github() {
 #[test]
 fn required_check_refuses_on_github_when_neither_answers() {
     let target = tempfile::tempdir().expect("a tempdir");
-    land_rust(target.path()).success();
+    // The lines style names no check by default, so nothing answers.
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--integration", "forge"])
+        .args(["--release-style", "lines", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
 
     rk().args([
         "setup",
@@ -29803,11 +29814,6 @@ fn retired_branches_come_from_the_config() {
 fn the_release_lines_step_runs_when_the_config_asks() {
     let target = tempfile::tempdir().expect("a tempdir");
     land_rust(target.path()).success();
-    set_config_key(
-        target.path(),
-        "required_check = \"\"",
-        "required_check = \"gate\"",
-    );
 
     let skipped = rk_with_stub_gh()
         .args([
@@ -30053,7 +30059,7 @@ const EVERY_UNRUN_STEP: [(&str, &str); 13] = [
     ),
     ("protect-tags", "this project cuts no tags"),
     (
-        "auto-merge",
+        "merge-on-order",
         "no request merges itself without a release decision",
     ),
     (
@@ -30509,7 +30515,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/8");
+    assert_eq!(report["schema"], "rk.stage/9");
     for top in [
         "schema",
         "rk_version",
@@ -31674,7 +31680,6 @@ fn record_signature_line(
             security_response: params.security_response().to_owned(),
             security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
-            required_workflow: params.required_workflow().to_owned(),
             dev_environment: None,
         },
         files: vec![
@@ -31706,27 +31711,6 @@ fn record_signature_line(
     )
 }
 
-/// This repository's own two answers describe one file: the workflow that
-/// declares `name: ci` runs for a request against the trunk and carries
-/// the job reporting `gate`. A wrong pair would refuse every release
-/// silently, so the pairing is proved here rather than at a release.
-///
-/// SATISFIES target-config:a-setup-fact-is-committed-once
-#[test]
-fn this_project_pairs_its_waking_workflow_with_its_named_check() {
-    let root = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    assert_eq!(
-        release_kit::setup::workflow_jobs::waking_workflow_fault(&root, "ci", "gate", "master"),
-        None
-    );
-    assert!(
-        release_kit::setup::workflow_jobs::waking_workflow_fault(&root, "build", "gate", "master")
-            .is_some(),
-        "a workflow name nothing declares faults"
-    );
-}
-
-/// The landed release workflow for one driver under one integration mode,
 /// The landed release workflow for one driver under one integration mode,
 /// as the projection renders it.
 fn release_workflow(driver: &str, integration: release_kit::landing::Integration) -> String {
@@ -31764,7 +31748,8 @@ fn workflow_job<'a>(workflow: &'a str, job: &str) -> &'a str {
         .match_indices("\n  ")
         .find(|(at, _)| {
             let next = &rest[at + 3..];
-            next.starts_with(|c: char| c.is_ascii_alphanumeric())
+            // The next job, or the comment block that introduces it.
+            next.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '#')
         })
         .map_or(rest.len(), |(at, _)| at + 1);
     &workflow[start..start + header.len() - 1 + end]
@@ -31805,15 +31790,26 @@ fn the_rust_github_rc_job_runs_only_on_dispatch() {
     for integration in [Integration::Local, Integration::Forge] {
         let workflow = release_workflow("rust", integration);
         assert!(
-            workflow.contains("  workflow_dispatch:\n    inputs:\n      line:"),
+            workflow.contains("  workflow_dispatch:\n    inputs:\n      action:"),
             "{workflow}"
         );
-        for input in ["      expect:\n", "      promote:\n        description"] {
+        for input in [
+            "      line:\n",
+            "      expect:\n",
+            "      promote:\n        description",
+        ] {
             assert!(workflow.contains(input), "{input}");
         }
         assert!(
-            workflow_job(&workflow, "release-candidate")
-                .contains("if: github.repository_owner == 'acme' && github.event_name == 'workflow_dispatch'\n"),
+            workflow_job(&workflow, "release-candidate").contains(
+                "      && github.event_name == 'workflow_dispatch'\n      && inputs.action == 'candidate'\n"
+            ),
+            "{workflow}"
+        );
+        assert!(
+            workflow_job(&workflow, "release-merge").contains(
+                "      && github.event_name == 'workflow_dispatch'\n      && inputs.action == 'merge'\n"
+            ),
             "{workflow}"
         );
         for job in ["release-plz-release", "release-plz-pr"] {
@@ -32128,7 +32124,7 @@ fn the_rust_gitlab_cut_job_runs_release_plz_with_the_rc_config() {
         let pipeline = rust_gitlab_pipeline(run);
         let job = gitlab_job(&pipeline, "release-candidate");
         assert!(
-            job.contains("  rules:\n    - if: '$CI_COMMIT_BRANCH =~ /^release\\//'\n      when: manual\n      allow_failure: true\n"),
+            job.contains("  rules:\n    - if: '$CI_PIPELINE_SOURCE == \"push\" && $CI_COMMIT_BRANCH =~ /^release\\//'\n      when: manual\n      allow_failure: true\n"),
             "{job}"
         );
         let prefix = run.map_or(String::new(), |run| format!("{run} "));
@@ -32210,13 +32206,22 @@ fn the_rust_gitlab_cut_job_follows_the_registry_answer() {
     );
 }
 
-/// No job holds a resource group that two lines share.
+/// No job holds a resource group that two lines share. The merge job runs
+/// on the trunk alone, so its one group serializes the operator's merges
+/// and no line's release.
 #[test]
 fn the_rust_gitlab_release_groups_are_per_line() {
     let pipeline = rust_gitlab_pipeline(None);
+    assert_eq!(
+        pipeline
+            .matches("\n  resource_group: release-merge\n")
+            .count(),
+        1
+    );
     let groups: Vec<&str> = pipeline
         .lines()
         .filter(|line| line.trim_start().starts_with("resource_group:"))
+        .filter(|line| line.trim() != "resource_group: release-merge")
         .collect();
     assert_eq!(groups.len(), 3, "{groups:?}");
     for group in groups {
@@ -32350,627 +32355,86 @@ fn the_rust_gitlab_cut_job_refuses_another_line_and_reads_the_report() {
     );
 }
 
-/// Under local integration the trunk keeps its strict required-check rule,
-/// and the landed release workflow merges its own request under the
-/// release App: it wakes on the recorded workflow completing and it no
-/// longer stands armed.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn a_locally_integrated_target_lands_a_gated_release_arm() {
-    use release_kit::landing::Integration;
-    for driver in ["rust", "python", "bash"] {
-        let text = release_workflow(driver, Integration::Local);
-        assert!(text.contains("workflow_run:"), "{driver}");
-        assert!(text.contains("workflows: [\"ci\"]"), "{driver}");
-        assert!(text.contains("types: [completed]"), "{driver}");
-        assert!(text.contains("release-gate:"), "{driver}");
-        assert!(!text.contains("--auto"), "{driver} still stands armed");
-        assert!(!text.contains("RK_GATE"), "{driver} leaks a marker");
-        assert!(!text.contains("RK_PUSH_GUARD"), "{driver} leaks a token");
-    }
-}
-
-/// Under forge integration the ruleset requires the check before the
-/// merge, so every marker strips and the authored standing arm stands.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn a_forge_integrated_target_keeps_the_standing_arm() {
-    use release_kit::landing::Integration;
-    for driver in ["rust", "python", "bash"] {
-        let text = release_workflow(driver, Integration::Forge);
-        // The engine pairs arm inside rk release request, so their workflow
-        // carries no arm, and the engine arms where the authored arm would.
-        if matches!(driver, "bash" | "python") {
-            assert!(!text.contains("gh pr merge"), "{driver}");
-            assert!(engine_arms(Integration::Forge), "{driver}");
-        } else {
-            assert!(text.contains("--auto --squash --delete-branch"), "{driver}");
-        }
-        assert!(!text.contains("workflow_run"), "{driver}");
-        assert!(!text.contains("release-gate:"), "{driver}");
-        assert!(!text.contains("RK_GATE"), "{driver} leaks a marker");
-        assert!(!text.contains("RK_PUSH_GUARD"), "{driver} leaks a token");
-        // Every pair carries a release-candidate dispatch, so its push
-        // jobs keep the event guard under either integration.
-        assert!(
-            text.contains("github.event_name == 'push'"),
-            "{driver} guards its push jobs against the dispatch"
-        );
-    }
-}
-
-/// Both modes hold the release request on the same recorded check name.
-/// One does it with the trunk's own rule, the other with the workflow it
-/// lands, and the authority is the only difference.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn the_release_request_is_gated_under_both_integration_modes() {
-    use release_kit::landing::Integration;
-    let gated = release_workflow("rust", Integration::Local);
-    assert!(gated.contains("GATE_CHECK: \"gate\""));
-    assert!(gated.contains("check_name=\"$GATE_CHECK\""));
-    // The forge rendering names no check, because the ruleset does.
-    let armed = release_workflow("rust", Integration::Forge);
-    assert!(!armed.contains("GATE_CHECK"));
-    assert!(armed.contains("--auto"));
-    // The bash pair renders the same gate, and under forge integration the
-    // engine arms the request where the rust workflow's standing arm does.
-    let gated = release_workflow("bash", Integration::Local);
-    assert!(gated.contains("GATE_CHECK: \"gate\""));
-    assert!(gated.contains("check_name=\"$GATE_CHECK\""));
-    assert!(!engine_arms(Integration::Local));
-    let armed = release_workflow("bash", Integration::Forge);
-    assert!(!armed.contains("GATE_CHECK"));
-    assert!(engine_arms(Integration::Forge));
-}
-
-/// Whether the engine arms a GitHub trunk request on the trunk under
-/// `integration`, the policy the bash pair's workflow leaves to rk.
-fn engine_arms(integration: release_kit::landing::Integration) -> bool {
-    release_kit::release_engine::guard::arms(
-        release_kit::detect::Forge::Github,
-        integration,
-        Some(release_kit::landing::Style::Trunk),
-        "master",
-        "master",
-    )
-}
-
-/// The gate judges the recorded check and waits on the recorded workflow.
-/// They answer two different questions, so a target whose names differ
-/// must carry both, each where it belongs.
-///
-/// SATISFIES target-config:a-setup-fact-is-committed-once
-#[test]
-fn the_gate_names_the_recorded_check_and_not_the_workflow() {
-    let target = tempfile::tempdir().expect("a scratch target exists");
-    rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--required-check", "verify"])
-        .args(["--required-workflow", "build", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .success();
-    let text = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
-        .expect("the workflow lands");
-    assert!(text.contains("workflows: [\"build\"]"), "{text}");
-    assert!(text.contains("GATE_CHECK: \"verify\""), "{text}");
-}
-
-/// Gate names are data in both the rendered YAML and the preview's replay
-/// command. YAML punctuation and shell metacharacters therefore survive as
-/// names rather than becoming structure or a second command.
-///
-/// SATISFIES target-config:a-setup-fact-is-committed-once
-#[test]
-fn gate_names_are_encoded_for_yaml_and_shell_replay() {
-    let target = tempfile::tempdir().expect("a scratch target exists");
-    let check = "build: #1's";
-    let workflow = "CI \"main\" \\ path";
-    let output = rk()
-        .args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--required-check", check])
-        .args(["--required-workflow", workflow, "--target"])
-        .arg(target.path())
-        .assert()
-        .success();
-    let preview = String::from_utf8_lossy(&output.get_output().stdout);
-    assert!(
-        preview.contains("--required-check 'build: #1'\"'\"'s'"),
-        "{preview}"
-    );
-    assert!(
-        preview.contains("--required-workflow 'CI \"main\" \\ path'"),
-        "{preview}"
-    );
-
-    rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--required-check", check])
-        .args(["--required-workflow", workflow, "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .success();
-    let text = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
-        .expect("the workflow lands");
-    assert!(
-        text.contains("workflows: [\"CI \\\"main\\\" \\\\ path\"]"),
-        "{text}"
-    );
-    assert!(text.contains("GATE_CHECK: \"build: #1's\""), "{text}");
-}
-
-/// Each driver's request branch is a structural second guard. The proof of
-/// identity is the author, the base, and the head repository, every one
-/// read back from the forge, so a request that imitates the branch shape
-/// is refused by the proofs rather than admitted by the pattern.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn each_driver_proves_its_release_request_identity() {
-    use release_kit::landing::Integration;
-    for (driver, shape) in [
-        ("rust", "BRANCH_SHAPE: release-plz-"),
-        ("python", "BRANCH_SHAPE: rk-release/"),
-        ("bash", "BRANCH_SHAPE: rk-release/"),
-    ] {
-        let text = release_workflow(driver, Integration::Local);
-        assert!(text.contains(shape), "{driver}");
-        // Every proof, read from the forge rather than from the event.
-        for proof in [
-            "-f state=open",
-            "-f base=\"$TRUNK\"",
-            "select(.draft == false)",
-            "select(.base.ref == env.TRUNK)",
-            "select(.head.repo.full_name == env.GH_REPO)",
-            "select(.user.type == \"Bot\")",
-            "select(.user.login == env.APP_LOGIN)",
-        ] {
-            assert!(text.contains(proof), "{driver} lacks {proof}");
-        }
-        // The forge CLI refuses to gather the pages into one array while a
-        // filter is given, and it says so rather than answering. A rendered
-        // workflow asking for both never reads a single request.
-        assert!(!text.contains("--slurp"), "{driver} asks for --slurp");
-        assert!(text.contains("--paginate"), "{driver} reads one page only");
-    }
-}
-
-/// A request imitating the branch shape never merges, because the shape
-/// is never the proof: a fork's head is cross-repository and a human's
-/// request is not the release app's.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn an_imitating_request_never_merges() {
-    for (driver, branch, shape) in [
-        ("rust", "release-plz-imitation", "release-plz-"),
-        ("python", "rk-release/master", "rk-release/"),
-        ("bash", "rk-release/master", "rk-release/"),
-    ] {
-        let mut owned = gate_candidate(7, "imitation");
-        owned["head"]["ref"] = serde_json::json!(branch);
-        let mut fork = owned.clone();
-        fork["head"]["repo"]["full_name"] = serde_json::json!("outsider/widget");
-        let mut human = owned.clone();
-        human["user"] = serde_json::json!({"type": "User", "login": "maintainer"});
-        let mut other_bot = owned;
-        other_bot["user"] = serde_json::json!({"type": "Bot", "login": "other-bot[bot]"});
-
-        for (case, candidate) in [
-            ("fork", fork),
-            ("same-repository human", human),
-            ("other bot", other_bot),
-        ] {
-            let run = run_gate_script_for(
-                driver,
-                shape,
-                &serde_json::json!([[candidate]]),
-                "",
-                r#"elif [[ "$args" == *"/check-runs"* ]]; then
-  : > "$STATE/check-read"
-  printf '%s\n' 'completed success'
-elif [[ "$args" == "pr merge"* ]]; then
-  printf '%s\n' "$args" > "$STATE/merged""#,
-            );
-            let stdout = run.stdout();
-            assert!(run.output.status.success(), "{driver} {case}: {stdout}");
-            assert!(
-                stdout.contains("0 match and nothing merged"),
-                "{driver} {case}: {stdout}"
-            );
-            assert!(!run.check_read(), "{driver} {case}: {stdout}");
-            assert_eq!(run.merged(), None, "{driver} {case}: {stdout}");
-        }
-    }
-}
-
-/// Candidate discovery consumes every page before it applies the exact-one
-/// filter. A release request after one full page is therefore still found
-/// and merged when its exact head carries the recorded successful check.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn a_release_request_after_the_first_candidate_page_is_found() {
-    let irrelevant = serde_json::json!({
-        "number": 1,
-        "draft": true,
-        "base": {"ref": "master"},
-        "head": {"repo": {"full_name": "acme/widget"}, "ref": "release-plz-old", "sha": "old"},
-        "user": {"type": "Bot", "login": "release-bot[bot]"}
-    });
-    let first_page = vec![irrelevant; 100];
-    let run = run_gate_script(
-        &serde_json::json!([first_page, [gate_candidate(101, "release-head")]]),
-        "",
-        r#"elif [[ "$args" == *"/check-runs"* ]]; then
-  printf '%s\n' 'completed success'
-elif [[ "$args" == "pr merge"* ]]; then
-  printf '%s\n' "$args" > "$STATE/merged""#,
-    );
-    assert!(
-        run.output.status.success(),
-        "stdout: {}\nstderr: {}",
-        run.stdout(),
-        String::from_utf8_lossy(&run.output.stderr)
-    );
-    assert_eq!(
-        run.merged().expect("the merge is recorded"),
-        "pr merge 101 --match-head-commit release-head --squash --delete-branch\n"
-    );
-}
-
-/// The exact-one condition spans every page, never one page at a time. Two
-/// requests the release app owns, split across a page boundary, are an
-/// ambiguity the job refuses: merging the first would release whichever
-/// candidate the forge happened to answer with first.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn two_candidates_across_two_pages_merge_neither() {
-    let run = run_gate_script(
-        &serde_json::json!([
-            [gate_candidate(101, "first-head")],
-            [gate_candidate(102, "second-head")]
-        ]),
-        "",
-        r#"elif [[ "$args" == *"/check-runs"* ]]; then
-  printf '%s\n' 'completed success'
-elif [[ "$args" == "pr merge"* ]]; then
-  printf '%s\n' "$args" > "$STATE/merged""#,
-    );
-    let stdout = run.stdout();
-    assert!(run.output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("no single release request the release app owns"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("2 match and nothing merged"), "{stdout}");
-    assert_eq!(run.merged(), None, "{stdout}");
-}
-
-/// The forge CLI as the gate meets it, so a test proves the shipped shell
-/// against the real tool's behavior rather than against a convenience.
-///
-/// Two properties matter and neither is decorative. `gh` rejects `--slurp`
-/// beside `--jq`, so a workflow pairing them never runs at all. And
-/// `--paginate` applies the filter to each page alone and concatenates
-/// what each page answers, so no filter ever sees the whole set. A mock
-/// that folded the pages into one array hid both facts, and the gate
-/// shipped broken.
-///
-/// `arms` carries the calls past candidate discovery. `$STATE/pages.json`
-/// holds an array of pages, each an array of requests.
-fn write_fake_gh(bin: &std::path::Path, arms: &str) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let script = format!(
-        r#"#!/usr/bin/env bash
-set -eu
-args="$*"
-if [[ "$args" == *"/pulls"* ]]; then
-  if [[ "$args" == *"--slurp"* ]] && [[ "$args" == *"--jq"* || "$args" == *"--template"* ]]; then
-    echo 'the `--slurp` option is not supported with `--jq` or `--template`' >&2
-    exit 1
-  fi
-  [[ "$args" == *"--paginate"* ]]
-  query=""
-  while (($#)); do
-    if [[ "$1" == "--jq" ]]; then query="$2"; break; fi
-    shift
-  done
-  jq -c '.[]' "$STATE/pages.json" | while IFS= read -r page; do
-    printf '%s' "$page" | jq -r "$query"
-  done
-{arms}
-else
-  printf 'unexpected gh call: %s\n' "$args" >&2
-  exit 1
-fi
-"#
-    );
-    let gh = bin.join("gh");
-    std::fs::write(&gh, script).expect("the fake gh writes");
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
-        .expect("the fake gh is executable");
-}
-
-/// Run the gate's shell against a fake forge CLI, with `pages` as the
-/// paginated candidate answer and `arms` as every call after discovery.
-fn run_gate_script(pages: &serde_json::Value, state: &str, arms: &str) -> GateRun {
-    run_gate_script_for("rust", "release-plz-", pages, state, arms)
-}
-
-/// Run one driver's rendered gate shell with its own branch shape.
-fn run_gate_script_for(
+/// Every release automation file of one automatic pair, as the projection
+/// renders it: the GitHub release workflow or the GitLab pipeline.
+fn release_automation(
     driver: &str,
-    branch_shape: &str,
-    pages: &serde_json::Value,
-    state: &str,
-    arms: &str,
-) -> GateRun {
-    let script = release_gate_script(driver);
-    let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
-    let bin = scratch.path().join("bin");
-    std::fs::create_dir(&bin).expect("the fake bin creates");
-    write_fake_gh(&bin, arms);
-    std::fs::write(
-        scratch.path().join("pages.json"),
-        serde_json::to_vec(pages).expect("the pages serialize"),
-    )
-    .expect("the pages write");
-    std::fs::write(scratch.path().join("state"), state).expect("the state writes");
-
-    let old_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![bin];
-    paths.extend(std::env::split_paths(&old_path));
-    let path = std::env::join_paths(paths).expect("PATH joins");
-    let output = std::process::Command::new("sh")
-        .args(["-c", &script])
-        .env("PATH", path)
-        .env("STATE", scratch.path())
-        .env("GH_TOKEN", "fixture")
-        .env("GH_REPO", "acme/widget")
-        .env("APP_LOGIN", "release-bot[bot]")
-        .env("TRUNK", "master")
-        .env("GATE_CHECK", "gate")
-        .env("BRANCH_SHAPE", branch_shape)
-        .output()
-        .expect("the gate script runs");
-    GateRun { output, scratch }
-}
-
-/// One run of the gate's shell, holding its scratch open so a test can read
-/// what the fake forge CLI recorded.
-struct GateRun {
-    output: std::process::Output,
-    scratch: tempfile::TempDir,
-}
-
-impl GateRun {
-    fn stdout(&self) -> String {
-        String::from_utf8_lossy(&self.output.stdout).into_owned()
-    }
-
-    fn merged(&self) -> Option<String> {
-        std::fs::read_to_string(self.scratch.path().join("merged")).ok()
-    }
-
-    fn check_read(&self) -> bool {
-        self.scratch.path().join("check-read").exists()
-    }
-}
-
-/// One release request the release app owns, on its own page.
-fn gate_candidate(number: u64, head: &str) -> serde_json::Value {
-    serde_json::json!({
-        "number": number,
-        "draft": false,
-        "base": {"ref": "master"},
-        "head": {
-            "repo": {"full_name": "acme/widget"},
-            "ref": format!("release-plz-{head}"),
-            "sha": head
-        },
-        "user": {"type": "Bot", "login": "release-bot[bot]"}
-    })
-}
-
-/// The gate's own shell, lifted out of the rendered workflow so a test can
-/// run it against a fake forge CLI. What ships is what runs here.
-fn release_gate_script(driver: &str) -> String {
-    let text = release_workflow(driver, release_kit::landing::Integration::Local);
-    let run = text
-        .split("release-gate:")
-        .nth(1)
-        .and_then(|job| job.split("        run: |\n").nth(1))
-        .expect("the gate carries one run script");
-    run.lines()
-        .take_while(|line| line.starts_with("          ") || line.is_empty())
-        .map(|line| line.strip_prefix("          ").unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Run the gate's shell against a fake forge CLI whose merge refuses, and
-/// whose readback answers `state`.
-fn gate_merge_refused_with(state: &str) -> GateRun {
-    run_gate_script(
-        &serde_json::json!([[gate_candidate(7, "release-head")]]),
-        state,
-        r#"elif [[ "$args" == *"/check-runs"* ]]; then
-  printf '%s\n' 'completed success'
-elif [[ "$args" == "pr merge"* ]]; then
-  echo 'the forge refused the merge' >&2
-  exit 1
-elif [[ "$args" == "pr view"* ]]; then
-  cat "$STATE/state""#,
-    )
-}
-
-/// The trunk's own rule refusing a stale merge is the protection working.
-/// The request stays open, the log names what the forge answered, and the
-/// job ends successfully: a red job would report a broken release where
-/// the release was correctly withheld.
-///
-/// SATISFIES git:concurrent-pull-and-merge-requests-carry-the-tested-trunk
-#[test]
-fn a_merge_the_trunk_refuses_on_policy_is_a_successful_no_op() {
-    for state in ["OPEN BEHIND release-head", "OPEN BLOCKED release-head"] {
-        let run = gate_merge_refused_with(state);
-        let stdout = run.stdout();
-        assert!(run.output.status.success(), "{state}: {stdout}");
-        assert!(
-            stdout.contains("the trunk refused the merge of #7"),
-            "{state}: {stdout}"
-        );
-        assert!(!stdout.contains("::error::"), "{state}: {stdout}");
-    }
-}
-
-/// Every other refusal is still an error. A conflicted request, or one the
-/// forge answers for in no recognized way, is a release that needs a human.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn a_merge_that_fails_for_another_reason_still_fails_the_job() {
-    let run = gate_merge_refused_with("OPEN DIRTY release-head");
-    assert!(!run.output.status.success());
-    let stdout = run.stdout();
-    assert!(stdout.contains("::error::"), "{stdout}");
-    assert!(stdout.contains("OPEN DIRTY release-head"), "{stdout}");
-}
-
-/// A merge another run of the same job already made is this job's own
-/// outcome reached by another route.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn a_request_another_run_already_merged_ends_successfully() {
-    let run = gate_merge_refused_with("MERGED UNKNOWN release-head");
-    let stdout = run.stdout();
-    assert!(run.output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("pull request #7 was already merged at release-head"),
-        "{stdout}"
+    forge: &str,
+    integration: release_kit::landing::Integration,
+    style: release_kit::landing::Style,
+) -> String {
+    let params = projection_params(
+        driver,
+        forge,
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        integration,
+        style,
+        false,
     );
+    let path = match (forge, driver) {
+        ("github", "rust") => "rust/github/.github/workflows/release-plz.yml".to_owned(),
+        ("github", _) => format!("{driver}/github/.github/workflows/release.yml"),
+        _ => format!("{driver}/gitlab/.gitlab-ci.yml"),
+    };
+    let source = release_kit::embedded::SNIPPETS
+        .get_file(&path)
+        .unwrap_or_else(|| panic!("the binary embeds {path}"));
+    String::from_utf8(release_kit::projection::render(source.contents(), &params))
+        .expect("the automation is text")
 }
 
-/// The new event enters the gate's job alone. Every job written for a
-/// push carries the guard that keeps it out.
+/// No landed job arms or merges a release request by itself, in any
+/// automatic pair, under either integration and either style: a release
+/// waits for the operator's order. The one merge call is in the merge job,
+/// which only the operator's dispatch reaches, and no other job holds a
+/// merge call, an arm, or a check read.
 ///
+/// SATISFIES release-engine:the-request-never-arms
 /// SATISFIES git:the-release-request-integrates-at-the-forge
 #[test]
-fn a_workflow_run_enters_only_the_reconciliation_job() {
-    use release_kit::landing::Integration;
+fn no_automatic_job_arms_or_merges() {
+    use release_kit::landing::{Integration, Style};
     for driver in ["rust", "python", "bash"] {
-        let text = release_workflow(driver, Integration::Local);
-        let guards = text.matches("github.event_name == 'push'").count();
-        assert!(guards >= 3, "{driver} guards {guards} conditions");
-        assert!(
-            text.contains("github.event.workflow_run.event == 'pull_request'"),
-            "{driver}"
-        );
-    }
-}
-
-/// The stale-head proof lives in the write itself, so a refresh between
-/// the judgment and the merge refuses rather than merging bytes nothing
-/// judged.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn the_gate_matches_the_judged_head_at_merge() {
-    use release_kit::landing::Integration;
-    for driver in ["rust", "python", "bash"] {
-        let text = release_workflow(driver, Integration::Local);
-        assert!(
-            text.contains("gh pr merge \"$number\" --match-head-commit \"$head\""),
-            "{driver}"
-        );
-        // The judged head is the request's own current head, never the
-        // commit the event carried.
-        assert!(text.contains("head=\"${candidates#* }\""), "{driver}");
-        assert!(text.contains("commits/$head/check-runs"), "{driver}");
-    }
-}
-
-/// The gate reads and merges under the release app alone. The default
-/// token is not a second authority here: a merge under it would start no
-/// workflow, which is the reason the arm needed the app in the first
-/// place.
-///
-/// SATISFIES forge-setup:the-setup-permits-a-request-to-merge-itself
-#[test]
-fn the_gate_reads_checks_with_the_release_app() {
-    use release_kit::landing::Integration;
-    for driver in ["rust", "python", "bash"] {
-        let text = release_workflow(driver, Integration::Local);
-        let job = text.split("release-gate:").nth(1).expect("the gate job");
-        for grant in [
-            "permission-contents: write",
-            "permission-pull-requests: write",
-            "permission-checks: read",
-        ] {
-            assert!(job.contains(grant), "{driver} lacks {grant}");
+        for forge in ["github", "gitlab"] {
+            for integration in [Integration::Local, Integration::Forge] {
+                for style in [Style::Trunk, Style::Lines] {
+                    let whole = release_automation(driver, forge, integration, style);
+                    let at = format!("{driver} {forge} {integration:?} {style:?}");
+                    let (job, gate, merge) = if forge == "github" {
+                        (
+                            workflow_job(&whole, "release-merge"),
+                            "      && github.event_name == 'workflow_dispatch'\n      && inputs.action == 'merge'\n",
+                            "gh pr merge \"$REQUEST\" --match-head-commit \"$HEAD\"",
+                        )
+                    } else {
+                        (
+                            gitlab_job(&whole, "release-merge"),
+                            "'$CI_PIPELINE_SOURCE == \"api\" && $RK_RELEASE_ACTION == \"merge\"",
+                            "/merge?sha=$head&",
+                        )
+                    };
+                    assert!(job.contains(gate), "{at}: {job}");
+                    assert_eq!(job.matches(merge).count(), 1, "{at}: {job}");
+                    assert_eq!(whole.matches(merge).count(), 1, "{at}");
+                    let text = whole.replace(job, "");
+                    for arm in [
+                        "--auto",
+                        "merge_when_pipeline_succeeds",
+                        "auto_merge=true",
+                        "release-gate",
+                        "workflow_run",
+                        "gh pr merge",
+                        "/merge?",
+                        "checks: read",
+                        "permission-checks",
+                        "RK_GATE",
+                        "RK_REQUIRED_WORKFLOW",
+                    ] {
+                        assert!(!text.contains(arm), "{at} carries {arm}");
+                    }
+                }
+            }
         }
-        assert!(
-            job.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
-            "{driver}"
-        );
-        assert!(!job.contains("secrets.GITHUB_TOKEN"), "{driver}");
-    }
-}
-
-/// Every answer but one leaves the request open, and the log says which
-/// one it was. A missing result, a duplicated one, and an unfinished one
-/// are all not-success.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn every_non_success_check_state_leaves_the_request_open() {
-    use release_kit::landing::Integration;
-    let text = release_workflow("rust", Integration::Local);
-    // One current result, or the count is reported rather than indexed.
-    assert!(text.contains("if (.check_runs | length) == 1"), "{text}");
-    assert!(text.contains("\\(.check_runs | length) results"), "{text}");
-    // Success is the one accepted pair; everything else stops.
-    assert!(
-        text.contains("if [ \"$verdict\" != \"completed success\" ]"),
-        "{text}"
-    );
-    assert!(text.contains("stays open."), "{text}");
-}
-
-/// GitLab needs no gate and no answer. Its own auto-merge waits for the
-/// whole pipeline through one project setting, which local integration
-/// does not disturb, because that forge holds its trunk with a push
-/// access level rather than with a required check.
-///
-/// SATISFIES git:the-release-request-integrates-at-the-forge
-#[test]
-fn a_gitlab_target_keeps_its_pipeline_gated_arm() {
-    use release_kit::landing::{CheckoutMode, Integration, Style};
-    for integration in [Integration::Forge, Integration::Local] {
-        let params = projection_params(
-            "rust",
-            "gitlab",
-            CheckoutMode::LinkedWorktree,
-            integration,
-            Style::Trunk,
-            false,
-        );
-        let source = release_kit::embedded::SNIPPETS
-            .get_file("rust/gitlab/.gitlab-ci.yml")
-            .expect("the binary embeds the pipeline");
-        let text = String::from_utf8(release_kit::projection::render(source.contents(), &params))
-            .expect("the pipeline is text");
-        assert!(text.contains("merge_when_pipeline_succeeds=true"));
-        assert!(!text.contains("release-gate"));
-        assert!(!text.contains("GATE_CHECK"));
     }
 }
 
@@ -34081,7 +33545,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/8");
+    assert_eq!(receipt["schema"], "rk.stage/9");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -34293,7 +33757,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/8","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/9","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -36272,11 +35736,6 @@ fn status_check_judges_every_rendered_file_against_the_receipts_parameters() {
             "SECURITY.md",
         ),
         (
-            vec!["profile", "release", "style"],
-            serde_json::json!("lines"),
-            ".github/workflows/release-plz.yml",
-        ),
-        (
             vec!["git", "trunk"],
             serde_json::json!("main"),
             ".github/workflows/release-plz.yml",
@@ -38006,6 +37465,219 @@ fn v0_4_0_fixture_records(fixture: &Path) -> Vec<(String, String, String)> {
     recorded
 }
 
+/// A target that rk 0.9.14 landed with the release gate, under
+/// `tests/fixtures/v0.9.14-target/`, copied into a forge fixture whose
+/// workflow reports the recorded `gate` check, with the release request an
+/// older rk armed still open.
+fn a_gated_0_9_14_target() -> ForgeFixture {
+    let fixture = ForgeFixture::new();
+    let root = fixture.target.path();
+    copy_tree(&repo_path("tests/fixtures/v0.9.14-target"), root);
+    std::fs::write(
+        root.join(".github/workflows/ci.yml"),
+        "name: ci\non: [pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n  gate:\n    if: always()\n    needs: [test]\n    runs-on: ubuntu-latest\n",
+    )
+    .expect("the gate workflow writes");
+    git_in(root, &["config", "user.email", "rk@example.invalid"]);
+    git_in(root, &["config", "user.name", "rk test"]);
+    git_in(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    git_in(root, &["add", "-A"]);
+    git_in(root, &["commit", "-qm", "chore: land 0.9.14"]);
+    fixture.seed(
+        "pulls",
+        r#"[{"number":12,"head":{"ref":"release-plz-2026-11-12"},"auto_merge":{"merge_method":"squash"}}]"#,
+    );
+    fixture
+}
+
+/// The whole upgrade from 0.9.14 follows the guidance: the retired key
+/// refuses first, its removal lets `rk upgrade` take the gate, the arm,
+/// and the grant out, the project's own files keep their bytes, the setup
+/// disarms the open request, and the renewed proof and the check pass.
+///
+/// SATISFIES target-config:a-retired-key-refuses-by-name
+/// SATISFIES forge-setup:an-armed-release-request-faults
+#[test]
+fn the_whole_upgrade_from_0_9_14() {
+    let fixture = a_gated_0_9_14_target();
+    let root = fixture.target.path().to_path_buf();
+    let workflow = root.join(".github/workflows/release-plz.yml");
+    let before = std::fs::read_to_string(&workflow).expect("the workflow reads");
+    for gate in ["release-gate:", "workflow_run:", "permission-checks: read"] {
+        assert!(before.contains(gate), "the fixture lands {gate}");
+    }
+    let owned = [
+        "Cargo.toml",
+        "src/main.rs",
+        "release-plz.toml",
+        "dist-workspace.toml",
+    ];
+    let kept: Vec<Vec<u8>> = owned
+        .iter()
+        .map(|path| std::fs::read(root.join(path)).expect("reads"))
+        .collect();
+
+    // The retired key refuses before any write.
+    fixture
+        .rk(&["upgrade", "--apply"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "setup.required_workflow is retired",
+        ));
+    assert_eq!(
+        std::fs::read_to_string(&workflow).expect("the workflow reads"),
+        before
+    );
+
+    // Step 1 removes the key by hand, and step 2 upgrades.
+    let config = root.join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the config reads");
+    let text: String = text
+        .lines()
+        .filter(|line| !line.starts_with("required_workflow"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    std::fs::write(&config, text).expect("the config writes");
+    fixture.rk(&["upgrade", "--apply"]).assert().success();
+    let whole = std::fs::read_to_string(&workflow).expect("the workflow reads");
+    // The merge job is what replaces the gate, and it alone reads a check.
+    let after = whole.replace(workflow_job(&whole, "release-merge"), "");
+    for gate in [
+        "release-gate",
+        "workflow_run",
+        "permission-checks",
+        "--auto",
+        "RK_GATE",
+    ] {
+        assert!(!after.contains(gate), "{gate} survived the upgrade");
+    }
+    for (path, bytes) in owned.iter().zip(&kept) {
+        assert_eq!(
+            &std::fs::read(root.join(path)).expect("reads"),
+            bytes,
+            "{path} changed"
+        );
+    }
+    assert!(
+        read_manifest(&root)["parameters"]
+            .get("required_workflow")
+            .is_none()
+    );
+
+    // Step 3 runs the setup, which disarms the open request.
+    let key = fixture.key_file();
+    with_app(&fixture, &key, &["setup", "check"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("unsatisfied merge-on-order"));
+    with_app(&fixture, &key, &["setup", "--apply"])
+        .assert()
+        .success();
+    let pulls: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.state("pulls")).expect("the pulls read"),
+    )
+    .expect("JSON");
+    assert!(pulls[0]["auto_merge"].is_null(), "{pulls}");
+
+    // Steps 4 and 5 renew the proof and read the setup back.
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success();
+    fixture
+        .rk(&["setup", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("compatible"));
+    with_app(&fixture, &key, &["setup", "check"])
+        .assert()
+        .success();
+}
+
+/// A setup proof written before this release is stale against the new
+/// contract, naming the retired answer and the renamed step, and the proof
+/// renewed after the upgrade is compatible.
+///
+/// SATISFIES forge-setup:an-armed-release-request-faults
+#[test]
+fn the_setup_proof_is_stale_before_and_compatible_after() {
+    use release_kit::setup::proof;
+    let target = land_pair("rust", "github");
+    clear_landing_sentinels(target.path());
+    let root = utf8(target.path());
+    let ctx = release_kit::setup::context::Ctx::offline(&root).expect("the context reads");
+    // The contract an older rk stated: the gate's workflow answer, and the
+    // step this release renamed.
+    let mut subject = proof::subject(&ctx);
+    subject
+        .target
+        .insert("required_workflow".to_owned(), "ci".to_owned());
+    for step in &mut subject.steps {
+        if step.name == "merge-on-order" {
+            "auto-merge".clone_into(&mut step.name);
+        }
+    }
+    let old = proof::Proof {
+        schema: proof::SCHEMA.to_owned(),
+        rk_version: "0.9.14".to_owned(),
+        verified_at: "2026-11-01T00:00:00Z".to_owned(),
+        subject_digest: proof::digest(&subject),
+        steps: Vec::new(),
+        subject,
+    };
+    proof::write(&root, &old).expect("the proof writes");
+    let out = rk()
+        .args(["setup", "status", "--json", "--target"])
+        .arg(target.path())
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["state"], "stale", "{report}");
+    let differences = report["differences"].to_string();
+    assert!(differences.contains("target.required_workflow"), "{report}");
+    assert!(differences.contains("auto-merge"), "{report}");
+    seed_setup_proof(target.path());
+    rk().args(["setup", "status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"state\": \"compatible\""));
+}
+
+/// `rk status --check` stays offline on a migrated target: it passes with
+/// no forge CLI on the path and no credential, and judges no arm.
+///
+/// SATISFIES release-state:an-armed-request-fails-the-report
+#[test]
+fn status_reads_no_network() {
+    let target = land_pair("rust", "github");
+    clear_landing_sentinels(target.path());
+    // git is the one tool the verb runs, named outright so the path can
+    // hold no forge CLI at all.
+    let git = std::process::Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("sh runs");
+    let git = String::from_utf8_lossy(&git.stdout).trim().to_owned();
+    rk().env("PATH", "/nonexistent")
+        .env("RK_GIT_BIN", &git)
+        .env("RK_GH_BIN", "/nonexistent/gh")
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
 /// A scratch repository holding a copy of `fixture`, with one commit.
 fn committed_copy_of(fixture: &Path) -> tempfile::TempDir {
     let scratch = tempfile::tempdir().expect("a scratch target exists");
@@ -38515,7 +38187,7 @@ fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
         "rk profile writes nothing"
     );
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/5");
+    assert_eq!(report["schema"], "rk.profile/6");
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["git"]["checkout_mode"], "linked-worktree");
     assert_eq!(report["sources"]["profile.technologies"], "config");
@@ -40810,7 +40482,16 @@ fn release_status_reports_each_request_state() {
                 "repos/acme/widget/compare/master...abc",
                 &serde_json::json!({ "behind_by": behind }),
             );
-        forge.report(target.path(), &[])
+        // An armed request is a defect the verb exits non-zero on, after
+        // it rendered the whole report.
+        let out = forge
+            .rk(target.path(), &[])
+            .assert()
+            .code(i32::from(!auto_merge.is_null()))
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&out).expect("one JSON object")
     };
     let armed = open(
         serde_json::json!({"merge_method": "squash"}),
@@ -40822,6 +40503,7 @@ fn release_status_reports_each_request_state() {
     assert_eq!(request["number"], 12);
     assert_eq!(request["proposed_version"], "1.2.3");
     assert_eq!(request["armed"], "yes");
+    assert_eq!(armed["symptoms"][0]["code"], "request-armed", "{armed}");
     assert_eq!(request["checks"], "passing");
     assert_eq!(request["behind_trunk"], "no");
 
@@ -41356,6 +41038,74 @@ fn python_github_forge(wheel_attested: bool) -> ReleaseForge {
         )
         .registry("https://pypi.org/pypi/acme/0.2.0/json", "200");
     forge
+}
+
+/// An open release request that stands armed fails `rk release status`
+/// on each forge, with the call that disarms it in the report.
+///
+/// SATISFIES release-state:an-armed-request-fails-the-report
+#[test]
+fn release_status_fails_on_an_armed_request() {
+    let github = release_target();
+    let forge = shipped_forge();
+    forge.answer(
+        PULLS_OPEN,
+        &serde_json::json!([
+            {"number": 12, "title": "chore: release v1.2.3",
+             "head": {"ref": "release-plz-2026-10-09", "sha": "abc"},
+             "auto_merge": {"merge_method": "squash"}}
+        ]),
+    );
+    let gitlab = python_release_target("gitlab", "registry = \"none\"\n");
+    let lab = python_gitlab_forge(&["acme-0.2.0.tar.gz", "acme-0.2.0-py3-none-any.whl"]);
+    lab.answer(
+        "projects/acme%2Fwidget/merge_requests?state=opened&target_branch=master&per_page=100",
+        &serde_json::json!([
+            {"iid": 6, "title": "chore(release): release v0.2.1",
+             "source_branch": "rk-release/master", "merge_when_pipeline_succeeds": true}
+        ]),
+    );
+    for (target, forge, call) in [
+        (
+            &github,
+            &forge,
+            "gh pr merge 12 --disable-auto --repo acme/widget",
+        ),
+        (
+            &gitlab,
+            &lab,
+            "glab api -X POST projects/acme%2Fwidget/merge_requests/6/cancel_merge_when_pipeline_succeeds",
+        ),
+    ] {
+        let out = forge
+            .rk(target.path(), &[])
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        let report: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("one JSON object");
+        let armed = report["symptoms"]
+            .as_array()
+            .and_then(|symptoms| {
+                symptoms
+                    .iter()
+                    .find(|symptom| symptom["code"] == "request-armed")
+            })
+            .unwrap_or_else(|| panic!("no request-armed symptom: {report}"));
+        assert!(
+            armed["evidence"]
+                .as_str()
+                .is_some_and(|evidence| evidence.contains(call)),
+            "{armed}"
+        );
+        assert_eq!(
+            armed["recovery"], "A release request stands armed",
+            "{armed}"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("merge-on-order"), "{stderr}");
+    }
 }
 
 /// The GitLab forge of a python project whose v0.2.0 release page carries
@@ -44224,7 +43974,7 @@ fn a_target_migrates_from_its_predecessor_and_closes() {
             .as_array()
             .expect("forge_missing")
             .iter()
-            .any(|step| step == "auto-merge"),
+            .any(|step| step == "merge-on-order"),
         "{status}"
     );
     json(&["migrate", "archive", "--apply"]);
@@ -48648,7 +48398,7 @@ fn the_bot_name_is_a_setup_declaration_and_reaches_no_byte() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/5");
+    assert_eq!(report["schema"], "rk.profile/6");
     assert_eq!(report["setup"]["bot_name"], "widget-bot");
     assert_eq!(report["sources"]["setup.bot.name"], "config");
 
@@ -49251,7 +49001,9 @@ fn the_bash_pipelines_carry_no_release_shell() {
     let pipelines = engine_gitlab_pipelines();
     for (label, pipeline) in &pipelines {
         for (name, body) in gitlab_sections_of(pipeline) {
-            if name != "provenance" {
+            // The merge job proves the operator's order against the forge
+            // in its own shell; the engine releases nothing there.
+            if name != "provenance" && name != "release-merge" {
                 bodies.push((format!("gitlab {label} {name}"), body));
             }
         }
@@ -52833,45 +52585,71 @@ fn the_request_refuses_the_default_ci_token() {
     }
 }
 
-/// SATISFIES release-engine:the-request-arms-where-the-projection-arms
+/// The required check is data in the preview's replay command: shell
+/// metacharacters survive as a name rather than becoming a second command.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
 #[test]
-fn the_request_arms_only_where_the_projection_arms() {
+fn a_required_check_is_encoded_for_shell_replay() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    let output = rk()
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--required-check",
+            "build: #1's",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success();
+    let preview = String::from_utf8_lossy(&output.get_output().stdout);
+    assert!(
+        preview.contains("--required-check 'build: #1'\"'\"'s'"),
+        "{preview}"
+    );
+}
+
+/// `rk release request` opens or refreshes the request against a fake
+/// forge and sends no arm call, on either forge, under every integration
+/// and style, on the trunk and on a line.
+///
+/// SATISFIES release-engine:the-request-never-arms
+#[test]
+fn the_request_engine_never_arms() {
     let armed = |engine: &Engine, number: u64| -> bool {
         let pull = engine.pull(number);
         !pull["auto_merge"].is_null() && pull["auto_merge"] != serde_json::json!(false)
             || pull["merge_when_pipeline_succeeds"] == true
     };
-    for (forge, init, line, expected) in [
-        ("github", &["--integration", "forge"][..], false, true),
-        ("gitlab", &["--integration", "local"][..], false, true),
-        ("gitlab", &["--integration", "forge"][..], false, true),
-        ("github", &["--integration", "local"][..], false, false),
+    for (forge, init, line) in [
+        ("github", &["--integration", "forge"][..], false),
+        ("github", &["--integration", "local"][..], false),
+        ("gitlab", &["--integration", "local"][..], false),
+        ("gitlab", &["--integration", "forge"][..], false),
         (
             "github",
             &["--integration", "forge", "--style", "lines"][..],
             false,
-            false,
         ),
-        ("gitlab", &["--style", "lines"][..], false, false),
-        ("github", &["--integration", "forge"][..], true, false),
-        ("gitlab", &[][..], true, false),
+        ("gitlab", &["--style", "lines"][..], false),
+        ("github", &["--integration", "forge"][..], true),
+        ("gitlab", &[][..], true),
     ] {
         let engine = Engine::new("bash", forge, init, "0.1.0");
         if line {
             engine.line("0.1");
         }
         let report = engine.ok("request");
+        let at = format!("{forge} {init:?} line={line}");
         let number = report["request"].as_u64().expect("a request");
-        assert_eq!(
-            report["armed"], expected,
-            "{forge} {init:?} line={line}: {report}"
-        );
-        assert_eq!(
-            armed(&engine, number),
-            expected,
-            "{forge} {init:?} line={line}: {}",
-            engine.pull(number)
-        );
+        assert!(report.get("armed").is_none(), "{at}: {report}");
+        assert!(!armed(&engine, number), "{at}: {}", engine.pull(number));
+        let log = engine.log();
+        for call in ["--auto", "merge_when_pipeline_succeeds", "/merge?"] {
+            assert!(!log.contains(call), "{at} sent {call}: {log}");
+        }
     }
 }
 
@@ -56713,16 +56491,20 @@ fn mint_lines(job: &str) -> Vec<&str> {
 fn each_github_candidate_job_pushes_as_the_bot() {
     for (label, workflow) in engine_github_workflows() {
         assert!(
-            workflow.contains("  workflow_dispatch:\n    inputs:\n      line:"),
+            workflow.contains("  workflow_dispatch:\n    inputs:\n      action:"),
             "{label}: {workflow}"
         );
-        for input in ["      expect:\n", "      promote:\n        description"] {
+        for input in [
+            "      line:\n",
+            "      expect:\n",
+            "      promote:\n        description",
+        ] {
             assert!(workflow.contains(input), "{label}: {input}");
         }
         let job = workflow_job(&workflow, "release-candidate");
         assert!(
             job.contains(
-                "    if: github.repository_owner == 'acme' && github.event_name == 'workflow_dispatch'\n"
+                "    if: >-\n      github.repository_owner == 'acme'\n      && github.event_name == 'workflow_dispatch'\n      && inputs.action == 'candidate'\n"
             ),
             "{label}: {job}"
         );
@@ -56850,7 +56632,7 @@ fn each_gitlab_candidate_job_is_manual_and_pushes_as_the_bot() {
         let job = gitlab_job(&pipeline, "release-candidate");
         assert!(job.contains("  extends: .tooling\n"), "{label}: {job}");
         assert!(
-            job.contains("  rules:\n    - if: '$CI_COMMIT_BRANCH =~ /^release\\//'\n      when: manual\n      allow_failure: true\n"),
+            job.contains("  rules:\n    - if: '$CI_PIPELINE_SOURCE == \"push\" && $CI_COMMIT_BRANCH =~ /^release\\//'\n      when: manual\n      allow_failure: true\n"),
             "{label}: {job}"
         );
         let at = |needle: &str| {
@@ -57164,13 +56946,15 @@ fn a_pending_cut_writes_and_pushes_nothing() {
 }
 
 /// No job of either engine pipeline on GitLab holds a resource group two
-/// lines share, so one line's release never waits on another's.
+/// lines share, so one line's release never waits on another's. The merge
+/// job runs on the trunk alone.
 #[test]
 fn the_gitlab_release_groups_are_per_line() {
     for (label, pipeline) in engine_gitlab_pipelines() {
         let groups: Vec<&str> = pipeline
             .lines()
             .filter(|line| line.trim_start().starts_with("resource_group:"))
+            .filter(|line| line.trim() != "resource_group: release-merge")
             .collect();
         assert!(groups.len() >= 4, "{label}: {groups:?}");
         for group in groups {
@@ -58488,8 +58272,7 @@ fn prune_verify_checks_the_forge_cli_first() {
 
 /// A sync whose day is stamped, or whose lock another run holds, skips as
 /// before when nix is missing: the tools are checked only once the sync
-/// acts. An acting envrc run reports the missing tool and exits 0; an
-/// operator run fails with it. A pending recovery waits for the check, so
+/// acts. An acting run reports the missing tool and fails with it. A pending recovery waits for the check, so
 /// a missing tool touches no file.
 ///
 /// SATISFIES tool-requirements:a-verb-checks-its-tools-first
@@ -58498,23 +58281,6 @@ fn a_sync_checks_its_tools_only_when_it_acts() {
     let missing_nix = |fixture: &SelfDependFixture| {
         std::fs::remove_file(fixture.mock.path().join("nix")).expect("the nix stand-in goes");
     };
-
-    let stamped = SelfDependFixture::new();
-    stamped.write_flake("v0.2.15");
-    stamped.commit_all();
-    missing_nix(&stamped);
-    std::fs::create_dir_all(stamped.state_dir()).expect("the state dir creates");
-    std::fs::write(
-        stamped.state_dir().join(format!("{}.stamp", stamped.key())),
-        format!("{}\n", today_utc()),
-    )
-    .expect("the stamp plants");
-    let (code, report) = stamped.sync_json(&["self-depend", "sync", "--apply"]);
-    assert_eq!(
-        (code, report["outcome"].as_str()),
-        (Some(0), Some("skipped-stamped")),
-        "{report}"
-    );
 
     let locked = SelfDependFixture::new();
     locked.write_flake("v0.2.15");
@@ -58542,16 +58308,13 @@ fn a_sync_checks_its_tools_only_when_it_acts() {
     acting.commit_all();
     missing_nix(&acting);
     let (code, report) = acting.sync_json(&["self-depend", "sync", "--apply"]);
-    assert_eq!(code, Some(0), "{report}");
+    assert_ne!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "prerequisite-unmet", "{report}");
     let detail = report["detail"].as_str().unwrap_or_default();
     assert!(
         detail.contains("nix is missing") && detail.contains("next: install nix"),
         "{detail}"
     );
-    let (code, report) =
-        acting.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
-    assert_ne!(code, Some(0), "{report}");
     assert!(acting.curl_log().is_empty(), "no release page was read");
 
     let pending = SelfDependFixture::new();
@@ -58945,5 +58708,1451 @@ fn the_forge_cli_runs_from_the_path_the_check_judged() {
             .assert()
             .success()
             .stdout(predicate::str::contains("confirmed: #8"));
+    }
+}
+
+// The merge on the operator's order: `rk release merge` and the merge job
+// it dispatches.
+
+/// The head and the base every merge fixture reads.
+const MERGE_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const MERGE_BASE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+/// The rendered merge job's script for one pair, lifted out of the
+/// projection so a test runs what ships.
+fn merge_job_script(driver: &str, forge: &str) -> String {
+    use release_kit::landing::{Integration, Style};
+    let whole = release_automation(driver, forge, Integration::Local, Style::Trunk);
+    if forge == "github" {
+        step_script(
+            workflow_job(&whole, "release-merge"),
+            "merge the release request the operator ordered",
+        )
+    } else {
+        gitlab_blocks(gitlab_job(&whole, "release-merge"))
+            .pop()
+            .expect("the merge job carries its script")
+    }
+}
+
+/// One fact the forge answers to the merge job, and what it changes from
+/// the passing case.
+#[derive(Clone, Copy)]
+enum MergeFault {
+    None,
+    Refreshed,
+    MovedBase,
+    RedCheck,
+    MissingCheck,
+    ForeignAuthor,
+    ForkHead,
+    UserAuthor,
+    NonAdmin,
+    AlreadyMerged,
+    OtherBase,
+    SlashTrunk,
+}
+
+/// The merge job's run against a fake forge, with the scratch that holds
+/// what the forge recorded.
+struct MergeJobRun {
+    output: std::process::Output,
+    scratch: tempfile::TempDir,
+}
+
+impl MergeJobRun {
+    fn log(&self) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&self.output.stdout),
+            String::from_utf8_lossy(&self.output.stderr)
+        )
+    }
+
+    fn merged(&self) -> Option<String> {
+        std::fs::read_to_string(self.scratch.path().join("merged")).ok()
+    }
+}
+
+/// Run one pair's merge job against a fake forge that answers the passing
+/// case, changed by `fault`. GitHub's job calls `gh`, which applies each
+/// `--jq` filter to the answer as the real client does; GitLab's calls
+/// `curl`, and the real `jq` reads its answers.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one fixture states every answer both forges give the job, so a fault reads as one change to it"
+)]
+fn run_merge_job(driver: &str, forge: &str, fault: MergeFault) -> MergeJobRun {
+    use std::os::unix::fs::PermissionsExt as _;
+    let scratch = tempfile::tempdir().expect("a merge fixture exists");
+    let bin = scratch.path().join("bin");
+    std::fs::create_dir(&bin).expect("the fake bin creates");
+    let shape = release_kit::projection::release_driver_shape(Some(driver)).expect("a shape");
+    let state = scratch.path();
+    let write = |name: &str, value: serde_json::Value| {
+        std::fs::write(state.join(name), value.to_string()).expect("the answer writes");
+    };
+    let head = if matches!(fault, MergeFault::Refreshed) {
+        "cccccccccccccccccccccccccccccccccccccccc"
+    } else {
+        MERGE_HEAD
+    };
+    let tip = if matches!(fault, MergeFault::MovedBase) {
+        "dddddddddddddddddddddddddddddddddddddddd"
+    } else {
+        MERGE_BASE
+    };
+    let base = match fault {
+        MergeFault::OtherBase => "release/1.4",
+        MergeFault::SlashTrunk => "develop/main",
+        _ => "master",
+    };
+    if forge == "github" {
+        let (kind, login) = match fault {
+            MergeFault::ForeignAuthor => ("Bot", "other-app[bot]"),
+            MergeFault::UserAuthor => ("User", "release-bot[bot]"),
+            _ => ("Bot", "release-bot[bot]"),
+        };
+        let repo = if matches!(fault, MergeFault::ForkHead) {
+            "fork/widget"
+        } else {
+            "acme/widget"
+        };
+        let merged = matches!(fault, MergeFault::AlreadyMerged);
+        write(
+            "pull.json",
+            serde_json::json!({
+                "state": if merged { "closed" } else { "open" },
+                "draft": false,
+                "merged": merged,
+                "base": {"ref": base},
+                "head": {"repo": {"full_name": repo}, "ref": format!("{shape}master"), "sha": head},
+                "user": {"type": kind, "login": login},
+            }),
+        );
+        write(
+            "permission.json",
+            serde_json::json!({"permission": if matches!(fault, MergeFault::NonAdmin) { "write" } else { "admin" }}),
+        );
+        write("branch.json", serde_json::json!({"commit": {"sha": tip}}));
+        let runs = match fault {
+            MergeFault::RedCheck => {
+                serde_json::json!([{"status": "completed", "conclusion": "failure"}])
+            }
+            MergeFault::MissingCheck => serde_json::json!([]),
+            _ => serde_json::json!([{"status": "completed", "conclusion": "success"}]),
+        };
+        write("checks.json", serde_json::json!({"check_runs": runs}));
+        let gh = r#"#!/bin/sh
+set -eu
+if [ "$1" = pr ] && [ "$2" = merge ]; then
+  printf '%s\n' "$*" > "$STATE/merged"
+  exit 0
+fi
+[ "$1" = api ] || { echo "unexpected gh call: $*" >&2; exit 1; }
+path="$2"; query="."
+while [ $# -gt 0 ]; do
+  [ "$1" = --jq ] && query="$2"
+  shift
+done
+case "$path" in
+  */collaborators/*/permission) file=permission.json ;;
+  */pulls/*) file=pull.json ;;
+  */branches/*) file=branch.json ;;
+  */check-runs) file=checks.json ;;
+  *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+esac
+jq -r "$query" "$STATE/$file"
+"#;
+        std::fs::write(bin.join("gh"), gh).expect("the fake gh writes");
+    } else {
+        let author = if matches!(fault, MergeFault::ForeignAuthor | MergeFault::UserAuthor) {
+            "someone"
+        } else {
+            "release-bot"
+        };
+        let state_word = if matches!(fault, MergeFault::AlreadyMerged) {
+            "merged"
+        } else {
+            "opened"
+        };
+        let pipeline = match fault {
+            MergeFault::RedCheck => serde_json::json!({"sha": head, "status": "failed"}),
+            MergeFault::MissingCheck => serde_json::Value::Null,
+            _ => serde_json::json!({"sha": head, "status": "success"}),
+        };
+        write(
+            "mr.json",
+            serde_json::json!({
+                "state": state_word,
+                "draft": false,
+                "target_branch": base,
+                "source_project_id": if matches!(fault, MergeFault::ForkHead) { 43 } else { 42 },
+                "author": {"username": author},
+                "source_branch": format!("{shape}master"),
+                "sha": head,
+                "head_pipeline": pipeline,
+            }),
+        );
+        write(
+            "member.json",
+            serde_json::json!({"access_level": if matches!(fault, MergeFault::NonAdmin) { 30 } else { 40 }}),
+        );
+        write("user.json", serde_json::json!({"username": "release-bot"}));
+        write("branch.json", serde_json::json!({"commit": {"id": tip}}));
+        let curl = r#"#!/bin/sh
+set -eu
+method=GET
+prev=
+for arg; do
+  [ "$prev" = -X ] && method="$arg"
+  prev="$arg"
+  url="$arg"
+done
+case "$method $url" in
+  "PUT "*/merge\?*) printf '%s\n' "$url" > "$STATE/merged"; echo '{}' ;;
+  "GET "*/members/all/*) cat "$STATE/member.json" ;;
+  "GET "*/api/v4/user) cat "$STATE/user.json" ;;
+  "GET "*/merge_requests/*) cat "$STATE/mr.json" ;;
+  "GET "*/repository/branches/master|"GET "*/repository/branches/develop%2Fmain) cat "$STATE/branch.json" ;;
+  *) echo "curl: (22) The requested URL returned error: 404" >&2; exit 22 ;;
+esac
+"#;
+        std::fs::write(bin.join("curl"), curl).expect("the fake curl writes");
+    }
+    for name in ["gh", "curl"] {
+        let path = bin.join(name);
+        if path.exists() {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the fake is executable");
+        }
+    }
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&old_path));
+    let path = std::env::join_paths(paths).expect("PATH joins");
+    let mut script = merge_job_script(driver, forge);
+    if matches!(fault, MergeFault::SlashTrunk) {
+        script = script.replace("master", "develop/main");
+    }
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", &script])
+        .env("PATH", path)
+        .env("STATE", state);
+    if forge == "github" {
+        command
+            .env("GH_TOKEN", "fixture")
+            .env("GH_REPO", "acme/widget")
+            .env("APP_LOGIN", "release-bot[bot]")
+            .env("CALLER", "operator")
+            .env("REQUEST", "7")
+            .env("BASE", MERGE_BASE)
+            .env("HEAD", MERGE_HEAD)
+            .env("TRUNK", "master")
+            .env("GATE_CHECK", "gate")
+            .env("BRANCH_SHAPE", shape);
+    } else {
+        command
+            .env("RELEASE_BOT_TOKEN", "fixture")
+            .env("CI_API_V4_URL", "https://gitlab.test/api/v4")
+            .env("CI_PROJECT_ID", "42")
+            .env("GITLAB_USER_ID", "5")
+            .env("GITLAB_USER_LOGIN", "operator")
+            .env("RK_MERGE_REQUEST", "7")
+            .env("RK_MERGE_BASE", MERGE_BASE)
+            .env("RK_MERGE_HEAD", MERGE_HEAD);
+    }
+    let output = command.output().expect("the merge job runs");
+    MergeJobRun { output, scratch }
+}
+
+/// Every driver on both forges, as `(driver, forge)`.
+const MERGE_PAIRS: [(&str, &str); 6] = [
+    ("rust", "github"),
+    ("bash", "github"),
+    ("python", "github"),
+    ("rust", "gitlab"),
+    ("bash", "gitlab"),
+    ("python", "gitlab"),
+];
+
+/// Run every pair's merge job under `fault`, and require that each one
+/// fails, merges nothing, and names `why` in its log.
+fn assert_merge_refused(fault: MergeFault, why: &[(&str, &str)]) {
+    for (driver, forge) in MERGE_PAIRS {
+        let run = run_merge_job(driver, forge, fault);
+        let log = run.log();
+        assert!(!run.output.status.success(), "{driver} {forge}: {log}");
+        assert_eq!(run.merged(), None, "{driver} {forge}: {log}");
+        assert!(log.contains("nothing merged"), "{driver} {forge}: {log}");
+        let needle = why
+            .iter()
+            .find(|(on, _)| *on == forge)
+            .map_or("", |(_, needle)| *needle);
+        assert!(log.contains(needle), "{driver} {forge}: {needle}: {log}");
+    }
+}
+
+/// The administrator's order merges, through the job, with the head the
+/// operator read pinned in the write, on every pair.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn an_administrator_caller_merges_only_through_the_job() {
+    for (driver, forge) in MERGE_PAIRS {
+        let run = run_merge_job(driver, forge, MergeFault::None);
+        let log = run.log();
+        assert!(run.output.status.success(), "{driver} {forge}: {log}");
+        let merged = run
+            .merged()
+            .unwrap_or_else(|| panic!("{driver} {forge}: {log}"));
+        if forge == "github" {
+            assert!(
+                merged.starts_with(&format!("pr merge 7 --match-head-commit {MERGE_HEAD} --")),
+                "{merged}"
+            );
+            assert!(merged.contains("--delete-branch"), "{merged}");
+        } else {
+            assert!(
+                merged.contains(&format!("/merge_requests/7/merge?sha={MERGE_HEAD}&")),
+                "{merged}"
+            );
+        }
+    }
+}
+
+/// A request the bot refreshed after the operator's preview carries bytes
+/// nobody read, so the job refuses.
+#[test]
+fn the_merge_job_refuses_a_request_refreshed_after_the_preview() {
+    assert_merge_refused(
+        MergeFault::Refreshed,
+        &[
+            ("github", "after the operator read"),
+            ("gitlab", "after the operator read"),
+        ],
+    );
+}
+
+/// A trunk that moved after the preview refuses: the request no longer
+/// carries the trunk the operator read.
+#[test]
+fn the_merge_job_refuses_a_moved_base() {
+    assert_merge_refused(
+        MergeFault::MovedBase,
+        &[("github", "master moved to"), ("gitlab", "master moved to")],
+    );
+}
+
+/// A red or a missing check for the head refuses.
+#[test]
+fn the_merge_job_refuses_a_red_or_missing_check() {
+    assert_merge_refused(
+        MergeFault::RedCheck,
+        &[("github", "completed failure"), ("gitlab", "reads failed")],
+    );
+    assert_merge_refused(
+        MergeFault::MissingCheck,
+        &[("github", "0 results"), ("gitlab", "reads none")],
+    );
+}
+
+/// A request another author opened, or one headed from another
+/// repository, never merges.
+#[test]
+fn the_merge_job_refuses_a_foreign_author_or_a_fork_head() {
+    assert_merge_refused(
+        MergeFault::ForeignAuthor,
+        &[
+            ("github", "is authored by other-app[bot]"),
+            ("gitlab", "is authored by someone"),
+        ],
+    );
+    assert_merge_refused(
+        MergeFault::ForkHead,
+        &[
+            ("github", "is headed from fork/widget"),
+            ("gitlab", "comes from another project"),
+        ],
+    );
+}
+
+/// A request whose author is no app, even under the app's own login,
+/// never merges: the identity is the app's, read from its token.
+#[test]
+fn the_merge_job_refuses_without_app_identity() {
+    assert_merge_refused(
+        MergeFault::UserAuthor,
+        &[
+            ("github", "is authored by release-bot[bot]"),
+            ("gitlab", "is authored by someone"),
+        ],
+    );
+}
+
+/// A caller below the administrator, on GitHub, or below the maintainer,
+/// on GitLab, refuses: any writer can dispatch a workflow.
+#[test]
+fn a_dispatch_by_a_non_admin_refuses() {
+    assert_merge_refused(
+        MergeFault::NonAdmin,
+        &[
+            ("github", "holds the write role"),
+            ("gitlab", "holds access level 30"),
+        ],
+    );
+}
+
+/// An already merged request refuses rather than reporting a merge it did
+/// not make.
+#[test]
+fn the_merge_job_refuses_an_already_merged_request() {
+    assert_merge_refused(
+        MergeFault::AlreadyMerged,
+        &[
+            ("github", "is already merged"),
+            ("gitlab", "is already merged"),
+        ],
+    );
+}
+
+/// A request based on another branch, such as a release line, refuses:
+/// a line keeps the merge by a person.
+#[test]
+fn a_request_based_on_another_branch_refuses() {
+    assert_merge_refused(
+        MergeFault::OtherBase,
+        &[
+            ("github", "is based on release/1.4"),
+            ("gitlab", "targets release/1.4"),
+        ],
+    );
+}
+
+/// The GitLab merge job reads the request's own head pipeline and merges
+/// only where it passed for that exact head.
+#[test]
+fn the_gitlab_merge_job_needs_a_green_head_pipeline() {
+    for driver in ["rust", "bash", "python"] {
+        let script = merge_job_script(driver, "gitlab");
+        assert!(
+            script.contains(
+                r#"if [ "$pipeline_sha" != "$head" ] || [ "$pipeline" != "success" ]; then"#
+            ),
+            "{driver}: {script}"
+        );
+        for fault in [MergeFault::RedCheck, MergeFault::MissingCheck] {
+            let run = run_merge_job(driver, "gitlab", fault);
+            assert!(!run.output.status.success(), "{driver}: {}", run.log());
+            assert_eq!(run.merged(), None, "{driver}");
+        }
+    }
+}
+
+/// A merge dispatch reaches the merge job alone, and a candidate dispatch
+/// the candidate job alone, on every GitHub pair.
+#[test]
+fn a_merge_dispatch_mints_no_candidate() {
+    use release_kit::landing::{Integration, Style};
+    for driver in ["rust", "bash", "python"] {
+        let whole = release_automation(driver, "github", Integration::Local, Style::Trunk);
+        let candidate = workflow_job(&whole, "release-candidate");
+        assert!(
+            candidate.contains("      && inputs.action == 'candidate'\n"),
+            "{driver}"
+        );
+        assert!(!candidate.contains("'merge'"), "{driver}");
+    }
+}
+
+/// See [`a_merge_dispatch_mints_no_candidate`]: the merge job runs only on
+/// the merge action.
+#[test]
+fn a_candidate_dispatch_merges_nothing() {
+    use release_kit::landing::{Integration, Style};
+    for driver in ["rust", "bash", "python"] {
+        let whole = release_automation(driver, "github", Integration::Local, Style::Trunk);
+        let merge = workflow_job(&whole, "release-merge");
+        assert!(
+            merge.contains("      && inputs.action == 'merge'\n"),
+            "{driver}"
+        );
+        assert!(!merge.contains("'candidate'"), "{driver}");
+    }
+}
+
+/// The dispatch's action is required, offers exactly the two actions, and
+/// has no default, so a dispatch without one fails at the forge before any
+/// job acts.
+#[test]
+fn a_dispatch_without_an_action_fails_before_any_job() {
+    use release_kit::landing::{Integration, Style};
+    for driver in ["rust", "bash", "python"] {
+        let whole = release_automation(driver, "github", Integration::Forge, Style::Trunk);
+        assert!(
+            whole.contains(
+                "    inputs:\n      action:\n        description: What this dispatch does, candidate or merge\n        required: true\n        type: choice\n        options: [candidate, merge]\n      line:\n"
+            ),
+            "{driver}: {whole}"
+        );
+        let action = &whole[whole.find("      action:\n").expect("the action input")..];
+        let action = &action[..action.find("      line:\n").expect("the next input")];
+        assert!(!action.contains("default:"), "{driver}: {action}");
+    }
+}
+
+/// The API pipeline that merges holds the merge job alone on every GitLab
+/// pair: every other release job runs on a push, the title gates on a
+/// merge request. On GitHub, the request and publish jobs run only on a
+/// push.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_merge_pipeline_runs_only_the_merge_job() {
+    use release_kit::landing::{Integration, Style};
+    for driver in ["rust", "bash", "python"] {
+        let pipeline = release_automation(driver, "gitlab", Integration::Local, Style::Trunk);
+        let mut jobs = 0;
+        for (name, body) in gitlab_sections_of(&pipeline) {
+            // The workflow's own rules admit the pipeline; each job's rules
+            // decide what runs in it.
+            if name == "workflow" || !body.contains("\n  rules:\n") {
+                continue;
+            }
+            jobs += 1;
+            if name == "release-merge" {
+                assert!(
+                    body.contains(r#"'$CI_PIPELINE_SOURCE == "api" && $RK_RELEASE_ACTION == "merge" && $CI_COMMIT_BRANCH == "master"'"#),
+                    "{driver}: {body}"
+                );
+            } else {
+                for rule in body
+                    .lines()
+                    .filter(|line| line.trim_start().starts_with("- if:"))
+                {
+                    assert!(
+                        rule.contains(r#"$CI_PIPELINE_SOURCE == "push""#)
+                            || rule.contains(r#"$CI_PIPELINE_SOURCE == "merge_request_event""#),
+                        "{driver} {name}: {rule}"
+                    );
+                }
+            }
+        }
+        assert!(jobs >= 3, "{driver}: {pipeline}");
+        let workflow = release_automation(driver, "github", Integration::Local, Style::Trunk);
+        let push_jobs: &[&str] = if driver == "rust" {
+            &["release-plz-release", "release-plz-pr"]
+        } else {
+            &["release-request", "release"]
+        };
+        for job in push_jobs {
+            assert!(
+                workflow_job(&workflow, job).contains("github.event_name == 'push'"),
+                "{driver} {job}"
+            );
+        }
+    }
+}
+
+/// Every GitHub trunk release records the convention's required check
+/// under either integration, and the merge job judges it.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn every_github_pair_names_its_required_check() {
+    for tech in ["rust", "bash", "python"] {
+        for integration in ["local", "forge"] {
+            let target = tempfile::tempdir().expect("a scratch target exists");
+            if tech == "python" {
+                seed_uv_project(target.path(), "0.1.0");
+            }
+            rk().args(["init", "--tech", tech, "--forge", "github"])
+                .args(["--repo", "acme/widget", "--integration", integration])
+                .arg("--target")
+                .arg(target.path())
+                .arg("--apply")
+                .assert()
+                .success();
+            let record = read_manifest(target.path());
+            assert_eq!(
+                record["parameters"]["required_check"], "gate",
+                "{tech} {integration}"
+            );
+            let file = if tech == "rust" {
+                "release-plz.yml"
+            } else {
+                "release.yml"
+            };
+            let workflow =
+                std::fs::read_to_string(target.path().join(".github/workflows").join(file))
+                    .expect("the workflow landed");
+            assert!(
+                workflow_job(&workflow, "release-merge")
+                    .contains("          GATE_CHECK: \"gate\"\n"),
+                "{tech} {integration}"
+            );
+        }
+    }
+}
+
+/// A fake forge CLI for `rk release merge`: each call answers from a file
+/// named by its method and path, a body it sends is kept beside it, and
+/// the dispatched run's list carries the correlation the dispatch sent.
+struct MergeForge {
+    mock: tempfile::TempDir,
+}
+
+impl MergeForge {
+    fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mock = tempfile::tempdir().expect("a mock dir exists");
+        std::fs::create_dir(mock.path().join("answers")).expect("the answers dir creates");
+        let cli = r#"#!/bin/sh
+[ "$1" = --version ] && { echo "gh version 2.57.0 (2024-09-16)"; exit 0; }
+[ "$1" = api ] || { echo "unexpected call: $*" >&2; exit 1; }
+shift
+method=GET; path=""; input=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --method) method="$2"; shift ;;
+    --input) input=1; shift ;;
+    --paginate) ;;
+    *) path="$1" ;;
+  esac
+  shift
+done
+dir="$(dirname "$0")/answers"
+key=$(printf '%s %s' "$method" "$path" | tr ' /?&=.:%' '________')
+printf '%s %s\n' "$method" "$path" >> "$dir/calls.log"
+[ -n "$input" ] && cat > "$dir/$key.body"
+if [ -f "$dir/$key.tmpl" ]; then
+  body=$(cat "$dir"/*dispatches.body)
+  correlation=$(printf '%s' "$body" | jq -r .inputs.correlation)
+  sed "s/CORRELATION/$correlation/g" "$dir/$key.tmpl"
+  exit 0
+fi
+if [ -f "$dir/$key.json" ]; then cat "$dir/$key.json"; exit 0; fi
+echo "gh: Not Found (HTTP 404)" >&2
+exit 1
+"#;
+        for name in ["gh", "glab"] {
+            let path = mock.path().join(name);
+            std::fs::write(&path, cli).expect("the mock writes");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the mock is executable");
+        }
+        Self { mock }
+    }
+
+    fn key(method: &str, path: &str) -> String {
+        format!("{method} {path}")
+            .chars()
+            .map(|c| if " /?&=.:%".contains(c) { '_' } else { c })
+            .collect()
+    }
+
+    fn answer(&self, method: &str, path: &str, body: &str) -> &Self {
+        std::fs::write(
+            self.mock
+                .path()
+                .join("answers")
+                .join(format!("{}.json", Self::key(method, path))),
+            body,
+        )
+        .expect("the answer writes");
+        self
+    }
+
+    fn answer_with_correlation(&self, path: &str, body: &str) -> &Self {
+        std::fs::write(
+            self.mock
+                .path()
+                .join("answers")
+                .join(format!("{}.tmpl", Self::key("GET", path))),
+            body,
+        )
+        .expect("the template writes");
+        self
+    }
+
+    fn calls(&self) -> String {
+        std::fs::read_to_string(self.mock.path().join("answers").join("calls.log"))
+            .unwrap_or_default()
+    }
+
+    fn sent(&self, method: &str, path: &str) -> Option<serde_json::Value> {
+        std::fs::read_to_string(
+            self.mock
+                .path()
+                .join("answers")
+                .join(format!("{}.body", Self::key(method, path))),
+        )
+        .ok()
+        .map(|text| serde_json::from_str(&text).expect("the sent body is JSON"))
+    }
+
+    fn rk(&self, target: &Path, args: &[&str]) -> Rk {
+        let mut command = rk();
+        command
+            .env("RK_GH_BIN", self.mock.path().join("gh"))
+            .env("RK_GLAB_BIN", self.mock.path().join("glab"))
+            .env("RK_RELEASE_WAIT_INTERVAL_MS", "10")
+            .args(["release", "merge", "--target"])
+            .arg(target)
+            .args(args);
+        command
+    }
+}
+
+const MERGE_PULLS: &str = "repos/acme/widget/pulls?state=open&base=master&per_page=100";
+const MERGE_MRS: &str =
+    "projects/acme%2Fwidget/merge_requests?state=opened&target_branch=master&per_page=100";
+
+/// A landed target and a forge that holds one passing release request on
+/// `forge`, with the answers `rk release merge` reads.
+fn merge_fixture(forge: &str) -> (tempfile::TempDir, MergeForge) {
+    let target = land_pair("rust", forge);
+    let fake = MergeForge::new();
+    if forge == "github" {
+        fake.answer(
+            "GET",
+            MERGE_PULLS,
+            &serde_json::json!([
+                {"number": 9, "title": "feat: a project change", "head": {"ref": "feat/x", "sha": "e".repeat(40)}},
+                {"number": 7, "title": "chore: release v0.2.0", "head": {"ref": "release-plz-2026-11-13", "sha": MERGE_HEAD}}
+            ])
+            .to_string(),
+        )
+        .answer(
+            "GET",
+            "repos/acme/widget/branches/master",
+            &serde_json::json!({"commit": {"sha": MERGE_BASE}}).to_string(),
+        )
+        .answer(
+            "GET",
+            &format!("repos/acme/widget/commits/{MERGE_HEAD}/check-runs?check_name=gate&filter=latest"),
+            &serde_json::json!({"check_runs": [{"status": "completed", "conclusion": "success"}]})
+                .to_string(),
+        );
+    } else {
+        fake.answer(
+            "GET",
+            MERGE_MRS,
+            &serde_json::json!([
+                {"iid": 7, "title": "chore: release v0.2.0", "source_branch": "release-plz-2026-11-13", "sha": MERGE_HEAD}
+            ])
+            .to_string(),
+        )
+        .answer(
+            "GET",
+            "projects/acme%2Fwidget/repository/branches/master",
+            &serde_json::json!({"commit": {"id": MERGE_BASE}}).to_string(),
+        )
+        .answer(
+            "GET",
+            "projects/acme%2Fwidget/merge_requests/7",
+            &serde_json::json!({"state": "merged", "head_pipeline": {"sha": MERGE_HEAD, "status": "success"}, "merge_commit_sha": "f".repeat(40)})
+                .to_string(),
+        );
+    }
+    (target, fake)
+}
+
+/// The verb previews by default: it names the request, the base, the
+/// head, the check, and the version, and writes and dispatches nothing.
+///
+/// SATISFIES release-state:the-operator-merges-through-the-verb
+#[test]
+fn release_merge_previews_without_apply() {
+    for forge in ["github", "gitlab"] {
+        let (target, fake) = merge_fixture(forge);
+        let out = fake
+            .rk(target.path(), &["--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let report: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("one JSON object");
+        assert_eq!(report["schema"], "rk.release-merge/1", "{report}");
+        assert_eq!(report["state"], "preview", "{report}");
+        assert_eq!(report["request"], 7, "{report}");
+        assert_eq!(report["base"], MERGE_BASE, "{report}");
+        assert_eq!(report["head"], MERGE_HEAD, "{report}");
+        assert_eq!(report["version"], "0.2.0", "{report}");
+        if forge == "github" {
+            assert_eq!(report["check"], "gate", "{report}");
+            assert_eq!(report["check_state"], "completed success", "{report}");
+        } else {
+            assert_eq!(report["check_state"], "success", "{report}");
+        }
+        assert!(
+            fake.calls().lines().all(|call| call.starts_with("GET ")),
+            "{forge}: {}",
+            fake.calls()
+        );
+    }
+}
+
+/// Zero or two release requests against the trunk refuse, and dispatch
+/// nothing.
+///
+/// SATISFIES release-state:the-operator-merges-through-the-verb
+#[test]
+fn release_merge_refuses_zero_or_two_candidates() {
+    for (requests, why) in [
+        (
+            serde_json::json!([]),
+            "no release request stands open against master",
+        ),
+        (
+            serde_json::json!([
+                {"number": 7, "title": "chore: release v0.2.0", "head": {"ref": "release-plz-a", "sha": MERGE_HEAD}},
+                {"number": 8, "title": "chore: release v0.2.1", "head": {"ref": "release-plz-b", "sha": MERGE_HEAD}}
+            ]),
+            "2 release requests stand open against master: #7, #8",
+        ),
+    ] {
+        let (target, fake) = merge_fixture("github");
+        fake.answer("GET", MERGE_PULLS, &requests.to_string());
+        fake.rk(target.path(), &["--apply"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(why));
+        assert!(!fake.calls().contains("POST"), "{}", fake.calls());
+    }
+}
+
+/// Under `--apply` the verb dispatches the merge job with the values it
+/// read, and waits for the one run whose name carries its correlation:
+/// another run of the same workflow, even a successful one, never ends
+/// the wait. The verb itself makes no merge call.
+///
+/// SATISFIES release-state:the-operator-merges-through-the-verb
+#[test]
+fn the_wait_follows_only_the_correlated_run() {
+    let runs = "repos/acme/widget/actions/workflows/release-plz.yml/runs?event=workflow_dispatch&branch=master&per_page=50";
+    let dispatch = "repos/acme/widget/actions/workflows/release-plz.yml/dispatches";
+    // Another run concluded with a failure, and the correlated one passed:
+    // the verb reports the merge.
+    let (target, fake) = merge_fixture("github");
+    fake.answer("POST", dispatch, "")
+        .answer(
+            "GET",
+            "repos/acme/widget/pulls/7",
+            &serde_json::json!({"merged": true, "merge_commit_sha": "f".repeat(40)}).to_string(),
+        )
+        .answer_with_correlation(
+            runs,
+            r#"{"workflow_runs": [
+                {"display_title": "rk release merge another", "status": "completed", "conclusion": "failure"},
+                {"display_title": "rk release merge CORRELATION", "status": "completed", "conclusion": "success"}
+            ]}"#,
+        );
+    let out = fake
+        .rk(target.path(), &["--apply", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["state"], "merged", "{report}");
+    assert_eq!(report["merge_commit"], "f".repeat(40), "{report}");
+    let sent = fake
+        .sent("POST", dispatch)
+        .expect("the dispatch sent a body");
+    assert_eq!(sent["ref"], "master", "{sent}");
+    assert_eq!(sent["inputs"]["action"], "merge", "{sent}");
+    assert_eq!(sent["inputs"]["request"], "7", "{sent}");
+    assert_eq!(sent["inputs"]["base"], MERGE_BASE, "{sent}");
+    assert_eq!(sent["inputs"]["head"], MERGE_HEAD, "{sent}");
+    assert_eq!(
+        sent["inputs"]["correlation"], report["correlation"],
+        "{sent}"
+    );
+    assert!(!fake.calls().contains("/merge"), "{}", fake.calls());
+    // Only another run passed: the wait does not end on it.
+    let (target, fake) = merge_fixture("github");
+    fake.answer("POST", dispatch, "").answer(
+        "GET",
+        runs,
+        r#"{"workflow_runs": [{"display_title": "rk release merge another", "status": "completed", "conclusion": "success"}]}"#,
+    );
+    fake.rk(target.path(), &["--apply", "--timeout", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "did not conclude within 1 seconds",
+        ));
+    // On GitLab the pipeline id is the correlation.
+    let (target, fake) = merge_fixture("gitlab");
+    fake.answer("POST", "projects/acme%2Fwidget/pipeline", r#"{"id": 99}"#)
+        .answer(
+            "GET",
+            "projects/acme%2Fwidget/pipelines/99",
+            r#"{"status": "success"}"#,
+        )
+        .answer(
+            "GET",
+            "projects/acme%2Fwidget/pipelines/98",
+            r#"{"status": "failed"}"#,
+        );
+    let out = fake
+        .rk(target.path(), &["--apply", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["run"], "pipeline 99", "{report}");
+    let sent = fake
+        .sent("POST", "projects/acme%2Fwidget/pipeline")
+        .expect("the pipeline was created with a body");
+    assert_eq!(sent["ref"], "master", "{sent}");
+    let variables = sent["variables"].to_string();
+    for (key, value) in [
+        ("RK_RELEASE_ACTION", "merge"),
+        ("RK_MERGE_REQUEST", "7"),
+        ("RK_MERGE_BASE", MERGE_BASE),
+        ("RK_MERGE_HEAD", MERGE_HEAD),
+    ] {
+        assert!(
+            variables.contains(&format!(r#"{{"key":"{key}","value":"{value}"}}"#)),
+            "{variables}"
+        );
+    }
+}
+
+/// A head whose check has not passed dispatches nothing under `--apply`.
+///
+/// SATISFIES release-state:the-operator-merges-through-the-verb
+#[test]
+fn release_merge_dispatches_nothing_for_a_red_check() {
+    let (target, fake) = merge_fixture("github");
+    fake.answer(
+        "GET",
+        &format!("repos/acme/widget/commits/{MERGE_HEAD}/check-runs?check_name=gate&filter=latest"),
+        &serde_json::json!({"check_runs": [{"status": "in_progress", "conclusion": null}]})
+            .to_string(),
+    );
+    fake.rk(target.path(), &["--apply"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("in_progress none"));
+    assert!(!fake.calls().contains("POST"), "{}", fake.calls());
+}
+
+/// The GitLab merge job reads a trunk whose name holds a slash as one
+/// encoded path segment.
+///
+/// SATISFIES git:the-trunk-name-is-a-parameter
+#[test]
+fn the_gitlab_merge_job_encodes_the_trunk() {
+    for driver in ["rust", "bash", "python"] {
+        let run = run_merge_job(driver, "gitlab", MergeFault::SlashTrunk);
+        assert!(run.output.status.success(), "{driver}: {}", run.log());
+        assert!(run.merged().is_some(), "{driver}: {}", run.log());
+    }
+}
+
+/// The request's own state decides the outcome, never the run's conclusion
+/// alone: a run that fails after its merge reports the merge, a run that
+/// failed before it refuses, and a GitLab fast-forward merge reports the
+/// request's head as the commit the release runs on.
+///
+/// SATISFIES release-state:the-operator-merges-through-the-verb
+#[test]
+fn the_merge_outcome_is_read_from_the_request() {
+    let runs = "repos/acme/widget/actions/workflows/release-plz.yml/runs?event=workflow_dispatch&branch=master&per_page=50";
+    let dispatch = "repos/acme/widget/actions/workflows/release-plz.yml/dispatches";
+    let failed = r#"{"workflow_runs": [{"display_title": "rk release merge CORRELATION", "status": "completed", "conclusion": "failure"}]}"#;
+    let (target, fake) = merge_fixture("github");
+    fake.answer("POST", dispatch, "")
+        .answer_with_correlation(runs, failed)
+        .answer(
+            "GET",
+            "repos/acme/widget/pulls/7",
+            &serde_json::json!({"merged": true, "merge_commit_sha": "f".repeat(40)}).to_string(),
+        );
+    let out = fake
+        .rk(target.path(), &["--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("concluded failure after #7 merged"), "{text}");
+    let (target, fake) = merge_fixture("github");
+    fake.answer("POST", dispatch, "")
+        .answer_with_correlation(runs, failed)
+        .answer(
+            "GET",
+            "repos/acme/widget/pulls/7",
+            &serde_json::json!({"merged": false, "merge_commit_sha": null}).to_string(),
+        );
+    fake.rk(target.path(), &["--apply"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "concluded failure, and #7 did not merge",
+        ));
+    let (target, fake) = merge_fixture("gitlab");
+    fake.answer("POST", "projects/acme%2Fwidget/pipeline", r#"{"id": 99}"#)
+        .answer(
+            "GET",
+            "projects/acme%2Fwidget/pipelines/99",
+            r#"{"status": "success"}"#,
+        )
+        .answer(
+            "GET",
+            "projects/acme%2Fwidget/merge_requests/7",
+            &serde_json::json!({
+                "state": "merged",
+                "head_pipeline": {"sha": MERGE_HEAD, "status": "success"},
+                "merge_commit_sha": null,
+                "squash_commit_sha": null,
+                "sha": MERGE_HEAD
+            })
+            .to_string(),
+        );
+    let out = fake
+        .rk(target.path(), &["--apply", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["merge_commit"], MERGE_HEAD, "{report}");
+}
+
+// The version check the `.envrc` line runs on directory entry.
+
+const DAY: u64 = 86_400;
+const HOUR: u64 = 3_600;
+
+/// A checkout pinned at v0.2.15, committed, whose latest release is
+/// v0.2.16.
+fn pinned_fixture() -> SelfDependFixture {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture
+}
+
+fn fetches(fixture: &SelfDependFixture) -> usize {
+    fixture.curl_log().lines().count()
+}
+
+/// A success of six days ago reads nothing, and one of seven days ago
+/// reads once.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn a_fresh_cache_reads_no_network() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(6 * DAY, Some(6 * DAY), Some("v0.2.15"), None);
+    let (code, report, _) = fixture.check();
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "cached", "{report}");
+    assert_eq!(fetches(&fixture), 0);
+    fixture.seed_cache(7 * DAY, Some(7 * DAY), Some("v0.2.15"), None);
+    let (_, report, _) = fixture.check();
+    assert_eq!(report["outcome"], "refreshed", "{report}");
+    assert_eq!(fetches(&fixture), 1);
+}
+
+/// A cached newer release warns on every entry, naming both versions and
+/// the command that moves the pin, and reads no network.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn an_update_warns_from_the_cache() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(DAY, Some(DAY), Some("v0.2.16"), None);
+    for _ in 0..2 {
+        let (code, report, stderr) = fixture.check();
+        assert_eq!(code, Some(0));
+        assert_eq!(report["outcome"], "cached", "{report}");
+        assert!(
+            stderr.contains(
+                "rk 0.2.16 is out, this project pins 0.2.15. To move: rk self-depend sync --apply"
+            ),
+            "{stderr}"
+        );
+    }
+    assert_eq!(fetches(&fixture), 0, "the warning reads the cache alone");
+}
+
+/// A pin at the latest release says nothing.
+#[test]
+fn check_is_silent_when_current() {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.16");
+    fixture.commit_all();
+    let out = fixture
+        .rk(&["self-depend", "check"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fetches(&fixture), 1, "the first check reads once");
+}
+
+/// A failed read warns with its reason and the next try, and the shell
+/// still loads.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn a_failed_read_warns_with_its_reason_and_exits_zero() {
+    let fixture = pinned_fixture();
+    fixture.seed("curl_fail", "1");
+    let (code, report, stderr) = fixture.check();
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(report["outcome"], "refreshed", "{report}");
+    assert!(
+        stderr.contains("rk could not check for a newer release: ")
+            && stderr.contains(". Next try after "),
+        "{stderr}"
+    );
+}
+
+/// After a failure, an older success does not decide: a failure a minute
+/// ago reads nothing even under an eight-day-old success, and the same
+/// failure an hour ago reads once.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn a_failure_after_an_overdue_success_waits_one_hour() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(60, Some(8 * DAY), Some("v0.2.15"), Some("no answer"));
+    fixture.check();
+    assert_eq!(fetches(&fixture), 0);
+    fixture.seed_cache(HOUR, Some(8 * DAY), Some("v0.2.15"), Some("no answer"));
+    fixture.check();
+    assert_eq!(fetches(&fixture), 1);
+}
+
+/// A first check that fails waits one hour before the next read.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn a_failed_first_check_retries_after_one_hour() {
+    let fixture = pinned_fixture();
+    fixture.seed("curl_fail", "1");
+    fixture.check();
+    assert_eq!(fetches(&fixture), 1);
+    fixture.check();
+    assert_eq!(fetches(&fixture), 1, "a failure an instant ago waits");
+    let cache: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.cache_file()).expect("the cache reads"),
+    )
+    .expect("JSON");
+    assert!(cache["succeeded"].is_null(), "{cache}");
+    assert!(cache["error"].is_string(), "{cache}");
+    fixture.seed_cache(HOUR, None, None, Some("no answer"));
+    fixture.check();
+    assert_eq!(fetches(&fixture), 2);
+}
+
+/// A warning never moves the attempt time: repeated entries warn each
+/// time, one 59 minutes after the failure reads nothing, and one at 60
+/// minutes reads once.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn cached_error_warnings_do_not_postpone_the_retry() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(59 * 60, None, None, Some("no answer"));
+    let attempted = std::fs::read_to_string(fixture.cache_file()).expect("the cache reads");
+    for _ in 0..3 {
+        let (_, _, stderr) = fixture.check();
+        assert!(
+            stderr.contains("could not check for a newer release: no answer"),
+            "{stderr}"
+        );
+    }
+    assert_eq!(fetches(&fixture), 0);
+    assert_eq!(
+        std::fs::read_to_string(fixture.cache_file()).expect("the cache reads"),
+        attempted,
+        "a warning changed the cache"
+    );
+    fixture.seed_cache(HOUR, None, None, Some("no answer"));
+    fixture.check();
+    assert_eq!(fetches(&fixture), 1);
+}
+
+/// A cache that cannot be written says so, and reads no network.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn an_unwritable_cache_warns_and_reads_no_network() {
+    let fixture = pinned_fixture();
+    let root = fixture.home.path().join("cache/release-kit");
+    std::fs::create_dir_all(&root).expect("creates");
+    std::fs::write(root.join("self-depend"), "not a directory\n").expect("the blocker writes");
+    let (code, report, stderr) = fixture.check();
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "unwritable", "{report}");
+    assert!(
+        stderr.contains("rk cannot record its version check at "),
+        "{stderr}"
+    );
+    assert_eq!(fetches(&fixture), 0);
+}
+
+/// Checks that start together read the network once: the lock serializes
+/// the refresh, and a check that finds the cache fresh under the lock
+/// reads nothing.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn overlapping_checks_read_the_network_once() {
+    let fixture = pinned_fixture();
+    let runs: Vec<_> = (0..4)
+        .map(|_| fixture.rk(&["self-depend", "check"]))
+        .map(|mut command| std::thread::spawn(move || command.output().expect("rk runs")))
+        .collect();
+    for run in runs {
+        assert_eq!(run.join().expect("the run ends").status.code(), Some(0));
+    }
+    assert_eq!(fetches(&fixture), 1, "{}", fixture.curl_log());
+}
+
+/// A refresh that is due while another process holds the lock warns from
+/// the cache it has and reads nothing.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn a_held_lock_warns_from_the_cache_and_reads_nothing() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(8 * DAY, Some(8 * DAY), Some("v0.2.16"), None);
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(fixture.cache_file().with_extension("lock"))
+        .expect("the lock opens");
+    lock.try_lock().expect("this test holds the lock");
+    let (code, report, stderr) = fixture.check();
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "locked", "{report}");
+    assert!(
+        stderr.contains("rk 0.2.16 is out, this project pins 0.2.15"),
+        "{stderr}"
+    );
+    assert_eq!(fetches(&fixture), 0);
+    drop(lock);
+    let (_, report, _) = fixture.check();
+    assert_eq!(report["outcome"], "refreshed", "{report}");
+    assert_eq!(fetches(&fixture), 1);
+}
+
+/// The check writes nothing in the target: every tracked file stays byte
+/// for byte, and the cache is the one file it writes.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn check_writes_no_file_but_its_cache() {
+    let fixture = pinned_fixture();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    fixture.check();
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fixture.read("flake.lock"), lock);
+    // Scrubbed of the hook variables, so a run under a commit hook reads
+    // the fixture and never the repository that commits.
+    let status = scrubbed_git(
+        fixture.target(),
+        &["status", "--porcelain", "--untracked-files=all"],
+    );
+    assert!(
+        status.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+    assert!(fixture.cache_file().is_file());
+    assert!(fixture.nix_log().is_empty(), "the check spawns no nix");
+    // Neither a refreshed, a cached, nor a disabled check writes under the
+    // state root, the application log included.
+    fixture.check();
+    fixture.json_with(&["self-depend", "check"], &[("RK_DEVSHELL_SYNC", "0")]);
+    assert!(
+        !fixture.home.path().join("release-kit").exists(),
+        "the check wrote under the state root"
+    );
+}
+
+/// An attempt that never finished, such as a check killed mid-read, waits
+/// one hour as a failure does, on a first check and after an overdue
+/// success alike.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn an_unfinished_refresh_waits_one_hour() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(60, None, None, None);
+    fixture.check();
+    fixture.seed_cache(60, Some(8 * DAY), Some("v0.2.15"), None);
+    fixture.check();
+    assert_eq!(fetches(&fixture), 0);
+    fixture.seed_cache(HOUR, Some(8 * DAY), Some("v0.2.15"), None);
+    fixture.check();
+    assert_eq!(fetches(&fixture), 1);
+}
+
+/// The operator's sync from a shell moves the pin with no flag but
+/// `--apply`.
+///
+/// SATISFIES packaging:a-pin-moves-only-on-the-operators-order
+#[test]
+fn sync_apply_from_a_shell_moves_the_pin() {
+    let fixture = pinned_fixture();
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped", "{report}");
+    assert!(fixture.read("flake.nix").contains("release-kit/v0.2.16"));
+}
+
+/// Inside an `.envrc` evaluation the sync moves nothing, warns with the
+/// cause and the command that moves the pin from a shell, and exits 1.
+///
+/// SATISFIES packaging:a-pin-moves-only-on-the-operators-order
+#[test]
+fn sync_inside_an_envrc_moves_nothing() {
+    let fixture = pinned_fixture();
+    let flake = fixture.read("flake.nix");
+    let out = fixture
+        .rk(&["self-depend", "sync", "--apply"])
+        .env("DIRENV_IN_ENVRC", "1")
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("DIRENV_IN_ENVRC is set: an .envrc evaluation or `direnv exec`")
+            && stderr.contains("nix develop -c rk self-depend sync --apply"),
+        "{stderr}"
+    );
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fetches(&fixture), 0);
+    assert!(fixture.nix_log().is_empty());
+}
+
+/// `--caller envrc` is retired as a usage error that names the check.
+///
+/// SATISFIES packaging:a-pin-moves-only-on-the-operators-order
+#[test]
+fn the_envrc_caller_is_a_usage_error() {
+    let fixture = pinned_fixture();
+    fixture
+        .rk(&["self-depend", "sync", "--apply", "--caller", "envrc"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("rk self-depend check"));
+    assert_eq!(fetches(&fixture), 0);
+}
+
+/// The seeded `.envrc` runs the check, never the sync.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn the_seeded_envrc_line_is_the_check() {
+    let fixture = SelfDependFixture::new();
+    fixture
+        .rk(&["self-depend", "add", "--apply"])
+        .assert()
+        .success();
+    let envrc = fixture.read(".envrc");
+    assert!(envrc.contains("rk self-depend check || true\n"), "{envrc}");
+    assert!(!envrc.contains("rk self-depend sync"), "{envrc}");
+}
+
+/// A checkout whose `.envrc` still runs the retired sync line reports it
+/// with the guidance step, and the cleanup swaps it for the check line.
+///
+/// SATISFIES packaging:a-pin-moves-only-on-the-operators-order
+#[test]
+fn the_old_sync_line_is_reported_and_swapped() {
+    let fixture = pinned_fixture();
+    std::fs::write(
+        fixture.target().join(".envrc"),
+        "use flake\nrk self-depend sync --apply || true\n",
+    )
+    .expect("the old line writes");
+    fixture.commit_all();
+    let (_, status) = fixture.sync_json(&["self-depend", "status"]);
+    assert_eq!(status["envrc_old_sync"], true, "{status}");
+    assert_eq!(status["envrc_check"], false, "{status}");
+    assert!(
+        status["next"]
+            .to_string()
+            .contains("guidance/0.9.15.md step 36"),
+        "{status}"
+    );
+    fixture
+        .rk(&["self-depend", "clean", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(
+        fixture.read(".envrc"),
+        "use flake\nrk self-depend check || true\n"
+    );
+}
+
+/// The guidance's stamp cleanup removes the retired stamps alone: another
+/// checkout's lock and an interrupted transaction survive it.
+#[test]
+fn the_stamp_cleanup_keeps_locks_and_transactions() {
+    let guidance = std::fs::read_to_string(repo_path("guidance/0.9.15.md")).expect("reads");
+    let command = guidance
+        .lines()
+        .find_map(|line| {
+            let start = line.find("`rm -f ")?;
+            let rest = &line[start + 1..];
+            Some(rest[..rest.find('`')?].to_owned())
+        })
+        .expect("the guidance names the stamp cleanup");
+    let state = tempfile::tempdir().expect("a scratch state root");
+    let devshell = state.path().join("release-kit/devshell");
+    std::fs::create_dir_all(devshell.join("other-0123/backup")).expect("creates");
+    for (name, body) in [
+        ("mine-abcd.stamp", "2026-11-12\n"),
+        ("other-0123.stamp", "2026-11-11\n"),
+        ("other-0123.lock", "pid=1\n"),
+        ("other-0123/pending.json", "{}"),
+        ("other-0123/backup/flake.nix", "{ }\n"),
+    ] {
+        std::fs::write(devshell.join(name), body).expect("writes");
+    }
+    let out = std::process::Command::new("sh")
+        .args(["-c", &command])
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("sh runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for gone in ["mine-abcd.stamp", "other-0123.stamp"] {
+        assert!(!devshell.join(gone).exists(), "{gone} survived");
+    }
+    for kept in [
+        "other-0123.lock",
+        "other-0123/pending.json",
+        "other-0123/backup/flake.nix",
+    ] {
+        assert!(devshell.join(kept).exists(), "{kept} was removed");
     }
 }

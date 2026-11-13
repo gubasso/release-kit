@@ -333,14 +333,14 @@ pub const STEPS: [StepSpec; 15] = [
         applies: needs_release,
     },
     StepSpec {
-        name: "auto-merge",
+        name: "merge-on-order",
         chapter: "§3",
         mutates: Mutates::Forge,
-        proves: "a request may merge itself once its required checks pass",
+        proves: "no release request stands armed to merge itself",
         destructive: false,
         optional: false,
         forge_cli: &[Forge::Github, Forge::Gitlab],
-        prereqs: &["default-branch"],
+        prereqs: &[],
         applies: needs_release,
     },
     StepSpec {
@@ -456,7 +456,7 @@ mod tests {
             "default-branch",
             "single-trunk",
             "protect-trunk",
-            "auto-merge",
+            "merge-on-order",
         ] {
             let step = spec(name).expect("the step exists");
             assert_eq!((step.applies)(&ctx), None, "{name}");
@@ -524,7 +524,7 @@ mod tests {
                     "ci-permissions",
                     "install-bot",
                     "bot-secrets",
-                    "auto-merge",
+                    "merge-on-order",
                     "protect-release-lines",
                 ] {
                     assert!(!steps.contains(&step), "{forge} {mode:?}: {step} applies");

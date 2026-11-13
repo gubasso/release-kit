@@ -14,6 +14,7 @@
   - [`target-config:a-release-less-template-carries-no-release-table` — A release-less template carries no release table](#target-configa-release-less-template-carries-no-release-table--a-release-less-template-carries-no-release-table)
   - [`target-config:the-trunk-branch-has-one-owner` — The trunk branch has one owner](#target-configthe-trunk-branch-has-one-owner--the-trunk-branch-has-one-owner)
   - [`target-config:a-setup-fact-is-committed-once` — A setup fact is committed once](#target-configa-setup-fact-is-committed-once--a-setup-fact-is-committed-once)
+  - [`target-config:a-retired-key-refuses-by-name` — A retired key refuses by name](#target-configa-retired-key-refuses-by-name--a-retired-key-refuses-by-name)
   - [`target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy](#target-configan-exclusion-narrows-scope-and-not-policy--an-exclusion-narrows-scope-and-not-policy)
   - [`target-config:an-unanswered-key-is-absent-and-not-empty` — An unanswered key is absent and not empty](#target-configan-unanswered-key-is-absent-and-not-empty--an-unanswered-key-is-absent-and-not-empty)
   - [`target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged](#target-configan-untaken-config-is-reported-and-not-judged--an-untaken-config-is-reported-and-not-judged)
@@ -188,9 +189,7 @@ Verify: `cargo nextest run -E 'test(config) or test(the_trunk_branch_comes_from_
 
 ### `target-config:a-setup-fact-is-committed-once` — A setup fact is committed once
 
-A setup fact the operator would otherwise retype MUST resolve from the committed configuration where no flag answers it, and an invocation flag MUST override it. The release gate's two answers resolve this way on GitHub alone, because GitLab requires its whole pipeline through one project setting, names no individual check, and refuses either answer as a usage error; the release-line protection runs in a full apply where `setup.release_lines` asks for it; the retired long-lived branches come from `setup.retired_branches`; the bot App's public identifier comes from `setup.bot.app_id` where the environment carries none; and the bot identity's name comes from `setup.bot.name`, a setup declaration of class N that no landed byte reads, whose empty value takes the forge's default, whose other values MUST hold to the shape of a GitLab username or refuse as `config-invalid`, and which the setup proof carries only where it is set.
-
-The two answers are class P landing parameters and MUST divide as follows. `setup.required_check` names the context the trunk ruleset requires in both integration modes and the context the rendered gate also judges under local integration. `setup.required_workflow` names the workflow whose completion wakes that gate, by the workflow's literal `name` and never by its filename, because a `workflow_run` trigger cannot name a check and cannot omit the workflow. One shape renders that gate: GitHub, an automatic release, the trunk style, and local integration together. Where no flag, configuration, or compatible record answers a key at that shape, the resolution MUST take this convention's own pair, `gate` and `ci`, so a landing renders a gate that names something rather than a hole no event can satisfy, and MUST write the resolved answer back to the configuration and record it, so the decision is visible and reproducible rather than compiled. Every other shape MUST resolve both to empty, except that under forge integration `setup.required_check` stays the context the trunk ruleset requires, which is the project's own answer, and `protect-trunk` keeps refusing until one is named. A setup check MUST fault where the workflow named by `setup.required_workflow` does not carry the one pull-request job reporting `setup.required_check`, because a gate that wakes on one workflow and judges a check another workflow reports either wakes too early or never wakes at all.
+A setup fact the operator would otherwise retype MUST resolve from the committed configuration where no flag answers it, and an invocation flag MUST override it. The required check resolves this way on GitHub alone, because GitLab requires its whole pipeline through one project setting, names no individual check, and refuses the answer as a usage error; the release-line protection runs in a full apply where `setup.release_lines` asks for it; the retired long-lived branches come from `setup.retired_branches`; the bot App's public identifier comes from `setup.bot.app_id` where the environment carries none; and the bot identity's name comes from `setup.bot.name`, a setup declaration of class N that no landed byte reads, whose empty value takes the forge's default, whose other values MUST hold to the shape of a GitLab username or refuse as `config-invalid`, and which the setup proof carries only where it is set. `setup.required_check` is a class P landing parameter. It names the context the trunk ruleset requires in both integration modes, and the check the merge job judges for the release request's head. One shape names a check by default: GitHub, an automatic release, and the trunk style, under either integration. Where no flag, configuration, or compatible record answers the key at that shape, the resolution MUST take this convention's own name, `gate`, and MUST write the resolved answer back to the configuration and record it, so the decision is visible and reproducible rather than compiled. Every other shape MUST resolve it to empty, and `protect-trunk` on GitHub keeps refusing until one is named.
 
 #### Scenario: A project commits its required check
 
@@ -200,17 +199,23 @@ The two answers are class P landing parameters and MUST divide as follows. `setu
 
 #### Scenario: Neither the file nor the flag names the check
 
-- GIVEN a GitHub target whose `setup.required_check` is empty and no flag
+- GIVEN a GitHub target under the lines style whose `setup.required_check` is empty and no flag
 - WHEN a full apply runs
 - THEN the refusal names `setup.required_check` before it names the flag
 
-#### Scenario: A locally integrated GitHub trunk release answers neither
+Verify: `cargo nextest run -E 'test(required_check) or test(the_release_lines_step_runs_when_the_config_asks) or test(retired_branches_come_from_the_config) or test(the_bot_name_is_a_setup_declaration_and_reaches_no_byte) or test(an_unset_bot_name_leaves_the_setup_proof_compatible) or test(a_bot_name_outside_the_username_shape_refuses)'`
 
-- GIVEN a fresh GitHub target with an automatic release, the trunk style, and local integration, and no flag or committed answer for either key
-- WHEN a landing verb applies
-- THEN it records `gate` and `ci`, writes both into the configuration, and a setup check faults where the target's own workflows do not carry that pair
+### `target-config:a-retired-key-refuses-by-name` — A retired key refuses by name
 
-Verify: `cargo nextest run -E 'test(required_check) or test(release_gate) or test(the_release_lines_step_runs_when_the_config_asks) or test(retired_branches_come_from_the_config) or test(the_bot_name_is_a_setup_declaration_and_reaches_no_byte) or test(an_unset_bot_name_leaves_the_setup_proof_compatible) or test(a_bot_name_outside_the_username_shape_refuses)'`
+Every verb that reads the configuration, `rk release request` included, MUST refuse a configuration that carries `setup.required_workflow`, or whose `setup.excluded_steps` names the retired step `auto-merge`, before any write, with one `config-invalid` diagnostic that names the key or the step and `guidance/0.9.15.md`, whose step removes it by hand, because the key woke a release gate that no longer exists, an exclusion carried to `merge-on-order` would leave an armed request in place, and a key silently ignored would read as configured. A landing record that carries a `required_workflow` parameter MUST still load, so a target written by rk 0.9.14 or older migrates through `rk upgrade`, which writes the record without it.
+
+#### Scenario: An upgrade meets the retired key
+
+- GIVEN a configuration whose `[setup]` table still carries `required_workflow = "ci"`
+- WHEN `rk upgrade --apply`, `rk status --check`, `rk profile`, or `rk release request` runs
+- THEN each refuses with one diagnostic naming `setup.required_workflow` and the guidance file, and the record is unchanged
+
+Verify: `cargo nextest run -E 'test(a_retired_required_workflow_refuses_by_name) or test(an_old_required_workflow_receipt_still_loads)'`
 
 ### `target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy
 

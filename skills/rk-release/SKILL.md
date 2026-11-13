@@ -25,11 +25,12 @@ Run release-kit's own release process in a project where release-kit already lan
 
 ## General rules
 
-1. Run a release action only where the request names it: merging or disarming the release request, re-running a publish or artifact job, or withdrawing a version. Otherwise print the exact command for the operator.
+1. Run a release action only where the request names it: merging the release request, re-running a publish or artifact job, or withdrawing a version. Otherwise print the exact command for the operator.
 2. Route, never restate. The sequence is `rk method operate`, the commands are `rk guide release`, `rk guide backport`, and `rk guide release-lines`, and the way back is `rk method recovery`. Never copy one into a plan.
 3. Never author a tag. Automation tags every version, a candidate included, and a published version is never re-authored.
 4. Never push the trunk. Work reaches it through the project's own workflow.
-5. Never re-arm a request the operator disarmed. A disarm is a decision, and the next bot refresh may re-arm the request, which the report states.
+5. Never arm a release request. A release happens only on the operator's order, and an armed request is a defect `rk release status` reports as `request-armed`.
+6. A trunk release is four steps: read the open release request and its changelog section; push a changelog correction, where one is needed, as the last commit on the request's branch; run `rk release merge --apply`; read the release state, and make sure that the tag, the release page, and the assets exist. Never merge a trunk release request through the forge by hand: the merge job proves the order as the release App. A release line's request keeps the merge by a person.
 
 ## Gate
 

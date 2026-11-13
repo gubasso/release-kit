@@ -39,7 +39,7 @@ use crate::projection::{Placement, Projection};
 use crate::skills;
 
 /// The shape version of the stage receipt and of the `rk stage` report.
-pub const STAGE_SCHEMA: &str = "rk.stage/8";
+pub const STAGE_SCHEMA: &str = "rk.stage/9";
 
 /// The receipt's name at the stage root.
 pub const RECEIPT_NAME: &str = "stage.json";
@@ -140,13 +140,10 @@ pub struct Parameters {
     /// the policy states none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub security_scope: String,
-    /// The check the release gate believes, empty where nothing answered it.
+    /// The check the trunk ruleset requires, empty where nothing answered
+    /// it.
     #[serde(default)]
     pub required_check: String,
-    /// The workflow whose completion wakes the release gate, empty where
-    /// nothing answered it.
-    #[serde(default)]
-    pub required_workflow: String,
     /// How a command runs in the project's development environment,
     /// absent where the project gives no answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,7 +161,6 @@ impl From<&Params> for Parameters {
             security_response: params.security_response().to_owned(),
             security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
-            required_workflow: params.required_workflow().to_owned(),
             dev_environment: params.dev_environment().cloned(),
         }
     }
@@ -1031,14 +1027,13 @@ mod tests {
             repo: "acme/widget".into(),
             security_contact: String::new(),
             required_check: String::new(),
-            required_workflow: String::new(),
             dev_environment: None,
             security_response: "best-effort".into(),
             security_scope: String::new(),
         }
     }
 
-    /// The complete `rk.stage/8` receipt shape, held by snapshot: a field
+    /// The complete `rk.stage/9` receipt shape, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump.
     #[test]
     fn the_stage_receipt_schema_snapshot_holds() {
@@ -1087,7 +1082,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&receipt).expect("a receipt serializes"),
             format!(
-                r#"{{"schema":"rk.stage/8","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"dropped":["edited.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills"]}}"#,
+                r#"{{"schema":"rk.stage/9","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"dropped":["edited.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills"]}}"#,
                 Digest::of(b"a"),
                 Digest::of(b"r"),
                 Digest::of(b"b")

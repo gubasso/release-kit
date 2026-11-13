@@ -3,8 +3,9 @@
 # tunes this one from the first write.
 #
 # The release-kit tag below is the rk version this project develops
-# against, and flake.lock is its content pin. rk self-depend sync moves the
-# two together, from the .envrc line, and never edits anything else here.
+# against, and flake.lock is its content pin. rk self-depend sync --apply
+# moves the two together when you run it, and never edits anything else
+# here; the .envrc line only checks for a newer release and warns.
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

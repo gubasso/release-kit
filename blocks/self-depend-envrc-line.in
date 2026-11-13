@@ -1,1 +1,1 @@
-rk self-depend sync --apply || true
+rk self-depend check || true

@@ -16,6 +16,7 @@ pub mod cliff;
 pub mod eligible;
 pub mod forge;
 pub mod guard;
+pub mod merge;
 pub mod packed;
 pub mod publish;
 pub mod request;
@@ -529,12 +530,11 @@ mod tests {
             proposal: Some("0.1.1".into()),
             tag: Some("v0.1.1".into()),
             request: Some(7),
-            armed: Some(true),
             files: vec!["VERSION".into(), "CHANGELOG.md".into()],
         };
         assert_eq!(
             serde_json::to_string(&request).expect("serializes"),
-            r#"{"schema":"rk.release-request/2","state":"opened","base":"master","version":"0.1.0","compared":"v0.1.0","packed":12,"proposal":"0.1.1","tag":"v0.1.1","request":7,"armed":true,"files":["VERSION","CHANGELOG.md"]}"#
+            r#"{"schema":"rk.release-request/2","state":"opened","base":"master","version":"0.1.0","compared":"v0.1.0","packed":12,"proposal":"0.1.1","tag":"v0.1.1","request":7,"files":["VERSION","CHANGELOG.md"]}"#
         );
         let build = BuildReport {
             schema: super::build::SCHEMA.into(),

@@ -1,0 +1,87 @@
+{
+  "schema_version": 12,
+  "rk_version": "0.9.14",
+  "origin": "init",
+  "landed_at": "2026-11-12T23:19:39Z",
+  "profile": {
+    "technologies": [
+      "rust"
+    ],
+    "forge": "github",
+    "release": {
+      "mode": "automatic",
+      "driver": "rust",
+      "style": "trunk",
+      "line_prefix": "release/"
+    }
+  },
+  "git": {
+    "trunk": "master",
+    "checkout_mode": "linked-worktree",
+    "integration": "local",
+    "merge_form": "squash"
+  },
+  "capabilities": {
+    "nix_packaging": false,
+    "reporting_policy": true,
+    "scorecard": false,
+    "workflow_guards": false
+  },
+  "parameters": {
+    "repo": "acme/widget",
+    "security_contact": "",
+    "security_response": "best-effort",
+    "required_check": "gate",
+    "required_workflow": "ci"
+  },
+  "files": [
+    {
+      "destination": ".github/workflows/pr-title.yml",
+      "kind": "rendered",
+      "sha256": "972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c"
+    },
+    {
+      "destination": ".github/workflows/release-plz.yml",
+      "kind": "rendered",
+      "sha256": "8a06a8de03704ac659a5c0a6d254dfff9b9d4c4087cd6c1fbad386ae373eaa67"
+    },
+    {
+      "destination": ".pre-commit-config.yaml",
+      "kind": "rendered",
+      "sha256": "e1e2f0c4ac536ae8eb3e40bd8dbbe2b05efee9e574e99cd865452b61ce12bbac",
+      "placement": "region"
+    },
+    {
+      "destination": "AGENTS.md",
+      "kind": "rendered",
+      "sha256": "15c454420e999029c05d3bd9a906634c380296e229b331af8f09164054d088c8",
+      "placement": "region"
+    },
+    {
+      "destination": "SECURITY.md",
+      "kind": "rendered",
+      "sha256": "75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d"
+    },
+    {
+      "destination": "dist-workspace.toml",
+      "kind": "seeded",
+      "sha256": "fbb7c283c3ff85c0f59b1eacddaff51153193bea5425529f96f533834ecc7904"
+    },
+    {
+      "destination": "release-plz.toml",
+      "kind": "seeded",
+      "sha256": "3e3d82e6ed942fc51878e0f36d8718c390a43c3b248924df20f55ed4111027f7"
+    }
+  ],
+  "pins": {
+    "attest": "4",
+    "cargo-dist": "0.34.0",
+    "checkout": "4",
+    "create-github-app-token": "3",
+    "dist-checkout": "6",
+    "dist-download-artifact": "8",
+    "dist-upload-artifact": "7",
+    "release-plz": "0.4.3",
+    "rust-toolchain": "stable"
+  }
+}

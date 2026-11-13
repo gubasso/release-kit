@@ -97,7 +97,23 @@ glab mr list
 
 ## 8. Release the line
 
-Run `rk guide release` steps 3 to 6 against the line, with `--base release/<line>` and `origin/release/<line>` wherever they name the trunk; the same automation tags the line's patch there. A line's request is never armed, so its merge is yours: step 4 renders the unarmed form when the style resolves to `lines`.
+Run `rk guide release` steps 3, 5, and 6 against the line, with `--base release/<line>` and `origin/release/<line>` wherever they name the trunk; the same automation tags the line's patch there. No landed job merges a request, and `rk release merge` reads the trunk alone, so merge the line's request yourself once its checks pass.
+
+On github:
+
+```bash
+gh pr checks <release pr> --repo <repo> --watch
+# check: every check passes and the branch is current
+gh pr merge <release pr> --repo <repo> --squash --delete-branch
+```
+
+On gitlab:
+
+```bash
+glab ci status --wait
+# check: the pipeline passes
+glab mr merge <release mr> --squash --remove-source-branch
+```
 
 ## 9. Delete the branch when the line dies
 

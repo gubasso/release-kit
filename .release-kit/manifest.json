@@ -33,7 +33,6 @@
     "security_contact": "",
     "security_response": "best-effort",
     "required_check": "gate",
-    "required_workflow": "ci",
     "dev_environment": {
       "run": "nix develop --command",
       "github": {

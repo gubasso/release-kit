@@ -256,14 +256,15 @@ pub const fn merge_form_squash() -> MergeForm {
 
 /// The release style a landing records.
 ///
-/// Whether the bot's release request stands armed to merge itself: a
-/// project decision, rendered into the landed release workflow and
-/// changed only through the landing verbs.
+/// Whether the project releases from the trunk alone or keeps release
+/// lines: a project decision, rendered into the landed release workflow
+/// and changed only through the landing verbs. In neither style does a
+/// release request merge itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Style {
-    /// The trunk style: the release request carries auto-merge from
-    /// creation, so a green trunk ships itself.
+    /// The trunk style: the release request against the trunk waits for
+    /// the operator's order to merge.
     Trunk,
     /// The lines style: every request waits for a human's merge, because
     /// a line's candidate is validated by hand.
@@ -402,15 +403,15 @@ pub struct Parameters {
         deserialize_with = "read_scope"
     )]
     pub security_scope: String,
-    /// The check the release gate believes. A record predating the field
-    /// reads as empty, which is what such a landing wrote: it rendered a
-    /// standing arm that named no check.
+    /// The check the trunk ruleset requires. A record predating the field
+    /// reads as empty, which is what such a landing wrote.
+    ///
+    /// A record of 0.9.14 or older also carries `required_workflow`, the
+    /// workflow that woke the retired release gate. It still loads, because
+    /// the reader ignores a key it does not know, so the target migrates
+    /// through `rk upgrade`, which writes the record without it.
     #[serde(default)]
     pub required_check: String,
-    /// The workflow whose completion wakes the release gate. A record
-    /// predating the field reads as empty, for the same reason.
-    #[serde(default)]
-    pub required_workflow: String,
     /// How a command runs in the project's own development environment,
     /// absent where the project gives no answer. A record predating the
     /// field reads as absent, which is what such a landing rendered, and a
@@ -923,7 +924,6 @@ mod tests {
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                 security_scope: String::new(),
                 required_check: String::new(),
-                required_workflow: String::new(),
                 dev_environment: None,
             },
             files: vec![
@@ -947,7 +947,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":12,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep","workflow_guards":false}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":12,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep","workflow_guards":false}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":""}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
@@ -980,7 +980,6 @@ mod tests {
                 security_scope: String::new(),
                 required_check: String::new(),
                 dev_environment: None,
-                required_workflow: String::new(),
             },
             files: vec![],
             pins: std::collections::BTreeMap::new(),
@@ -988,7 +987,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&release_less).expect("serializes"),
-            r#"{"schema_version":12,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"files":[],"pins":{}}"#
+            r#"{"schema_version":12,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort","required_check":""},"files":[],"pins":{}}"#
         );
     }
 

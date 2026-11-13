@@ -12,11 +12,12 @@ just check                                    # or the binding's check command
 rk setup step package-check --target . --apply
 # 2. read the release request the bot keeps open
 gh pr list --repo <repo> --state open
-# 3. hold it, or correct the changelog on an unarmed request
-gh pr view <release pr> --repo <repo> --json autoMergeRequest
-# 4. let it merge; on an unarmed request, merge it
+# 3. correct the changelog, as the last step before the merge
+rk release status --target .
+# 4. order the merge once its checks pass
 gh pr checks <release pr> --repo <repo> --watch
-gh pr merge <release pr> --repo <repo> --squash --delete-branch   # unarmed only
+rk release merge --target .                   # preview
+rk release merge --target . --apply
 # 5. wait for the publish workflow on the merge commit, then, on rust, the artifact workflow on its tag
 # 6. verify
 ```
@@ -29,16 +30,17 @@ just check                                    # or the binding's check command
 rk setup step package-check --target . --apply
 # 2. read the release request the bot keeps open
 glab mr list
-# 3. hold it, or correct the changelog on an unarmed request
-glab mr view <release mr>
-# 4. let it merge; on an unarmed request, merge it
+# 3. correct the changelog, as the last step before the merge
+rk release status --target .
+# 4. order the merge once its pipeline passes
 glab ci status --wait
-glab mr merge <release mr> --squash --remove-source-branch   # unarmed only
+rk release merge --target .                   # preview
+rk release merge --target . --apply
 # 5. wait for the release pipeline
 # 6. verify
 ```
 
-Four traps, and the chapter's [own warnings](../method/03-operate.md) explain the first three. An armed request has no correction window, and a stop is a disarm run before the last check turns green, never a close raced after it. Step 3 is the last point a changelog correction reaches an unarmed release, and a correction does not survive a later refresh. Step 5 is why a check run straight after the merge reports the release as missing under a dedicated artifact builder: the release page arrives only when the slowest platform build finishes. And where a target left its artifact workflow reporting on pull requests, its newest run is usually not this release's: select runs by commit, never by recency — a target on the current landed workflows has tag runs alone, and `rk status --check` faults the configuration that produces the others.
+Four traps, and the chapter's [own warnings](../method/03-operate.md) explain the first three. A release waits for your merge, so a hold takes no action, and a stop after the merge is a withdrawal. Step 3 is the last point a changelog correction reaches the release, and a correction does not survive a later refresh. Step 5 is why a check run straight after the merge reports the release as missing under a dedicated artifact builder: the release page arrives only when the slowest platform build finishes. And where a target left its artifact workflow reporting on pull requests, its newest run is usually not this release's: select runs by commit, never by recency — a target on the current landed workflows has tag runs alone, and `rk status --check` faults the configuration that produces the others.
 
 ## 1. Land the work
 
@@ -70,50 +72,21 @@ On gitlab:
 glab mr list                                  # check: the release request is open
 ```
 
-## 3. Hold, or correct the changelog
+## 3. Correct the changelog
 
-The style decides what this step is: on an armed request it is the hold window, on an unarmed one the correction window. The chapter owns why, and the forge document owns how the bot refreshes the request.
+A release waits until you merge it, so holding one takes no action and this step is the correction window. The chapter owns why, and the forge document owns how the bot refreshes the request.
 
-### 3a. Read whether the request stands armed
+### 3a. Make sure that the request is not armed
 
-On github:
-
-```bash
-gh pr view <release pr> --repo <repo> --json autoMergeRequest \
-  -q '.autoMergeRequest.enabledBy.login // "not armed"'
-# check: prints the arming login on an armed request, or "not armed"
-```
-
-On gitlab:
+An rk before 0.9.15 armed the request to merge itself. Read the release state first:
 
 ```bash
-glab mr view <release mr>
-# check: the view reports auto-merge as enabled, or does not
+rk release status --target .
+# check: no request-armed symptom
+# request-armed: rk setup step merge-on-order --target . --apply disarms every open release request
 ```
 
-Armed and this release ships: go to 4. Armed and it must not ship yet: 3b. Not armed: 3c.
-
-### 3b. Hold the release
-
-Run it before the last check turns green; the chapter owns why a later stop is a withdrawal instead.
-
-On github:
-
-```bash
-gh pr merge <release pr> --repo <repo> --disable-auto
-# check: 3a now prints "not armed"; the next bot refresh may re-arm, so say where the team reads that the release is held
-# already merged: nothing is held; rk method recovery owns the withdrawal
-```
-
-On gitlab:
-
-```bash
-glab api -X POST "projects/:id/merge_requests/<release mr>/cancel_merge_when_pipeline_succeeds"
-# check: 3a no longer reports auto-merge; the next bot refresh may re-arm, so say where the team reads that the release is held
-# already merged: nothing is held; rk method recovery owns the withdrawal
-```
-
-### 3c. Compare the entry against the range
+### 3b. Compare the entry against the range
 
 ```bash
 git fetch origin --tags --force
@@ -121,9 +94,9 @@ git log --oneline "v<previous version>^{commit}..origin/master"
 # check: every commit that should appear in the entry is listed
 ```
 
-On rust, release-plz writes a lock-only dependency update as its own `chore: update Cargo.lock dependencies` line, not the `fix(deps)` title: where that update names an advisory, correct the entry so the advisory shows. Nothing missing: skip to step 4. Something missing: continue — and on a request still armed, run 3b first, because a correction pushed to an armed request races the checks it restarts.
+On rust, release-plz writes a lock-only dependency update as its own `chore: update Cargo.lock dependencies` line, not the `fix(deps)` title: where that update names an advisory, correct the entry so the advisory shows. Nothing missing: skip to step 4. Something missing: continue.
 
-### 3d. Correct it on the request's branch
+### 3c. Correct it on the request's branch
 
 On branches:
 
@@ -145,7 +118,7 @@ git commit -am "docs(changelog): Complete the entry for v<version>"
 git push
 ```
 
-### 3e. Confirm the request survived
+### 3d. Confirm the request survived
 
 On github:
 
@@ -167,46 +140,49 @@ Then read the entry the request carries now, because a refresh regenerates it:
 git fetch origin "<bot branch>"
 git show FETCH_HEAD:CHANGELOG.md | sed -n '/^## \[<version>\]/,/^## \[/p'
 # CHANGELOG.md, or the changelog file the binding writes
-# check: the entry carries the correction you pushed in 3d
+# check: the entry carries the correction you pushed in 3c
 ```
 
 A new number, or an entry without the correction, means a refresh took the fix: redo the correction on the request it left and merge without waiting.
 
-## 4. Let it merge, or merge it
+## 4. Merge it
 
-This is the release. A request behind the trunk waits for the bot to recompute it and for the refreshed checks to pass; [the drawn model](../method/06-release-from-trunk.md#why-an-armed-release-waits) shows what releases that wait. The named check and freshness gate the merge either way, and squash is the only allowed method, so `master` stays linear.
+This is the release. A request behind the trunk waits for the bot to recompute it and for the refreshed checks to pass; [the drawn model](../method/06-release-from-trunk.md#why-a-stale-release-waits) shows what releases that wait. The named check and freshness gate the merge either way, and squash is the only allowed method, so `master` stays linear.
 
-On trunk:
+The merge is the operator's order: no landed job arms or merges the request. `rk release merge` dispatches the landed merge job, which runs as the release App, proves the order and that nothing moved, and merges with the head pinned. A release line's request keeps the merge by a person, through `rk guide backport`.
 
-The request stands armed: the forge merges it once the last required check passes and the request carries the trunk's tip, and 4a is a watch, not an action. A request disarmed in 3b takes the unarmed form until the bot re-arms it.
-
-On lines:
-
-The merge is yours: watch the checks, then merge, because a line's request is never armed.
-
-### 4a. Watch the checks, and merge where the merge is yours
+### 4a. Watch the checks, then preview
 
 On github:
 
 ```bash
 gh pr checks <release pr> --repo <repo> --watch
-# check: on an armed request the forge merges when the last check passes and the branch is current; there is nothing to run
-# not armed, or disarmed: merge it yourself once the checks pass
-gh pr merge <release pr> --repo <repo> --squash --delete-branch
+# check: every check passes and the branch is current
+rk release merge --target .
+# check: prints the request, the trunk tip, the head, the check, and the version you read in step 2
 ```
 
 On gitlab:
 
 ```bash
 glab ci status --wait
-# check: on an armed request the forge merges when the pipeline passes; there is nothing to run
-# not armed, or disarmed: merge it yourself once the pipeline passes
-glab mr merge <release mr> --squash --remove-source-branch
+# check: the pipeline passes
+rk release merge --target .
+# check: prints the request, the trunk tip, the head, the pipeline, and the version you read in step 2
 ```
 
-### 4b. Bind the merge commit
+### 4b. Order the merge
 
-Steps 5 and 6 correlate against it.
+```bash
+rk release merge --target . --apply
+# check: prints merged, and the rk release status --wait command for the merge commit
+```
+
+The verb waits for the one merge run it dispatched. A refusal names the proof that failed: the request moved, the trunk moved, the check is not green, or the caller holds no administrator role on GitHub or maintainer role on GitLab. The request stays open; preview again.
+
+### 4c. Bind the merge commit
+
+Steps 5 and 6 correlate against it. `rk release merge --apply` prints it; this reads it back.
 
 ```bash
 git fetch origin && git rev-parse origin/master

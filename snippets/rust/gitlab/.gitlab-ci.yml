@@ -12,8 +12,9 @@
 #
 # Every job authenticates with RELEASE_BOT_TOKEN, the project access token
 # the setup stores as a masked CI variable: a push made with the default CI
-# job token starts no pipeline, which would silently skip the release half,
-# and a merge armed under it would land a bump that releases nothing.
+# job token starts no pipeline, which would silently skip the release half.
+# No job here arms or merges the release request: a release waits for the
+# operator's order.
 # Trusted publishing covers GitLab.com only; a self-hosted instance cannot
 # take the OIDC path and falls back to a token, which the method's
 # invariants exist to remove.
@@ -32,9 +33,10 @@ stages:
   - release
   - test
 
-# Merge request pipelines run the title gate; branch pipelines on the trunk
-# and the release lines run the release jobs, whose own rules never match a
-# merge request event.
+# Merge request pipelines run the title gate; push pipelines on the trunk
+# and the release lines run the release jobs, whose own rules match a push
+# alone. The API pipeline rk release merge creates on the trunk, with
+# RK_RELEASE_ACTION=merge, runs the merge job and nothing else.
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -85,11 +87,9 @@ project-jobs:
 release-request:
   extends: .release-plz
   rules:
-    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
   # One group per branch: a line's request never waits on another line's.
   resource_group: release-request-$CI_COMMIT_REF_SLUG
-  variables:
-    RELEASE_STYLE: RK_STYLE
   script:
     - |
       set -eu
@@ -137,38 +137,6 @@ release-request:
           ;;
       esac
     - RK_DEV_RUN release-plz release-pr --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
-    - |
-      set -eu
-      # The trunk style's standing arm. It dies with the request it was made
-      # on — this forge refreshes by closing the outdated request and opening
-      # a fresh one — so it is re-applied on every run, and it authenticates
-      # as the bot for the same reason every job here does: a merge under the
-      # job token would land a bump that releases nothing. The bot's own
-      # authorship is the filter, so no other open request can be armed by
-      # mistake, and an arm the forge cannot take yet — the request's first
-      # pipeline not started — waits for the next push rather than failing
-      # the job; the lines style merges by hand and arms nothing.
-      if [ "$RELEASE_STYLE" != "trunk" ]; then
-        echo "the lines style merges each release by hand; not arming."
-        exit 0
-      fi
-      if [ "$CI_COMMIT_BRANCH" != "RK_TRUNK_BRANCH" ]; then
-        echo "a line's request is never armed; its candidate is what a human validated."
-        exit 0
-      fi
-      api() { curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$@"; }
-      project="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
-      bot="$(api "$CI_API_V4_URL/user" | grep -o '"username":"[^"]*"' | head -n 1 | cut -d '"' -f 4)"
-      iid="$(api "$project/merge_requests?state=opened&target_branch=$CI_COMMIT_BRANCH&author_username=$bot&per_page=1" | grep -o '"iid":[0-9]*' | head -n 1 | cut -d : -f 2)"
-      if [ -z "$iid" ]; then
-        echo "no release request to arm."
-        exit 0
-      fi
-      if api -X PUT "$project/merge_requests/$iid/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash=RK_SQUASH_ON_MERGE&should_remove_source_branch=true" >/dev/null 2>&1; then
-        echo "armed merge request !$iid."
-      else
-        echo "could not arm !$iid yet — its pipeline has not started; the next trunk push re-arms."
-      fi
 
 # The release itself: tag, GitLab release, and the crates.io publish over # RK_IF_REGISTRY
 # OIDC. The job's ID token is exchanged for a short-lived registry token; # RK_IF_REGISTRY
@@ -178,7 +146,7 @@ release-request:
 release:
   extends: .release-plz
   rules:
-    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
   resource_group: release-$CI_COMMIT_REF_SLUG
   id_tokens: # RK_IF_REGISTRY
     CRATES_IO_ID_TOKEN: # RK_IF_REGISTRY
@@ -210,7 +178,7 @@ release:
 release-candidate:
   extends: .release-plz
   rules:
-    - if: '$CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
       when: manual
       allow_failure: true
   resource_group: release-candidate-$CI_COMMIT_REF_SLUG
@@ -260,3 +228,5 @@ release-candidate:
       curl -fsS -X PUT --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" \
         "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/$tag" \
         --data-urlencode "description=Release candidate $version, for validation before the stable release. It is not the latest stable release. Install it with: $install" >/dev/null
+# RK_MERGE_JOB_BEGIN
+# RK_MERGE_JOB_END

@@ -13,7 +13,7 @@ The command form of this chapter is the backport runbook, `rk guide backport`; t
 5. Cherry-pick only that commit onto the line; a cherry-pick is not a merge, and nothing else travels.
 6. Wait for the line's own CI: the pipeline runs twice per fix, once guarding the trunk and once guarding the line, which is this style's real cost.
 7. Read the line's own release request, which the bot opens because the publish workflow watches the release lines too.
-8. Release the line the way the trunk releases: correct, merge, wait, verify, each against the line — and merge it yourself, because a line's request is never armed: the candidate is what a human validated, so the promotion is a human's.
+8. Release the line the way the trunk releases: correct, merge, wait, verify, each against the line — and merge it yourself, because no request merges itself: the candidate is what a human validated, so the promotion is a human's.
 9. Delete the branch when the line dies; the tags outlive it and keep its commits recoverable.
 
 ## Cutting the branch

@@ -15,7 +15,7 @@
   - [`forge-setup:an-unowned-protection-names-its-consequence` — An unowned protection names its consequence](#forge-setupan-unowned-protection-names-its-consequence--an-unowned-protection-names-its-consequence)
   - [`forge-setup:the-setup-refuses-a-forge-below-the-floor` — The setup refuses a forge below the floor](#forge-setupthe-setup-refuses-a-forge-below-the-floor--the-setup-refuses-a-forge-below-the-floor)
   - [`forge-setup:the-required-check-is-shaped-to-report` — The required check is shaped to report](#forge-setupthe-required-check-is-shaped-to-report--the-required-check-is-shaped-to-report)
-  - [`forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself](#forge-setupthe-setup-permits-a-request-to-merge-itself--the-setup-permits-a-request-to-merge-itself)
+  - [`forge-setup:an-armed-release-request-faults` — An armed release request faults](#forge-setupan-armed-release-request-faults--an-armed-release-request-faults)
   - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
   - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
   - [`forge-setup:a-merge-carries-the-trunk-it-was-tested-against` — A merge carries the trunk it was tested against](#forge-setupa-merge-carries-the-trunk-it-was-tested-against--a-merge-carries-the-trunk-it-was-tested-against)
@@ -44,7 +44,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:a-step-is-idempotent` — A step is idempotent
 
-Every mutating setup step MUST be safe to rerun, `rk setup check` MUST mutate nothing, and a step that removes or replaces forge state, `default-branch`, `single-trunk`, `merge-cleanup`, the three protection steps, and `auto-merge`, MUST first save the state it changes to `forge/<step>.json` under `$XDG_STATE_HOME/release-kit/snapshots/<repo>/<timestamp>/`, with every branch `single-trunk` deletes by name and commit and a bundle where the clone holds the commit, name the path in a `snapshot` event, and refuse before any change where it cannot read that state.
+Every mutating setup step MUST be safe to rerun, `rk setup check` MUST mutate nothing, and a step that removes or replaces forge state, `default-branch`, `single-trunk`, `merge-cleanup`, the three protection steps, and `merge-on-order`, MUST first save the state it changes to `forge/<step>.json` under `$XDG_STATE_HOME/release-kit/snapshots/<repo>/<timestamp>/`, with every branch `single-trunk` deletes by name and commit and a bundle where the clone holds the commit, name the path in a `snapshot` event, and refuse before any change where it cannot read that state.
 
 #### Scenario: A setup fails at the branch-protection step and is rerun from the top
 
@@ -206,17 +206,17 @@ Where `rk setup check` knows the required check, it MUST read the target's own w
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
-### `forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself
+### `forge-setup:an-armed-release-request-faults` — An armed release request faults
 
-The `auto-merge` step MUST assert that the forge permits a pull request to merge itself once every required check passes, and where a forge carries no such switch the observation MUST name what stands in for it rather than reporting a bare pass, because the trunk style's release decision is a standing instruction the forge executes and a repository that forbids it fails silently — the request simply never offers the option. Where the release identity is what executes that instruction, the `install-bot` observation MUST read the installation's own permissions and MUST report unsatisfied naming each permission the target's rendered release automation needs and the installation lacks, for the same reason: a token is minted no wider than its installation, so a missing permission fails at release time rather than at setup time. That minimum MUST be `contents: write` and `pull_requests: write`, MUST add `checks: read` exactly where the target renders a release gate that reads a check run, and MUST ask a target rendering no such gate for nothing more; the remedy MUST name the installation's own settings page, because approving a widened grant is the installation owner's act.
+The `merge-on-order` step MUST disarm each open release request that stands armed to merge itself, and `rk setup check` MUST fault each one it finds, naming the request and the call that disarms it, because a release happens only on the operator's order and an arm that rk 0.9.14 or older left standing would release without it. A request is a release request where its head branch carries the release driver's prefix, and the step MUST leave every other request as it is, because it is the project's own. On GitHub the step MUST leave the repository's `allow_auto_merge` switch as it is, and the observation MUST report the switch and MUST NOT fault it, because the switch serves the project's own requests too. On GitLab the step MUST assert `only_allow_merge_if_pipeline_succeeds`, and the observation MUST fault it where it is off, because it still holds a person's merge behind a passing pipeline. The `install-bot` observation MUST read the installation's own permissions and MUST report unsatisfied naming each permission the target's rendered release automation needs and the installation lacks, because a token is minted no wider than its installation, so a missing permission fails at release time rather than at setup time. That minimum MUST be `contents: write` and `pull_requests: write`, with `checks: read` beside them for an automatic release, because the merge job that `rk release merge` dispatches reads the required check run, and the remedy MUST name the installation's own settings page, because approving a widened grant is the installation owner's act.
 
-#### Scenario: One forge carries the switch and the other does not
+#### Scenario: An older rk left a release request armed
 
-- GIVEN a GitHub repository whose `allow_auto_merge` is false, a GitLab project gated only by its pipeline requirement, and a locally integrated GitHub trunk whose App installation holds the two writes alone
-- WHEN `rk setup step auto-merge --apply` runs on each and `rk setup check` reads each back
-- THEN the GitHub setting reads back true, the GitLab step reports satisfied with the limitation naming that the forge offers no project-level switch and availability follows the pipeline requirement `protect-trunk` asserts, and `install-bot` on the third reports unsatisfied naming `checks: read` and the installation settings page
+- GIVEN a GitHub repository whose open release request carries auto-merge, and a GitLab project whose open release request merges when its pipeline succeeds, each beside an armed request of the project's own
+- WHEN `rk setup check` runs, then `rk setup step merge-on-order --apply`, then `rk setup check` again
+- THEN the first check faults naming the disarm call, the step disarms the release request alone, and the second check reads satisfied
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(the_setup_step_disarms_an_open_request) or test(the_gitlab_pipeline_requirement_stays) or test(install_bot_requires_the_release_apps_minimum_grant)'`
 
 ### `forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source
 

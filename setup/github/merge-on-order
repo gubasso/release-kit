@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+# Leave every release request open until the operator orders the merge.
+# rk 0.9.14 and older armed the bot's request to merge itself once its
+# checks passed. This step disarms each open release request that still
+# stands armed. It leaves the repository's allow_auto_merge switch as it
+# is, because that switch serves the project's own requests too, and no
+# landed job arms anything. Idempotent: a disarmed request stays disarmed.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_REQUEST_PREFIX:?rk sets this; run this script through rk setup}"
+
+armed="$(gh api --paginate "repos/$RK_REPO/pulls?state=open&per_page=100" \
+  --jq '.[] | select(.head.ref | startswith(env.RK_REQUEST_PREFIX)) | select(.auto_merge != null) | .number')"
+for number in $armed; do
+  gh pr merge "$number" --disable-auto --repo "$RK_REPO"
+  echo "disarmed release request #$number."
+done
+echo 'check: prints nothing, because no open release request stands armed'
+gh api --paginate "repos/$RK_REPO/pulls?state=open&per_page=100" \
+  --jq '.[] | select(.head.ref | startswith(env.RK_REQUEST_PREFIX)) | select(.auto_merge != null) | .number'

@@ -8,7 +8,7 @@ A first landing of the convention into a target with no record, no release mecha
 2. Run `rk profile --target . --json`. It reports every value with the source that answered it, and which capabilities the catalog selects here.
 3. Ask only what the report leaves open and release-kit needs to render its files, one default each, with its consequence stated:
    - the technologies and the forge, where the observation named none;
-   - the release mode, and for an automatic release its driver and its style. Under `trunk`, the release request is armed and a green trunk ships itself;
+   - the release mode, and for an automatic release its driver and its style. Under either style, the release request waits for the operator's order;
    - the trunk name;
    - the integration mode: `local` for one writer, and `forge` for several writers with a review requirement, because no local gate substitutes for a second person reading a diff. The release request integrates at the forge either way;
    - each capability the catalog can select here, with its cost: the Scorecard workflow posts a result to a public API, the code scanning provider is read from `rk binding <tech>`, the Nix packaging seeds a package expression and a flake pair, and the reporting policy lands `SECURITY.md`, on by default for an automatic release;

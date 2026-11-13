@@ -23,8 +23,10 @@ pub enum SelfDependAction {
     Add(AddArgs),
     /// Remove what a predecessor bump mechanism left, and name what a line scan must not touch.
     Clean(CleanArgs),
-    /// Move the pin to the latest release through the wired manager; the flake pair locks and builds, both files or neither.
+    /// Move the pin to the latest release through the wired manager; the flake pair locks and builds, both files or neither. The operator's act, refused inside an .envrc evaluation.
     Sync(SyncArgs),
+    /// Warn where a newer release is out, from a cache read weekly; the .envrc line runs it on every directory entry. Writes nothing but its cache, and exits 0.
+    Check(CheckArgs),
 }
 
 /// Arguments for `rk self-depend status`.
@@ -110,8 +112,8 @@ pub struct SyncArgs {
     #[arg(long, value_enum)]
     pub manager: Option<Manager>,
 
-    /// Who is calling: envrc stays silent and exits 0 on every outcome, operator reports and fails loudly.
-    #[arg(long, value_enum, default_value_t = Caller::Envrc)]
+    /// Who is calling: the operator, the only caller a sync serves; envrc is retired, and `rk self-depend check` serves directory entry.
+    #[arg(long, value_enum, default_value_t = Caller::Operator)]
     pub caller: Caller,
 
     /// Rewrite the pin, refresh the lock, and build; without it the bump is reported and nothing runs.
@@ -123,14 +125,25 @@ pub struct SyncArgs {
     pub json: bool,
 }
 
-/// Who invoked the sync. One flag decides four behaviors as a bundle: the
-/// daily stamp, silence on nothing to do, the exit code of a reported
-/// failure, and silence under lock contention.
+/// Who invoked the sync. A sync moves the pin only as the operator's act,
+/// so `envrc` stays a value only to be refused by name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum Caller {
-    /// The `.envrc` line on directory entry: gated by the stamp, silent, exit 0.
+    /// Retired: the `.envrc` line runs `rk self-depend check`, which never moves a pin.
     Envrc,
     /// A person or an agent at a prompt: every outcome reported, the exit-code matrix.
     Operator,
+}
+
+/// Arguments for `rk self-depend check`.
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    /// The project whose pin is checked.
+    #[arg(long, default_value = ".")]
+    pub target: Utf8PathBuf,
+
+    /// Emit one JSON object on stdout instead of the human report.
+    #[arg(long)]
+    pub json: bool,
 }

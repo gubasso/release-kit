@@ -39,11 +39,37 @@ pub enum ReleaseAction {
         json: bool,
     },
 
+    /// Merge the trunk's release request on the operator's order. Without
+    /// `--apply`, read the one open release request against the trunk, the
+    /// trunk tip, its head, and the required check for that head, and write
+    /// nothing. With `--apply`, dispatch the landed merge job with exactly
+    /// those values, which runs as the release bot, proves each one again,
+    /// and merges with the head pinned, then wait for that one run. A
+    /// release line keeps the merge by a person.
+    Merge {
+        /// The landed target whose trunk release request merges.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
+
+        /// Dispatch the merge job and wait for it; without it, preview.
+        #[arg(long)]
+        apply: bool,
+
+        /// How long `--apply` waits for the merge run, in seconds.
+        #[arg(long, default_value_t = 1800, requires = "apply")]
+        timeout: u64,
+
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Keep the one release request of the pushed base on
     /// `rk-release/<base>`: propose the next version, write it and the
-    /// changelog, force-push as the bot, open or edit the request, and arm
-    /// it where the record's style arms. Runs in CI on a push to the
-    /// trunk or a release line; every fact comes from the record.
+    /// changelog, force-push as the bot, and open or edit the request,
+    /// which it never arms: a release waits for the operator's order. Runs
+    /// in CI on a push to the trunk or a release line; every fact comes
+    /// from the record.
     Request {
         /// The checkout the release job runs in.
         #[arg(long, default_value = ".")]

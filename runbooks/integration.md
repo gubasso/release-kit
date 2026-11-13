@@ -139,7 +139,7 @@ After a local rebase integration, a GitLab fast-forward merge, or a hand `git me
 
 ### 4a. When the push turns the trunk red
 
-The local path cannot see the remote checks before the push, because the push starts them. Watch the run that the push started, and the release request that it refreshed. A failure leaves the release request open, so nothing publishes. The trunk's strict rule is the boundary. The landed `release-gate` job logs which `setup.required_check` result it read, then returns a successful no-op. Repair the failure as a fresh implementation, integrated the same way. No local integration is erased, and nothing is reverted by hand.
+The local path cannot see the remote checks before the push, because the push starts them. Watch the run that the push started, and the release request that it refreshed. A failure leaves the release request open, so nothing publishes. The trunk's strict rule is the boundary, and no landed job merges the request. Repair the failure as a fresh implementation, integrated the same way. No local integration is erased, and nothing is reverted by hand.
 
 ## 5. Release
 

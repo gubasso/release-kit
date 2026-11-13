@@ -112,7 +112,7 @@ $ gh pr update-branch 137 --repo "$OWNER/$REPO"
 ✓ PR branch updated
 ```
 
-Both runs started seven seconds after the update. The title check took 7 seconds and the gate took 7 minutes 4 seconds, so the gate is the whole wait. The state moved `BEHIND` to `BLOCKED` while they ran, and to `CLEAN` when they finished. [The drawn model](../../../method/06-release-from-trunk.md#why-an-armed-release-waits) owns why the trunk moving alone dispatches nothing.
+Both runs started seven seconds after the update. The title check took 7 seconds and the gate took 7 minutes 4 seconds, so the gate is the whole wait. The state moved `BEHIND` to `BLOCKED` while they ran, and to `CLEAN` when they finished. [The drawn model](../../../method/06-release-from-trunk.md#why-a-stale-release-waits) owns why the trunk moving alone dispatches nothing.
 
 ## A release request the trunk moved under
 

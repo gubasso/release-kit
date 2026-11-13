@@ -511,7 +511,8 @@ mod tests {
     /// variant prints with its label.
     #[test]
     fn a_style_variant_selects_on_the_style() {
-        let doc = "On trunk:\n\nthe request merges itself when the last check passes.\n\nOn lines:\n\nthe merge is yours.\n\nend\n";
+        let doc =
+            "On trunk:\n\nthe trunk alone releases.\n\nOn lines:\n\nthe merge is yours.\n\nend\n";
         let trunk = render(
             doc,
             &Forge::Unresolved,
@@ -521,7 +522,7 @@ mod tests {
             Some("trunk"),
             None,
         );
-        assert!(trunk.contains("merges itself"));
+        assert!(trunk.contains("the trunk alone releases"));
         assert!(!trunk.contains("the merge is yours"));
         let lines = render(
             doc,
@@ -533,7 +534,7 @@ mod tests {
             None,
         );
         assert!(lines.contains("the merge is yours"));
-        assert!(!lines.contains("merges itself"));
+        assert!(!lines.contains("the trunk alone releases"));
         assert_eq!(
             render(doc, &Forge::Unresolved, None, None, None, None, None),
             doc,

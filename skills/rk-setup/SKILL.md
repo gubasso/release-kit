@@ -32,7 +32,7 @@ An unreadable record never counts as an absent one, so never land over it.
 | No `rk` on PATH                                        | `command -v rk`, by hand                  | `provision`, then this pre-flight again |
 | A record newer than the binary                         | `alignment` `target-newer`                | `provision`                             |
 | No pin and no host decision, at `setup` or `migration` | `rk self-depend status --target . --json` | `provision`, offered first              |
-| A pin with no sync line, at `setup` or `migration`     | `wired` and `envrc_sync` in that report   | `provision`, offered first              |
+| A pin with no check line, at `setup` or `migration`    | `wired` and `envrc_check` in that report  | `provision`, offered first              |
 | The state of the target                                | `classification`                          | the gate                                |
 | The setup steps and the setup proof                    | `rk setup status --target . --json`       | `forge-settings` and `publish`          |
 

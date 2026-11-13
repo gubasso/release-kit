@@ -23,4 +23,4 @@ Chosen option: `a gate in the release workflow` — under local integration on G
 
 ## Status
 
-Superseded by [native freshness](./ADR-keep-native-freshness-under-local-integration.md).
+Superseded by [native freshness](./ADR-keep-native-freshness-under-local-integration.md). Its gate job retired with [release only on the operator's order](./ADR-release-only-on-the-operators-order.md).

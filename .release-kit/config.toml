@@ -38,10 +38,9 @@ response = "best-effort" # P: the acknowledgment window the policy promises: bes
 scope = "" # P: one paragraph naming what the project does not own and where to report it instead; empty renders nothing
 
 [setup]
-required_check = "gate" # P: the check the release gate believes, and the check the trunk ruleset requires under forge integration
+required_check = "gate" # P: the check the trunk ruleset requires before a release request merges
 retired_branches = ["main", "develop"] # N: long-lived branches retired by the trunk
 release_lines = false # N: true runs protect-release-lines in a full apply
-required_workflow = "ci" # P: the workflow name whose completion wakes the release gate under local integration; GitHub only
 
 [setup.bot]
 app_id = "" # N: public App identifier; private credentials stay outside this file

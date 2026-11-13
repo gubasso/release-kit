@@ -19,7 +19,6 @@ use serde_json::{Value, json};
 use crate::detect::Forge;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::manifest::MergeForm;
 use crate::release_state::{Api, gitlab_project};
 
 use super::guard::TagAt;
@@ -154,7 +153,7 @@ impl Client {
 
     /// A read whose failure refuses, because the action cannot decide
     /// without it; a definite not-found answers `None`.
-    fn read(&self, path: &str) -> Result<Option<Value>, RkError> {
+    pub(crate) fn read(&self, path: &str) -> Result<Option<Value>, RkError> {
         self.read_with(path, false)
     }
 
@@ -164,7 +163,7 @@ impl Client {
     /// # Errors
     ///
     /// A refusal where the forge does not answer any page.
-    fn read_all(&self, path: &str) -> Result<Vec<Value>, RkError> {
+    pub(crate) fn read_all(&self, path: &str) -> Result<Vec<Value>, RkError> {
         Ok(match self.read_with(path, true)? {
             Some(Value::Array(items)) => items,
             _ => Vec::new(),
@@ -193,7 +192,7 @@ impl Client {
 
     /// A write whose failure is the action's failure, with the client's
     /// own words.
-    fn write(
+    pub(crate) fn write(
         &self,
         method: &str,
         path: &str,
@@ -570,55 +569,6 @@ impl Client {
             ),
         }
         .map(drop)
-    }
-
-    /// Arm the request to merge itself once its checks pass. On GitLab an
-    /// arm the forge cannot take yet, before the request's first pipeline
-    /// starts, answers `false` and waits for the next refresh.
-    ///
-    /// # Errors
-    ///
-    /// GitHub's refusal.
-    pub fn arm(&self, number: u64, form: MergeForm) -> Result<bool, RkError> {
-        // SATISFIES landing:the-arming-identity-is-the-bot
-        // SATISFIES release-engine:the-request-arms-where-the-projection-arms
-        match self.forge {
-            Forge::Github => {
-                let number = number.to_string();
-                let flag = format!("--{}", form.as_str());
-                let output = self
-                    .spawn(
-                        &[
-                            "pr",
-                            "merge",
-                            &number,
-                            "--auto",
-                            &flag,
-                            "--delete-branch",
-                            "--repo",
-                            &self.repo,
-                        ],
-                        None,
-                    )
-                    .map_err(|reason| write_failed("the release request arm", &reason))?;
-                if output.status.success() {
-                    Ok(true)
-                } else {
-                    Err(write_failed(
-                        "the release request arm",
-                        &super::last_line(&output.stderr),
-                    ))
-                }
-            }
-            Forge::Gitlab => {
-                let squash = form == MergeForm::Squash;
-                let path = format!(
-                    "projects/{}/merge_requests/{number}/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash={squash}&should_remove_source_branch=true",
-                    self.project()
-                );
-                Ok(matches!(self.api("PUT", &path, None), Api::Ok(_)))
-            }
-        }
     }
 
     /// Create an unpublished draft release of `tag` at `sha`, which

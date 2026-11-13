@@ -22,4 +22,4 @@ Chosen option: `standing auto-merge` — under the trunk style the bot's release
 
 ## Status
 
-Accepted.
+Superseded by [release only on the operator's order](./ADR-release-only-on-the-operators-order.md).

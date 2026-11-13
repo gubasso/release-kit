@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+# Leave every release request open until the operator orders the merge,
+# and keep a person's merge behind a passing pipeline. rk 0.9.14 and older
+# armed the bot's merge request to merge when its pipeline succeeds. This
+# step cancels that on each open release request that still stands armed.
+# It also asserts the pipeline requirement, which still guards the merge a
+# person makes. Idempotent: the writes are convergent.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_REQUEST_PREFIX:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes the
+# pattern below hold for the compact and the pretty form alike.
+compact() { tr -d ' \t\r\n'; }
+
+# The iid of each open release request that merges when its pipeline
+# succeeds. A request's own iid comes first in its object and its
+# merge_when_pipeline_succeeds last, and a milestone between them carries
+# an iid of its own, so only the first iid after each request counts.
+armed() {
+  glab api --paginate "projects/$project/merge_requests?state=opened&per_page=100" | compact \
+    | grep -o '"iid":[0-9]*\|"source_branch":"[^"]*"\|"merge_when_pipeline_succeeds":[a-z]*' \
+    | awk -F: -v prefix="$RK_REQUEST_PREFIX" '
+        BEGIN { fresh = 1 }
+        /^"iid"/ { if (fresh) { iid = $2; fresh = 0 } }
+        /^"source_branch"/ { branch = $2; gsub(/"/, "", branch) }
+        /^"merge_when_pipeline_succeeds"/ {
+          if ($2 == "true" && index(branch, prefix) == 1) print iid
+          fresh = 1
+        }'
+}
+
+glab api -X PUT "projects/$project" -F only_allow_merge_if_pipeline_succeeds=true >/dev/null
+for iid in $(armed); do
+  glab api -X POST "projects/$project/merge_requests/$iid/cancel_merge_when_pipeline_succeeds" >/dev/null
+  echo "disarmed release request !$iid."
+done
+echo 'check: prints "only_allow_merge_if_pipeline_succeeds":true and no request number'
+glab api "projects/$project" | compact | grep -o '"only_allow_merge_if_pipeline_succeeds":[a-z]*'
+armed

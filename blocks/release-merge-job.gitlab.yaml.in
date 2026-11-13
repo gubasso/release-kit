@@ -1,0 +1,74 @@
+# The operator's order to release, and nothing else. rk release merge
+# creates an API pipeline on the trunk with RK_RELEASE_ACTION=merge and the
+# request, the trunk tip, and the head it read; no push pipeline reaches
+# this job, and no other job runs in that pipeline. It authenticates as the
+# bot, because a merge under the job token would land a bump that releases
+# nothing.
+#
+# It trusts no value the pipeline carries beyond what it compares. Every
+# fact it acts on is read back from the forge: the pipeline's creator holds
+# the maintainer role or higher, and the request is open, not a draft,
+# based on the trunk, headed from this project, authored by the bot, still
+# at the head and the base the operator read, and its own pipeline passed
+# for that exact head. The merge pins the head, so a refresh between the
+# read and the write refuses.
+release-merge:
+  stage: release
+  image: alpine:3
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api" && $RK_RELEASE_ACTION == "merge" && $CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH"'
+  resource_group: release-merge
+  script:
+    - apk add --no-cache curl jq
+    - |
+      set -eu
+      refuse() {
+        echo "$1; nothing merged." >&2
+        exit 1
+      }
+      request="${RK_MERGE_REQUEST:-}"
+      base="${RK_MERGE_BASE:-}"
+      head="${RK_MERGE_HEAD:-}"
+      case "$request" in
+        '' | *[!0-9]*) refuse "the pipeline names no merge request number" ;;
+      esac
+      for sha in "$base" "$head"; do
+        if ! printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+          refuse "the pipeline names no full base and head commit"
+        fi
+      done
+      api() { curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$@"; }
+      project="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      # Anyone who may run a pipeline may create this one, so the
+      # creator's role is what makes this job serve the operator's order
+      # alone.
+      level="$(api "$project/members/all/$GITLAB_USER_ID" | jq -r '.access_level // 0')"
+      if [ "$level" -lt 40 ]; then
+        refuse "$GITLAB_USER_LOGIN holds access level $level, and only a maintainer orders a release"
+      fi
+      bot="$(api "$CI_API_V4_URL/user" | jq -r .username)"
+      facts="$(api "$project/merge_requests/$request" | jq -r '[.state, (if .draft == null then .work_in_progress else .draft end), .target_branch, .source_project_id, .author.username, .source_branch, .sha, (.head_pipeline.sha // "none"), (.head_pipeline.status // "none")] | map(tostring) | join(" ")')"
+      read -r state draft target source author branch sha pipeline_sha pipeline <<EOF
+      $facts
+      EOF
+      [ "$state" != "merged" ] || refuse "!$request is already merged"
+      [ "$state" = "opened" ] || refuse "!$request is $state"
+      [ "$draft" = "false" ] || refuse "!$request is a draft"
+      [ "$target" = "RK_TRUNK_BRANCH" ] || refuse "!$request targets $target, not RK_TRUNK_BRANCH"
+      [ "$source" = "$CI_PROJECT_ID" ] || refuse "!$request comes from another project"
+      [ "$author" = "$bot" ] || refuse "!$request is authored by $author, not by $bot"
+      case "$branch" in
+        "RK_BRANCH_SHAPE"*) ;;
+        *) refuse "!$request comes from $branch, which is no release branch" ;;
+      esac
+      [ "$sha" = "$head" ] || refuse "!$request moved to $sha after the operator read $head"
+      # The branch is one URL path segment, so a trunk that holds a slash
+      # is encoded.
+      trunk="$(printf '%s' "RK_TRUNK_BRANCH" | jq -sRr @uri)"
+      tip="$(api "$project/repository/branches/$trunk" | jq -r .commit.id)"
+      [ "$tip" = "$base" ] || refuse "RK_TRUNK_BRANCH moved to $tip after the operator read $base"
+      if [ "$pipeline_sha" != "$head" ] || [ "$pipeline" != "success" ]; then
+        refuse "the pipeline of !$request reads $pipeline at $pipeline_sha, not success at $head"
+      fi
+      api -X PUT "$project/merge_requests/$request/merge?sha=$head&squash=RK_SQUASH_ON_MERGE&should_remove_source_branch=true" >/dev/null
+      echo "merged merge request !$request at $head."

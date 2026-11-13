@@ -83,8 +83,8 @@ pub struct Anchor {
 }
 
 /// The fragments one pair serves, in application order, judged against
-/// the target. Every pair ends with the `.envrc` line: the sync runs on
-/// directory entry whatever manager moves the pin.
+/// the target. Every pair ends with the `.envrc` line: the check runs on
+/// directory entry whatever manager holds the pin.
 #[must_use]
 pub fn fragments(pair: Pair, tag: &str, observed: &Observed) -> Vec<Fragment> {
     let entry = observed.entry(pair.manager);
@@ -149,9 +149,9 @@ pub fn fragments(pair: Pair, tag: &str, observed: &Observed) -> Vec<Fragment> {
         Pair { .. } => Vec::new(),
     };
     out.push(Fragment {
-        id: "envrc-sync",
+        id: "envrc-check",
         file: ".envrc".to_owned(),
-        role: "the daily sync on directory entry",
+        role: "the weekly version check on directory entry",
         placement: "append-line",
         anchor: Anchor {
             kind: "file",
@@ -159,7 +159,7 @@ pub fn fragments(pair: Pair, tag: &str, observed: &Observed) -> Vec<Fragment> {
             needle: None,
         },
         text: envrc_line(),
-        present: Some(observed.envrc.is_present() && observed.envrc_sync),
+        present: Some(observed.envrc.is_present() && observed.envrc_check),
     });
     out
 }

@@ -2,11 +2,11 @@
 //! safe on every directory entry.
 //!
 //! Each gate answers one question before anything fetches or spawns:
-//! whether the run is switched off, whether today's attempt already
-//! happened, whether another shell holds this checkout, and whether the
-//! two files carry uncommitted edits. The lock and the stamp live under
-//! the state root, keyed per checkout — not in the target, where an
-//! untracked file is noise, and not in `.git/`, which belongs to git.
+//! whether the check is switched off, whether a sync runs inside an
+//! `.envrc` evaluation, whether another shell holds this checkout, and
+//! whether the two files carry uncommitted edits. The lock lives under the
+//! state root, keyed per checkout — not in the target, where an untracked
+//! file is noise, and not in `.git/`, which belongs to git.
 
 use std::fs;
 use std::io::Write as _;
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use camino::Utf8Path;
 
-use super::{lock_path, stamp_path};
+use super::lock_path;
 use crate::maintenance::GIT_HOOK_VARS;
 use crate::probes::git_bin;
 
@@ -31,9 +31,20 @@ pub const CI_VARS: [&str; 6] = [
     "TF_BUILD",
 ];
 
-/// The operator's own off switch, read from the environment `.envrc.local`
-/// exports.
+/// The operator's own off switch for the version check, read from the
+/// environment `.envrc.local` exports.
 pub const SWITCH_VAR: &str = "RK_DEVSHELL_SYNC";
+
+/// The variable direnv's stdlib exports while it evaluates an `.envrc`,
+/// and leaves out of the environment it exports afterward.
+pub const IN_ENVRC_VAR: &str = "DIRENV_IN_ENVRC";
+
+/// Whether this run is inside an `.envrc` evaluation, where a pin move
+/// would be automatic rather than the operator's act.
+#[must_use]
+pub fn in_envrc() -> bool {
+    std::env::var_os(IN_ENVRC_VAR).is_some_and(|value| !value.is_empty())
+}
 
 /// Whether the operator switched the sync off with `RK_DEVSHELL_SYNC=0`.
 #[must_use]
@@ -50,27 +61,6 @@ pub fn in_ci() -> bool {
             !(value.is_empty() || value == "0" || value == "false")
         })
     })
-}
-
-/// Today, as the first ten characters of the UTC clock.
-#[must_use]
-pub fn today() -> String {
-    crate::applog::now_utc()[..10].to_owned()
-}
-
-/// Stamp today's attempt for one checkout, before the attempt.
-///
-/// # Errors
-///
-/// Returns the I/O failure of the write.
-pub fn write_stamp(key: &str) -> std::io::Result<()> {
-    let Some(path) = stamp_path(key) else {
-        return Err(std::io::Error::other("no state root for the stamp"));
-    };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    crate::atomic::write(&path, format!("{}\n", today()).as_bytes())
 }
 
 /// The held single-writer lock; removed on drop.

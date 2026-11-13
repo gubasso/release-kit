@@ -35,9 +35,10 @@ stages:
   - publish
   - test
 
-# Merge request pipelines run the title gate; branch pipelines on the trunk
-# and the release lines run the release jobs, whose own rules never match a
-# merge request event.
+# Merge request pipelines run the title gate; push pipelines on the trunk
+# and the release lines run the release jobs, whose own rules match a push
+# alone. The API pipeline rk release merge creates on the trunk, with
+# RK_RELEASE_ACTION=merge, runs the merge job and nothing else.
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -108,12 +109,12 @@ project-jobs:
 # RK_DEV_ENV_RK_END
 
 # The release request. rk opens it on rk-release/<base>, refreshes it in
-# place on every push, and arms it where the landing arms it
-# (release-engine:the-request-arms-where-the-projection-arms).
+# place on every push, and never arms or merges it
+# (release-engine:the-request-never-arms).
 release-request:
   extends: .tooling
   rules:
-    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
   # One group per branch, here and in every release job below: a line's
   # release never waits on another line's.
   resource_group: release-request-$CI_COMMIT_REF_SLUG
@@ -132,7 +133,7 @@ release-request:
 build:
   extends: .tooling
   rules:
-    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
   resource_group: release-$CI_COMMIT_REF_SLUG
   variables:
     RUNNER_GENERATE_ARTIFACTS_METADATA: "true"
@@ -167,7 +168,7 @@ provenance:
   stage: provenance
   needs: ["build"]
   rules:
-    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
   image: alpine:3
   id_tokens:
     SIGSTORE_ID_TOKEN:
@@ -237,7 +238,7 @@ publish:
   stage: publish
   needs: ["build", "provenance"]
   rules:
-    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
   resource_group: release-$CI_COMMIT_REF_SLUG
   script:
     - RK_DEV_RUN rk release publish
@@ -260,7 +261,7 @@ publish:
 release-candidate:
   extends: .tooling
   rules:
-    - if: '$CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
       when: manual
       allow_failure: true
   resource_group: release-candidate-$CI_COMMIT_REF_SLUG
@@ -279,3 +280,5 @@ release-candidate:
       else
         RK_DEV_RUN rk lines mint "$LINE" --expect "${EXPECT:-}" --as-bot --apply
       fi
+# RK_MERGE_JOB_BEGIN
+# RK_MERGE_JOB_END

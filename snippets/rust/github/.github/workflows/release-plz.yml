@@ -16,31 +16,56 @@
 # pull-request half serializes per ref so racing pushes cannot fight over the
 # release pull request.
 name: release-plz
+# A merge run names itself by the correlation rk release merge waits on;
+# every other run keeps the forge's own name.
+run-name: ${{ inputs.action == 'merge' && format('rk release merge {0}', inputs.correlation) || '' }}
 
 permissions: {}
 
 on:
   push:
     branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
-  # A person mints a release candidate on purpose: the line, and the tip they
-  # read, so a line that moved since then refuses. Nothing watches a push.
+  # A person dispatches one action on purpose, and nothing watches a push.
+  # candidate mints or promotes a line's release candidate: the line, and
+  # the tip they read, so a line that moved since then refuses. merge is
+  # what rk release merge sends: the trunk's release request, the trunk tip
+  # and the head it read, and the correlation the run's name carries.
   workflow_dispatch:
     inputs:
-      line:
-        description: The release line, <major>.<minor>, as in 1.4
+      action:
+        description: What this dispatch does, candidate or merge
         required: true
+        type: choice
+        options: [candidate, merge]
+      line:
+        description: The release line, <major>.<minor>, as in 1.4 (candidate)
+        required: false
         type: string
       expect:
-        description: The line's tip you read, as a full commit SHA
-        required: true
+        description: The line's tip you read, as a full commit SHA (candidate)
+        required: false
         type: string
       promote:
-        description: Promote the line's newest candidate to its stable version instead of minting a new one
+        description: Promote the line's newest candidate to its stable version instead of minting a new one (candidate)
         required: false
         type: boolean
         default: false
-# RK_GATE_TRIGGER_BEGIN
-# RK_GATE_TRIGGER_END
+      request:
+        description: The release request to merge, by number (merge)
+        required: false
+        type: string
+      base:
+        description: The trunk tip the merge expects, as a full commit SHA (merge)
+        required: false
+        type: string
+      head:
+        description: The request head the merge expects, as a full commit SHA (merge)
+        required: false
+        type: string
+      correlation:
+        description: The id rk release merge finds this run by (merge)
+        required: false
+        type: string
 
 jobs:
   # Merging the release pull request is the release: the bump push lands here,
@@ -94,9 +119,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # This half opens and refreshes the release request and then arms it, so
-      # its token carries pull-requests beside contents. The release half above
-      # takes contents alone.
+      # This half opens and refreshes the release request, so its token
+      # carries pull-requests beside contents. It never arms or merges the
+      # request: a release waits for the operator's order. The release half
+      # above takes contents alone.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
@@ -177,41 +203,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 # RK_DEV_ENV_REQUEST_END
-# RK_GATE_ARM_BEGIN
-      # Arm the request the moment it exists: the forge merges it once every
-      # required check is green, which is the trunk style's release decision,
-      # made once at landing rather than per release; the lines style leaves
-      # every request for a human and this step steps aside. Two things keep
-      # the arm correct. The app token is one: auto-merge enabled under
-      # GITHUB_TOKEN would merge a bump whose push starts no workflow,
-      # leaving it untagged and unpublished with nothing reporting a failure.
-      # Re-arming is the other: arming an armed request is a no-op, so every
-      # refresh re-arms and the arm cannot drift out of sync.
-      - name: arm the release request
-        env:
-          RELEASE_STYLE: RK_STYLE
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          REF: ${{ github.ref_name }}
-          RELEASE_PR: ${{ steps.release-pr.outputs.pr }}
-        run: |
-          set -eu
-          if [ "$RELEASE_STYLE" != "trunk" ]; then
-            echo "the lines style merges each release by hand; not arming."
-            exit 0
-          fi
-          if [ "$REF" != "RK_TRUNK_BRANCH" ]; then
-            echo "a line's request is never armed; its candidate is what a human validated."
-            exit 0
-          fi
-          number="$(printf '%s' "${RELEASE_PR:-}" | sed -n 's/.*"number":[[:space:]]*\([0-9]*\).*/\1/p' | head -n 1)"
-          if [ -z "$number" ]; then
-            echo "no release request to arm."
-            exit 0
-          fi
-          gh pr merge "$number" --auto RK_MERGE_FLAG --delete-branch
-          echo "armed pull request #$number."
-# RK_GATE_ARM_END
 
   # A release candidate, minted on purpose. The job checks out the requested
   # line under the app token and persists it, because rk pushes the
@@ -224,7 +215,10 @@ jobs:
   # could not publish. A promotion writes the stable version alone, and the
   # line's release request proposes it.
   release-candidate:
-    if: github.repository_owner == 'OWNER' && github.event_name == 'workflow_dispatch'
+    if: >-
+      github.repository_owner == 'OWNER'
+      && github.event_name == 'workflow_dispatch'
+      && inputs.action == 'candidate'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -233,6 +227,18 @@ jobs:
       group: release-candidate-${{ inputs.line }}
       cancel-in-progress: false
     steps:
+      # A candidate's inputs are optional at the dispatch, because a merge
+      # dispatch carries none of them, so the job refuses here first.
+      - name: refuse a dispatch without its line and tip
+        env:
+          LINE: ${{ inputs.line }}
+          EXPECT: ${{ inputs.expect }}
+        run: |
+          set -eu
+          if [ -z "$LINE" ] || [ -z "$EXPECT" ]; then
+            echo "::error::a candidate dispatch names the line and the tip you read, as -f line=<major>.<minor> -f expect=<sha>; nothing minted."
+            exit 1
+          fi
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
@@ -300,5 +306,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 # RK_DEV_ENV_CANDIDATE_END
-# RK_GATE_JOB_BEGIN
-# RK_GATE_JOB_END
+# RK_MERGE_JOB_BEGIN
+# RK_MERGE_JOB_END

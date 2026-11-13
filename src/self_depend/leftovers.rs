@@ -12,7 +12,7 @@
 use camino::Utf8Path;
 use serde::Serialize;
 
-use super::has_sync_line;
+use super::has_check_line;
 use super::pin::PIN_PREFIX;
 use crate::error::RkError;
 
@@ -50,8 +50,10 @@ pub struct Leftover {
     pub reason: &'static str,
 }
 
-/// The lines a predecessor's `.envrc` invocation names.
-const ENVRC_NEEDLES: [&str; 2] = ["rk-bump", "rk-autobump"];
+/// The lines a predecessor's `.envrc` invocation names: the hand-rolled
+/// scripts, and the sync line rk 0.9.14 and older seeded, which the check
+/// line replaces.
+const ENVRC_NEEDLES: [&str; 3] = ["rk-bump", "rk-autobump", "rk self-depend sync"];
 
 /// The host install lines the devshell pin supersedes.
 const HOST_INSTALL_NEEDLES: [&str; 2] = ["cargo install release-kit", "cargo binstall release-kit"];
@@ -110,7 +112,7 @@ pub fn scan(target: &Utf8Path) -> Result<Vec<Leftover>, RkError> {
                 line: Some(number),
                 text: Some(line),
                 action: Action::ReplaceLine,
-                reason: "the invocation gives way to the sync line",
+                reason: "the invocation gives way to the check line",
             });
         }
     }
@@ -174,21 +176,21 @@ pub fn scan(target: &Utf8Path) -> Result<Vec<Leftover>, RkError> {
     Ok(found)
 }
 
-/// Rewrite an `.envrc` so the sync line replaces the invocation.
+/// Rewrite an `.envrc` so the check line replaces the invocation.
 ///
-/// Every line naming the predecessor invocation goes, and the sync line
+/// Every line naming the predecessor invocation goes, and the check line
 /// takes the first removed line's place unless the file already carries
 /// one. Every other line is byte-identical. `None` where no line names
 /// the invocation.
 #[must_use]
-pub fn swap_envrc(text: &str, sync_line: &str) -> Option<String> {
-    let mut out = String::with_capacity(text.len() + sync_line.len() + 2);
+pub fn swap_envrc(text: &str, check_line: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len() + check_line.len() + 2);
     let mut removed = 0;
-    let needs_line = !has_sync_line(text);
+    let needs_line = !has_check_line(text);
     for line in text.split_inclusive('\n') {
         if ENVRC_NEEDLES.iter().any(|needle| line.contains(needle)) {
             if removed == 0 && needs_line {
-                out.push_str(sync_line);
+                out.push_str(check_line);
                 out.push_str(if line.ends_with("\r\n") { "\r\n" } else { "\n" });
             }
             removed += 1;
@@ -412,17 +414,23 @@ mod tests {
 
     #[test]
     fn the_envrc_swap_keeps_every_other_line() {
+        let check = "rk self-depend check || true";
         let text = "use flake\r\n# keep\r\n# The bump runs rk-autobump on entry\r\nscripts/rk-autobump.sh || true\r\nexport FOO=1\r\n";
-        let swapped = swap_envrc(text, "rk self-depend sync --apply || true").expect("a swap");
+        let swapped = swap_envrc(text, check).expect("a swap");
         assert_eq!(
             swapped,
-            "use flake\r\n# keep\r\nrk self-depend sync --apply || true\r\nexport FOO=1\r\n"
+            "use flake\r\n# keep\r\nrk self-depend check || true\r\nexport FOO=1\r\n"
         );
-        let already = "rk self-depend sync --apply || true\nscripts/rk-bump.sh\n";
+        let already = "rk self-depend check || true\nscripts/rk-bump.sh\n";
         assert_eq!(
-            swap_envrc(already, "rk self-depend sync --apply || true").expect("a swap"),
-            "rk self-depend sync --apply || true\n",
-            "an existing sync line is not doubled"
+            swap_envrc(already, check).expect("a swap"),
+            "rk self-depend check || true\n",
+            "an existing check line is not doubled"
+        );
+        assert_eq!(
+            swap_envrc("use flake\nrk self-depend sync --apply || true\n", check).expect("a swap"),
+            "use flake\nrk self-depend check || true\n",
+            "the retired sync line gives way to the check line"
         );
         assert_eq!(swap_envrc("use flake\n", "x"), None);
     }

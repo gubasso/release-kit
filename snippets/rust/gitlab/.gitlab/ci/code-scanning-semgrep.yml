@@ -19,14 +19,15 @@
 code-scanning:
   stage: test
   image: semgrep/semgrep:1.177.0
-  # The trunk and the release lines, never a merge request: this pipeline's
-  # merge check is the whole pipeline, so a scan that blocked a merge would
-  # block it on a finding the author cannot triage in the request.
+  # A push to the trunk and the release lines, never a merge request: this
+  # pipeline's merge check is the whole pipeline, so a scan that blocked a
+  # merge would block it on a finding the author cannot triage in the
+  # request. The API pipeline that merges a release runs the merge job alone.
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH"'
-    - if: '$CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   # The public rust ruleset, named rather than resolved: --config auto asks
   # the registry which rules apply and needs an account token, which this
   # convention does not ask a target to hold.

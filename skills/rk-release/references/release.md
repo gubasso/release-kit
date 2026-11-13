@@ -4,7 +4,7 @@ Ship the version the release request proposes, or hold it, or correct its change
 
 ## Pre-flight
 
-1. Hold `style`, `symptoms`, and `request` from `rk release status --target . --json`: the request's number, `proposed_version`, `armed`, `checks`, and `behind_trunk`. That report observes the trunk alone. For a line, read the line's own request as `rk guide backport` step 7 does.
+1. Hold `style`, `symptoms`, and `request` from `rk release status --target . --json`: the request's number, `proposed_version`, `checks`, and `behind_trunk`. That report observes the trunk alone. For a line, read the line's own request as `rk guide backport` step 7 does.
 2. Where `symptoms` is not empty, hand them to `recover` first.
 3. Where the request asks to hold a version whose request already merged, it is a release that must not ship: hand it to `recover`.
 4. Where `request.state` is `none` and no symptom shows, no release request is open: report that, and stop. It does not prove the trunk matches the last version, because the bot can still be opening the next request.
@@ -16,24 +16,19 @@ Work that lands while the request is open ships in its refresh or the next relea
 
 First, as the run's first planned step, run `rk setup step package-check --target . --apply`, and confirm it exits 0: the trunk is releasable. Without `--apply` the step only names the commands it would run. It changes no tracked file, though the binding's packaging tool writes its build output, such as cargo's under `target/`. Where it fails, stop before any release action. How the work reached the trunk is the project's own workflow.
 
-Then by `style`:
+No request merges itself under either style, so the operator's one question is whether the changelog entry is complete and the release ships now.
 
-| Style   | The request                                        | The operator's one question      |
-| ------- | -------------------------------------------------- | -------------------------------- |
-| `trunk` | armed, so it merges itself on the last green check | ship as is, or hold?             |
-| `lines` | unarmed, so a person merges it                     | is the changelog entry complete? |
-
-1. To hold, disarm the request before its last check passes, the guide's step 3b, as a release action. A request that already merged is a withdrawal, not a hold, so hand it to `recover`.
-2. To correct the changelog, compare the entry against the commit range (3c), correct it on the request's branch (3d), and confirm the request survived the bot's refresh (3e). On an armed request, hold first, because a push restarts the checks it would race. Check the bot's branch out the way the project likes, with `rk worktree add` as one helper.
-3. To merge: an armed request is watched, with nothing to run. An unarmed request is merged as a release action once its checks pass (4a).
-4. Bind the merge commit the release runs on (4b), and hold its commit ID.
+1. To hold, do nothing: the request waits for the operator's order. A request that already merged is a withdrawal, not a hold, so hand it to `recover`.
+2. To correct the changelog, compare the entry against the commit range (3b), correct it on the request's branch (3c), and confirm the request survived the bot's refresh (3d). The correction is the last step before the merge. Check the bot's branch out the way the project likes, with `rk worktree add` as one helper.
+3. To merge on the trunk, preview with `rk release merge --target .` once the checks pass, and confirm it names the request and the version the operator read (4a). Then run `rk release merge --target . --apply` as the release action (4b). It dispatches the merge job and waits for that one run. Where it refuses, report the proof it names, and stop: the request stays open.
+4. Bind the merge commit the release runs on (4c), from the verb's report, and hold its commit ID.
 
 ## Post-flight
 
 Where the run held the request or corrected its changelog, and nothing merged:
 
-1. After a hold on the trunk, run `rk release status --target . --json`, and confirm that `armed` reads `no` for the request the run held. A line's request is never armed, so a hold there is a merge not made: read that request again as `rk guide backport` step 7 does, and confirm it is still open.
-2. After a correction, read the changelog entry on the request's branch again, as the guide's step 3e does, and compare it with the correction the run made. Where a refresh overwrote it, redo the correction (3d). Where it cannot be read, report it as unknown.
+1. After a hold on the trunk, run `rk release status --target . --json`, and confirm that the request is still open and that no `request-armed` symptom shows. On a line, a hold is a merge not made: read that request again as `rk guide backport` step 7 does, and confirm it is still open.
+2. After a correction, read the changelog entry on the request's branch again, as the guide's step 3d does, and compare it with the correction the run made. Where a refresh overwrote it, redo the correction (3c). Where it cannot be read, report it as unknown.
 3. Fill the report's evidence line as `held at <step>`.
 
 After a merge on the trunk:

@@ -89,11 +89,9 @@ struct Security {
 /// The setup answers a landing renders.
 #[derive(Debug, Serialize)]
 struct Setup {
-    /// The check the release gate believes, empty where nothing answered it.
+    /// The check the trunk ruleset requires, empty where nothing answered
+    /// it.
     required_check: String,
-    /// The workflow whose completion wakes the release gate, empty where
-    /// nothing answered it.
-    required_workflow: String,
     /// The bot identity's name, empty where the forge's default applies.
     bot_name: String,
 }
@@ -354,7 +352,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.profile/5",
+        schema: "rk.profile/6",
         target: args.target.to_string(),
         profile: params.profile().clone(),
         git: params.git().clone(),
@@ -367,7 +365,6 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
         },
         setup: Setup {
             required_check: params.required_check().to_owned(),
-            required_workflow: params.required_workflow().to_owned(),
             bot_name: resolved.bot_name.clone(),
         },
         landing: LandingDeclaration { accepted_drift },
@@ -391,11 +388,11 @@ mod tests {
     };
     use crate::stage::{CapabilityNote, Note};
 
-    /// The complete `rk.profile/5` shape, held by snapshot.
+    /// The complete `rk.profile/6` shape, held by snapshot.
     #[test]
     fn the_profile_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.profile/5",
+            schema: "rk.profile/6",
             target: "/tmp/t".into(),
             profile: ProfileSnapshot {
                 technologies: vec!["python".into(), "rust".into()],
@@ -430,7 +427,6 @@ mod tests {
             },
             setup: Setup {
                 required_check: String::new(),
-                required_workflow: String::new(),
                 bot_name: String::new(),
             },
             landing: super::LandingDeclaration {
@@ -458,7 +454,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.profile/5","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort","scope":""},"setup":{"required_check":"","required_workflow":"","bot_name":""},"landing":{"accepted_drift":{}},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
+            r#"{"schema":"rk.profile/6","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort","scope":""},"setup":{"required_check":"","bot_name":""},"landing":{"accepted_drift":{}},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
         );
     }
 }

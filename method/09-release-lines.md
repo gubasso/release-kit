@@ -4,7 +4,7 @@ The line as an object, across its whole life. [Branch for release](./07-branch-f
 
 ## The sequence
 
-1. Record the style. A project that keeps older lines lands `--release-style lines`: its release request is never armed, because a line's release is a promotion of something a human validated, and `rk status` is where a clone, a CI job, and an agent read that answer.
+1. Record the style. A project that keeps older lines lands `--release-style lines`: a person merges each line's release request, because a line's release is a promotion of something a human validated, and `rk status` is where a clone, a CI job, and an agent read that answer.
 2. Wire the repository for lines, once: `release/*` takes no force-push and no deletion while a line is alive, and the landed release workflow already watches `release/**`, so a line gets its own release request, which a bash or python pair keeps on the branch `rk-release/release/<line>`. The project's own CI is the second half of that wiring and release-kit writes none of it: a pull-request filter selects by base branch, so a request opened against a line starts no run of a workflow naming the trunk alone, and the check the trunk protection requires never reports on the line.
 3. Open the line from the tag it patches. The base is chosen and stated — never the trunk's tip by default — and a line can be cut retroactively, days later, from any commit or tag.
 4. Cross the fix from the trunk. Fix on the trunk first, cherry-pick only that commit; [branch for release](./07-branch-for-release.md) owns the path and its four failure modes.
@@ -17,9 +17,9 @@ The line as an object, across its whole life. [Branch for release](./07-branch-f
 
 Beside a release line, a candidate is the prerelease `v<version>-rc.<n>` a human validates: `rk lines mint` prepares it and `rk lines rc` reads it. The release an installed `rk` renders into a stage before a landing is a different object, and it keeps the staging vocabulary: `rk stage` writes it, and `rk stage compare` reads it against the target.
 
-## Why the request is never armed on a line
+## Why a person merges a line's request
 
-The trunk style's standing arm exists because every trunk commit is already releasable, so a green check is the whole decision. A line inverts that: the thing being released is a candidate a human validated by hand, and the checks cannot see the validation. An armed line request would promote on CI's word alone, which is exactly the judgment this style exists to keep human. The style parameter is what the landed workflow reads — `lines` renders the arm inert — and the arm itself steps aside off the trunk, so nothing on a line merges itself under either style.
+No release request merges itself under either style: a release waits for the operator's order. On a line that order is a person's merge, because the thing being released is a candidate a human validated by hand, and the checks cannot see the validation. A line request merged on CI's word alone would skip exactly the judgment this style exists to keep human.
 
 ## The cost of a line
 
@@ -27,4 +27,4 @@ Every fix that crosses runs CI twice — once guarding the trunk, once guarding 
 
 ## When a line is the wrong answer
 
-The five-question table in [the model](./00-model.md) decides. Every user movable forward, several ships a week, nobody pinned: release from the trunk, and let the armed request ship it. A line answers pinned self-hosted versions, a support contract on an old line, or a sign-off gate before a ship — and it is cut the day someone actually needs it, retroactively from the tag, never ahead of the need.
+The five-question table in [the model](./00-model.md) decides. Every user movable forward, several ships a week, nobody pinned: release from the trunk, and merge the open request when the release should ship. A line answers pinned self-hosted versions, a support contract on an old line, or a sign-off gate before a ship — and it is cut the day someone actually needs it, retroactively from the tag, never ahead of the need.

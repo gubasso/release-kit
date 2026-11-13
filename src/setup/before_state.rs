@@ -33,7 +33,7 @@ pub const DESTRUCTIVE: [&str; 7] = [
     "protect-trunk",
     "protect-tags",
     "protect-release-lines",
-    "auto-merge",
+    "merge-on-order",
 ];
 
 /// Whether `step` removes or replaces forge state.
@@ -53,7 +53,9 @@ pub fn reads(ctx: &Ctx, step: &str) -> Vec<String> {
         Forge::Github => {
             let repo = &ctx.repo;
             match step {
-                "default-branch" | "merge-cleanup" | "auto-merge" => vec![format!("repos/{repo}")],
+                "default-branch" | "merge-cleanup" => vec![format!("repos/{repo}")],
+                // merge-on-order disarms the open release requests.
+                "merge-on-order" => vec![format!("repos/{repo}/pulls?state=open&per_page=100")],
                 // protect-trunk also rewrites the squash settings.
                 "protect-trunk" => vec![
                     format!("repos/{repo}"),
@@ -71,9 +73,15 @@ pub fn reads(ctx: &Ctx, step: &str) -> Vec<String> {
         Forge::Gitlab => {
             let project = ctx.repo.replace('/', "%2F");
             match step {
-                "default-branch" | "merge-cleanup" | "auto-merge" => {
+                "default-branch" | "merge-cleanup" => {
                     vec![format!("projects/{project}")]
                 }
+                // merge-on-order asserts the pipeline requirement and
+                // disarms the open release requests.
+                "merge-on-order" => vec![
+                    format!("projects/{project}"),
+                    format!("projects/{project}/merge_requests?state=opened&per_page=100"),
+                ],
                 // protect-trunk also rewrites the merge settings.
                 "protect-trunk" => vec![
                     format!("projects/{project}"),

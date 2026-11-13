@@ -1,11 +1,8 @@
 //! The engine's judgments, pure.
 //!
-//! What the request proposes, whether it arms, and which outcome a push
-//! gets. The actions gather the facts; these
-//! rules alone decide what they mean, so each is testable without a forge.
-
-use crate::detect::Forge;
-use crate::landing::manifest::{Integration, Style};
+//! What the request proposes, and which outcome a push gets. The actions
+//! gather the facts; these rules alone decide what they mean, so each is
+//! testable without a forge.
 
 use super::adapter::Version;
 
@@ -71,26 +68,6 @@ pub fn propose(current: Version, released: bool, cliff: Option<&str>) -> Proposa
         ));
     }
     Proposal::Propose(next)
-}
-
-/// Whether the request for `base` arms itself.
-///
-/// SATISFIES release-engine:the-request-arms-where-the-projection-arms
-///
-/// The trunk style arms its request on the trunk, except on GitHub under
-/// local integration, where the rendered gate job merges it. The lines
-/// style and every line leave the merge to a person.
-#[must_use]
-pub fn arms(
-    forge: Forge,
-    integration: Integration,
-    style: Option<Style>,
-    base: &str,
-    trunk: &str,
-) -> bool {
-    style == Some(Style::Trunk)
-        && base == trunk
-        && !(forge == Forge::Github && integration == Integration::Local)
 }
 
 /// What a tag read answered.
@@ -231,9 +208,7 @@ pub fn judge(head: &str, tag_name: &str, existing: Existing, tag: &TagAt) -> Out
 
 #[cfg(test)]
 mod tests {
-    use super::{Existing, Outcome, Parent, Proposal, Push, TagAt, arms, judge, propose, trigger};
-    use crate::detect::Forge;
-    use crate::landing::manifest::{Integration, Style};
+    use super::{Existing, Outcome, Parent, Proposal, Push, TagAt, judge, propose, trigger};
     use crate::release_engine::adapter::Version;
 
     fn v(text: &str) -> Version {
@@ -271,46 +246,6 @@ mod tests {
                 "{prerelease}"
             );
         }
-    }
-
-    #[test]
-    fn only_the_trunk_style_on_the_trunk_arms() {
-        let trunk = Some(Style::Trunk);
-        assert!(arms(
-            Forge::Github,
-            Integration::Forge,
-            trunk,
-            "master",
-            "master"
-        ));
-        assert!(arms(
-            Forge::Gitlab,
-            Integration::Local,
-            trunk,
-            "master",
-            "master"
-        ));
-        assert!(!arms(
-            Forge::Github,
-            Integration::Local,
-            trunk,
-            "master",
-            "master"
-        ));
-        assert!(!arms(
-            Forge::Gitlab,
-            Integration::Forge,
-            Some(Style::Lines),
-            "master",
-            "master"
-        ));
-        assert!(!arms(
-            Forge::Gitlab,
-            Integration::Forge,
-            trunk,
-            "release/1.4",
-            "master"
-        ));
     }
 
     #[test]

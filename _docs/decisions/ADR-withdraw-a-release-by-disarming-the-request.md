@@ -22,4 +22,4 @@ Chosen option: `disarm, then close` — the hold on an armed request is one comm
 
 ## Status
 
-Accepted.
+Superseded by [release only on the operator's order](./ADR-release-only-on-the-operators-order.md).

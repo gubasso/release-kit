@@ -9,10 +9,10 @@ Change what a record selects, on a record at this binary's version: the Git work
 3. State the consequence of each requested change in one line:
    - the checkout mode: branches open across the change follow the transition in `rk method worktrees`;
    - the integration mode: moving between `local` and `forge` rewrites the hook block and the routing block, and changes who integrates;
-   - the release style: `trunk` arms the release request, and `lines` waits for a person, so an open request changes behavior;
+   - the release style: `trunk` ships from the trunk alone, and `lines` keeps older lines whose candidates a person validates;
    - a capability turned on lands its files, and turned off removes each one nobody edited and leaves an edited one as a dropped file whose removal is asked. The Scorecard workflow posts to a public API, and `codeql` reads the declared licence;
    - the workflow guards: on lands the agent and commit policy lines, the glossary, the workflow hooks, and two setup steps, and off retires them the same way;
-   - the required check, the required workflow, and the trunk name.
+   - the required check and the trunk name. `setup.required_workflow` is retired, and every verb refuses a configuration that still carries it.
 4. Where the request is to change where a rust crate publishes, `profile.release.registry` between `crates-io` and `none`, state that a landing never rewrites the seeded `release-plz.toml`. The operator edits it by hand in the same change: `publish = false` with `git_only = true` for `none`, and `publish = true` with no `git_only` for `crates-io`. Then run `rk upgrade --apply`. `rk status --check` reports a `release-plz.toml` that disagrees with the answer.
 5. Where the request is to run the release jobs in the project's own development environment, ask the operator for the answer: the command prefix, and the pinned steps or image that put the environment on the runner. Quote the matching example of `rk binding rust`, section "The development environment", as an example and never as a default. Read no manager file to propose a value. Before the landing, ask the operator to run `<run> release-plz --version` and to paste the output.
 
@@ -27,5 +27,5 @@ Where the gate composes this task after a landing task, add its answers to that 
 
 1. The Prove step passed, and `rk status --target . --json` reports `current` with the new answers.
 2. Regenerate what a changed configuration generates, as a gated step.
-3. Name the follow-ups the change causes under "Still the operator's": an armed or disarmed release request goes to the `rk-release` skill, and branches open across a checkout-mode change follow `rk guide worktree`.
+3. Name the follow-ups the change causes under "Still the operator's": an open release request goes to the `rk-release` skill, and branches open across a checkout-mode change follow `rk guide worktree`.
 4. Remove each dropped file the operator chose to remove, as a gated step after a commit.

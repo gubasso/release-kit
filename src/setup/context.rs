@@ -314,11 +314,6 @@ pub struct Ctx {
     pub host: Option<String>,
     /// The value of `--required-check`, where given.
     pub required_check: Option<String>,
-    /// The committed `setup.required_workflow`, on GitHub alone. No flag
-    /// answers it: the setup never writes it, it reads it to prove that
-    /// the workflow the release gate waits on is the workflow that carries
-    /// the check the gate judges.
-    pub required_workflow: Option<String>,
     /// The resolved forge CLI binary.
     pub cli: PathBuf,
     /// The detected technology, where the version file names one.
@@ -457,8 +452,6 @@ impl Ctx {
             Some(answers.required_check.clone())
                 .filter(|name| !name.is_empty() && forge == Some(Forge::Github))
         });
-        let required_workflow = Some(answers.required_workflow.clone())
-            .filter(|name| !name.is_empty() && forge == Some(Forge::Github));
         let bot_app_id = Some(answers.bot.app_id.clone()).filter(|id| !id.is_empty());
         let bot_name = Some(answers.bot.name.trim().to_owned()).filter(|name| !name.is_empty());
         let trunk = resolved.trunk().to_owned();
@@ -479,7 +472,6 @@ impl Ctx {
             forge,
             host: detected.host,
             required_check,
-            required_workflow,
             cli,
             tech: resolved.driver().and_then(|driver| {
                 ["rust", "python", "bash"]
@@ -626,7 +618,6 @@ impl Ctx {
             },
             host: None,
             required_check: None,
-            required_workflow: None,
             cli,
             tech,
             trunk: crate::config::TRUNK_DEFAULT.to_owned(),
@@ -879,10 +870,6 @@ impl Ctx {
             "required_check",
             self.required_check.clone().unwrap_or_default(),
         );
-        put(
-            "required_workflow",
-            self.required_workflow.clone().unwrap_or_default(),
-        );
         put("bot_app_id", self.bot_app_id.clone().unwrap_or_default());
         // Only where it is set: a proof counts a key one side lacks as a
         // change, so an always-present key would turn every proof committed
@@ -953,6 +940,14 @@ impl Ctx {
             ),
             ("RK_TRUNK_BRANCH".into(), self.trunk.clone().into()),
             ("RK_LINE_PREFIX".into(), self.line_prefix.clone().into()),
+            // The head-branch prefix of the release driver's own request,
+            // which merge-on-order disarms.
+            (
+                "RK_REQUEST_PREFIX".into(),
+                crate::projection::release_driver_shape(self.driver())
+                    .unwrap_or_default()
+                    .into(),
+            ),
             ("RK_TRUNK_RULESET".into(), self.trunk_ruleset.clone().into()),
             (
                 "RK_SAFETY_RULESET".into(),

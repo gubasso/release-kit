@@ -24,7 +24,7 @@ master:  A──B──C──D──E──F──G──H
 
 Then a customer reports that v1.0.0 crashes on an empty CSV upload. The two styles diverge entirely on how that report is answered.
 
-## Why an armed release waits
+## Why a stale release waits
 
 The gate is judged at each merge attempt. A refusal runs no workflow: freshness is a merge precondition, not a workflow trigger.
 
@@ -33,7 +33,7 @@ merge attempt
   ├─ pull request, squash only, no bypass
   ├─ required project gate and pr-title check pass
   └─ head carries the trunk's current tip     # freshness clause added by strictness
-       no  → refuse; the armed request waits; no workflow dispatched
+       no  → refuse; the request waits; no workflow dispatched
        yes → merge when the other conditions hold
 ```
 
@@ -42,7 +42,6 @@ The race uses issue 107's recorded clock and request states, with the strict gat
 ```text
 clock     event                       trunk state         release request state
 19:05:45  #26 opens                   #25 at 117e126      v0.1.10; covers #25
-19:05:47  bot arms #26                #25                 auto-merge enabled
 19:12:47  breaking #27 merges         #27 at de4efdd      head 96639f6; still v0.1.10
 19:12:50  release-plz run for #27     #27                 release-pr job succeeds;
           succeeds                                        head still 96639f6
@@ -50,25 +49,24 @@ clock     event                       trunk state         release request state
                                                           # loose gate merges here
 ```
 
-The repair continues the model: a successful job alone does not prove the request refreshed. The bot must rebuild the request on the new trunk tip and recompute its version and changelog. The bot-only GitHub branch takes the force-push path; a non-bot commit makes the bot close and reopen instead. The workflow re-arms on every refresh using the returned request number, so either path restores the arm. The clock below is an offset from the trunk move, measured on one observed repair; the first step is the bot's own run and the second is the project's gate, so a project reads its own gate duration into the third column.
+The repair continues the model: a successful job alone does not prove the request refreshed. The bot must rebuild the request on the new trunk tip and recompute its version and changelog. The bot-only GitHub branch takes the force-push path; a non-bot commit makes the bot close and reopen instead. The clock below is an offset from the trunk move, measured on one observed repair; the first step is the bot's own run and the second is the project's gate, so a project reads its own gate duration into the third column.
 
 ```text
 offset  event                                   trunk state    release request state
 +0s     breaking #27 merges                     #27            behind; the merge is refused
 +40s    bot refresh rebuilds on #27             #27            v0.2.0; covers #25 AND #27
-        workflow re-arms                        #27            armed on refreshed request
         # recompute, not a plain branch update
 +7m16s  refreshed checks pass                   #27            tested with #27; current
-+7m27s  forge merges automatically              #27──R         merged; v0.2.0 tags R
++7m27s  the operator's merge lands               #27──R         merged; v0.2.0 tags R
 
 resulting trunk                            changelog at R
 117e126 ── de4efdd ── R (v0.2.0)           #25: feature
    #25        #27                          #27: breaking change
               breaking                     minor bump signals the break
-# The trunk range, version, and entry now agree; no human release action.
+# The trunk range, version, and entry now agree.
 ```
 
-An ordinary request needs its author's deliberate update when it falls behind. Native auto-merge does not update the branch.
+An ordinary request needs its author's deliberate update when it falls behind. Nothing updates the branch by itself.
 
 ```text
 local check → push → request checks run → trunk moves
@@ -81,12 +79,12 @@ local check → push → request checks run → trunk moves
                        # and the slowest of them is the whole wait
 ```
 
-| Cost or outcome                                | Loose policy       | Strict policy                                                                                             |
-| ---------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
-| Request-check runs, one intervening trunk move | One initial set    | That set again after the update, one run per triggering workflow; another move can require another update |
-| Commands per ordinary merge after pushing      | Merge, or arm once | Same, plus one branch update per stale attempt                                                            |
-| Human acts per armed release                   | None               | None; the bot rebuilt and the workflow re-armed within 40 seconds of the trunk move                       |
-| Wrong version from this stale-merge race       | Can ship           | Refused until the bot recomputes on the trunk's tip                                                       |
+| Cost or outcome                                | Loose policy    | Strict policy                                                                                             |
+| ---------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| Request-check runs, one intervening trunk move | One initial set | That set again after the update, one run per triggering workflow; another move can require another update |
+| Commands per ordinary merge after pushing      | Merge           | Same, plus one branch update per stale attempt                                                            |
+| Human acts per release                         | One merge       | One merge; the bot rebuilt the request within 40 seconds of the trunk move                                |
+| Wrong version from this stale-merge race       | Can ship        | Refused until the bot recomputes on the trunk's tip                                                       |
 
 ## Reproduce on the trunk
 
@@ -119,7 +117,14 @@ Dependencies follow the same rule. An update that changes what ships is `fix(dep
 
 ## Release
 
-The bot has been maintaining the release request all along, and it has stood armed since it was opened: the moment the fix's merge refreshes it and its own check goes green, the forge merges it. Nobody clicks anything, and nobody waits for whoever would have. That merge is the release: automation tags the push that lands the bump and publishes.
+The bot has been maintaining the release request all along, and the fix's merge refreshed it. Nothing merges it before the operator's order, and one release is four steps:
+
+1. Read the open release request and its changelog section.
+2. If the changelog needs a correction, push it as the last commit on the request's branch, because the bot regenerates the request on every trunk push.
+3. Run `rk release merge --apply`. It reads the request, the trunk tip, and the request's head, then dispatches the merge job with exactly those values. The job runs as the release App, which no ruleset bypasses, proves that the operator ordered it and that nothing moved, and merges with the head pinned.
+4. Read the release state, and make sure that the tag, the release page, and the assets exist.
+
+That merge is the release: automation tags the push that lands the bump and publishes. The merge runs as the App rather than as the operator because under local integration the operator's own credential bypasses the trunk ruleset, and the strict check must hold at the write. A release line keeps the merge by a person.
 
 ```text
 master:  A──B──C──D──E──F──G──H──I──R
@@ -139,7 +144,7 @@ Shipping the fix meant shipping E, F, G, and H too. That is acceptable only unde
 
 ## Holding one
 
-A release that must not ship is stopped at the request, before its last check turns green: disarm it, and it waits like any unarmed request. After the merge there is nothing to stop — the version is public — and the answer is the withdrawal in [recovery](./04-recovery.md). That is the trade the style makes, and a project that needs a human between every green trunk and every publish is describing a sign-off gate, which is [branch for release](./07-branch-for-release.md)'s precondition, not this one's.
+A release that must not ship needs no action: the request waits until the operator orders the merge, and it keeps collecting changes meanwhile. After the merge there is nothing to stop — the version is public — and the answer is the withdrawal in [recovery](./04-recovery.md). A project that needs a validated candidate on an older line is describing [branch for release](./07-branch-for-release.md)'s precondition, not this one's.
 
 ## A timeline
 
@@ -148,8 +153,8 @@ A release that must not ship is stopped at the request, before its last check tu
 09:30  reproduced at the trunk's tip; failing test written
 09:52  pull request opened
 10:05  CI green, review approved, squash-merged as commit I
-10:07  the release request's check goes green; the forge merges it and
-       automation tags v1.1.0 — no one was asked
+10:07  the release request's check goes green; the operator runs
+       rk release merge --apply, and automation tags v1.1.0
 10:19  publish and artifact pipeline finish
        Bob merged an unrelated pull request at 09:58; it shipped in the same
        release, and nobody cared.

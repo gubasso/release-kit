@@ -36,6 +36,30 @@ Verify: `cargo nextest run -E 'test(release_status_reads_unknown_without_credent
 
 Verify: `cargo nextest run -E 'test(release_status_reports_each_request_state) or test(release_status_reads_the_release_page_for_a_crate_with_no_registry)'`
 
+### `release-state:an-armed-request-fails-the-report` — An armed request fails the report
+
+Where the open release request stands armed to merge itself, the report MUST list the symptom `request-armed` with the request's number and the call that disarms it, naming the recovery section "A release request stands armed", and `rk release status` MUST exit non-zero after it rendered the whole report, because a release happens only on the operator's order and an arm that an older rk left standing would release without it. `rk status` and `rk status --check` MUST stay offline and MUST NOT judge an arm.
+
+#### Scenario: An older rk left the request armed
+
+- GIVEN a landed target whose open release request carries auto-merge on GitHub, or merges when its pipeline succeeds on GitLab
+- WHEN `rk release status --json` runs
+- THEN the report lists `request-armed` with the disarm call, and the verb exits non-zero
+
+Verify: `cargo nextest run -E 'test(release_status_fails_on_an_armed_request) or test(release_status_reports_each_request_state)'`
+
+### `release-state:the-operator-merges-through-the-verb` — The operator merges through the verb
+
+`rk release merge` MUST read the one open release request against the trunk, the trunk tip, the request's head, the required check or the head pipeline for that head, and the proposed version, and without `--apply` MUST write and dispatch nothing, in one `rk.release-merge/1` document. It MUST refuse where no request or several requests stand open against the trunk, and under `--apply` where the head's check has not passed, because the merge job would refuse it anyway. Under `--apply` it MUST dispatch the landed merge job with exactly the values it read and a fresh correlation, MUST wait for that one run and for no other, and MUST report the merge commit and the `rk release status --wait` command that follows the release. It MUST read whether the request merged from the request itself after the run, and MUST report a merge even where the run then failed, because a cleanup can fail after the write. It MUST make no merge call itself, because the job proves the operator's order as the release App.
+
+#### Scenario: The operator merges the trunk's release request
+
+- GIVEN a landed target with one open release request whose check passed
+- WHEN `rk release merge --apply` runs while another run of the same workflow concludes
+- THEN it dispatches the merge job with the request, the trunk tip, the head, and a correlation, waits for the run that carries that correlation, and reports the merge
+
+Verify: `cargo nextest run -E 'test(release_merge_previews_without_apply) or test(release_merge_refuses_zero_or_two_candidates) or test(the_wait_follows_only_the_correlated_run) or test(release_merge_dispatches_nothing_for_a_red_check) or test(the_merge_outcome_is_read_from_the_request)'`
+
 ### `release-state:a-symptom-names-its-recovery` — A symptom names its recovery
 
 When the observed state shows a merged release request whose version has no tag or no published version, a published version whose release page carries no artifact, or an artifact no attestation covers, the report MUST list the symptom under its stable code, `request-merged-nothing-published`, `published-no-artifacts`, or `artifact-without-attestation`, with its evidence and the `rk method recovery` section that owns the path. Where the tag is absent and the registry already holds the version, the evidence MUST say so, because a published version closes the un-bump and leaves the rerun at the same commit. Each release tag newer than the newest complete release of its own line, with no complete page itself, MUST be listed as `tag-without-release`: the trunk and each release line keep their own cutoff, a complete page is one with artifacts for a pair that builds them and one that exists for any other, and the read walks each line newest first and stops at its first complete page, so a tag older than a complete release of its line drops out and an accepted gap needs no record. Where the forge's tag list was read, each `v<version>` tag the clone holds, a candidate included, MUST be compared with it by commit, an annotated tag by the commit it points to: a tag the forge holds at another commit MUST be listed as `local-tag-differs` with both commits, and a tag the forge does not hold as `local-tag-not-on-forge` with its commit, each naming "A clone holds a stale release tag", stating that the forge holds the true release tags, and ending with its refresh, the single-tag forced fetch for the first and the pruning fetch of every `v*` tag for the second. A tag only the forge holds is no symptom.

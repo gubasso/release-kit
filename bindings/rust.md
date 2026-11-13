@@ -50,7 +50,7 @@ With an answer, the release jobs run `release-plz release` and `release-plz rele
 - `cargo-semver-checks`, where `release-plz.toml` sets `semver_check = true`.
 - `dist`, at the pin of `dist-workspace.toml`, where the target builds artifacts. The dist jobs take it from the environment too, as [the artifact workflow pin](#the-artifact-workflow-pin) shows.
 
-The prefix keeps the caller's environment, because release-plz reads the GitHub OIDC variables to issue its crates.io token. `nix develop`, `mise exec`, and `devbox run` keep it. On GitLab, the image carries `curl` and `sed`, which the token exchange and the request arm call outside the prefix.
+The prefix keeps the caller's environment, because release-plz reads the GitHub OIDC variables to issue its crates.io token. `nix develop`, `mise exec`, and `devbox run` keep it. On GitLab, the image carries `curl` and `sed`, which the token exchange calls outside the prefix.
 
 Before the first release under the answer, prove that the environment carries release-plz:
 

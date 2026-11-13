@@ -412,13 +412,8 @@ pub fn canonical_response(raw: &str) -> Result<String, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Setup {
-    /// P: the check the trunk ruleset requires in both modes. Under local
-    /// integration the rendered release gate judges it too.
+    /// P: the check the trunk ruleset requires in both modes.
     pub required_check: String,
-    /// P: the workflow name whose completion wakes the release gate.
-    /// GitHub alone, because a `workflow_run` trigger cannot name a check
-    /// and cannot omit the workflow.
-    pub required_workflow: String,
     /// N: long-lived branches retired by the trunk.
     pub retired_branches: Vec<String>,
     /// N: run release-line protection in a full apply.
@@ -436,7 +431,6 @@ impl Default for Setup {
     fn default() -> Self {
         Self {
             required_check: String::new(),
-            required_workflow: String::new(),
             retired_branches: vec!["main".into(), "develop".into()],
             release_lines: false,
             excluded_steps: BTreeMap::new(),
@@ -827,6 +821,7 @@ fn parse(text: &str) -> Result<Config, RkError> {
         )));
     }
     release_vocabulary(&raw)?;
+    retired_keys(&raw)?;
     let config: Config = toml::from_str(&text).map_err(|error: toml::de::Error| {
         let mut message = error.to_string();
         if let Some(rest) = error.message().strip_prefix("unknown field `") {
@@ -936,6 +931,9 @@ fn migration_key(config: &Config) -> Result<(), RkError> {
 /// and a line that names a step and says nothing tells them neither.
 fn exclusions(excluded: &BTreeMap<String, String>) -> Result<(), RkError> {
     for (name, reason) in excluded {
+        if name == "auto-merge" {
+            return Err(retired_auto_merge_exclusion());
+        }
         if crate::setup::steps::spec(name).is_none() {
             let nearest = crate::setup::steps::STEPS
                 .iter()
@@ -952,6 +950,26 @@ fn exclusions(excluded: &BTreeMap<String, String>) -> Result<(), RkError> {
         }
     }
     Ok(())
+}
+
+/// The refusal of an exclusion that names the retired step `auto-merge`.
+/// Its successor `merge-on-order` disarms a release request, so the old
+/// exclusion is never carried over silently.
+fn retired_auto_merge_exclusion() -> RkError {
+    // SATISFIES target-config:a-retired-key-refuses-by-name
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::ConfigInvalid,
+            format!(
+                "{CONFIG_PATH}: setup.excluded_steps names auto-merge, which is retired: the step is now merge-on-order, and it disarms each armed release request"
+            ),
+        )
+        .expected(format!("a [setup.excluded_steps] table in {CONFIG_PATH} without auto-merge"))
+        .action(format!(
+            "remove auto-merge from setup.excluded_steps in {CONFIG_PATH} by hand, and exclude merge-on-order only where this forge cannot run it, as guidance/0.9.15.md states"
+        ))
+        .target_state("nothing was written"),
+    )
 }
 
 /// Refuse an accepted-drift entry with an empty reason or a digest that
@@ -979,6 +997,41 @@ fn accepted_drift(entries: &BTreeMap<String, AcceptedDrift>) -> Result<(), RkErr
         }
     }
     Ok(())
+}
+
+/// Refuse a parsed configuration that carries a retired key.
+fn retired_keys(raw: &toml::Value) -> Result<(), RkError> {
+    if raw
+        .get("setup")
+        .and_then(|setup| setup.get("required_workflow"))
+        .is_some()
+    {
+        return Err(retired_required_workflow());
+    }
+    Ok(())
+}
+
+/// The refusal of the retired `setup.required_workflow` key.
+///
+/// The key named the workflow that woke the release gate, and no gate
+/// remains: a release request merges only on the operator's order. Every
+/// verb that reads the configuration refuses it by name, before any write.
+#[must_use]
+pub fn retired_required_workflow() -> RkError {
+    // SATISFIES target-config:a-retired-key-refuses-by-name
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::ConfigInvalid,
+            format!(
+                "{CONFIG_PATH}: setup.required_workflow is retired: it woke the release gate, and no gate remains, because a release request merges only on the operator's order"
+            ),
+        )
+        .expected(format!("a [setup] table in {CONFIG_PATH} without required_workflow"))
+        .action(format!(
+            "remove setup.required_workflow from {CONFIG_PATH} by hand, then run rk upgrade, as guidance/0.9.15.md states"
+        ))
+        .target_state("nothing was written"),
+    )
 }
 
 pub(super) fn invalid(message: impl std::fmt::Display) -> RkError {
@@ -1283,10 +1336,6 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             Some(config.setup.required_check.clone().into()),
         ),
         (
-            "RK_CONFIG_SETUP_REQUIRED_WORKFLOW",
-            Some(config.setup.required_workflow.clone().into()),
-        ),
-        (
             "RK_CONFIG_SETUP_RETIRED_BRANCHES",
             Some(array(&config.setup.retired_branches)),
         ),
@@ -1550,7 +1599,7 @@ const DERIVED_POLICY_KEYS: [&str; 5] = [
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 32] = [
+const PARAMETER_KEYS: [&str; 31] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -1585,10 +1634,8 @@ const PARAMETER_KEYS: [&str; 32] = [
     "security.contact",
     "security.response",
     "security.scope",
-    // The release gate's two answers. One names the check the gate
-    // believes, the other names the workflow whose completion wakes it.
+    // The check the trunk ruleset requires.
     "setup.required_check",
-    "setup.required_workflow",
     "schema_version",
 ];
 
@@ -2254,9 +2301,6 @@ impl Plan {
         params
             .required_check()
             .clone_into(&mut resolved.setup.required_check);
-        params
-            .required_workflow()
-            .clone_into(&mut resolved.setup.required_workflow);
         // A file that states an open migration and nothing else is the one
         // the archive wrote ahead of the landing: the landing renders the
         // template a greenfield target takes and keeps the key, so closing
@@ -2442,17 +2486,11 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
     if let Some(value) = config.security.scope.clone() {
         values.push(("security.scope", Some(value.into())));
     }
-    // The gate's two answers project like any other class P string. An
-    // empty answer is an answer: it says this target renders no standing
-    // release gate, which is true of every target outside GitHub's local
-    // trunk release shape.
+    // The required check projects like any other class P string. An
+    // empty answer is an answer: it says this target names no check.
     values.push((
         "setup.required_check",
         Some(config.setup.required_check.clone().into()),
-    ));
-    values.push((
-        "setup.required_workflow",
-        Some(config.setup.required_workflow.clone().into()),
     ));
     values
 }

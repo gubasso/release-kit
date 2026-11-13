@@ -6,8 +6,9 @@
 //! than at the release tag or a file it packs changed since, and git-cliff
 //! reads only the commits that touch those files. Where nothing remains to release it closes a stale request, and
 //! otherwise it writes the version and the changelog on
-//! `rk-release/<base>`, force-pushes it as the bot, opens or edits the
-//! request, and arms it where the projection arms.
+//! `rk-release/<base>`, force-pushes it as the bot, and opens or edits the
+//! request. It never arms or merges it: a release waits for the operator's
+//! order.
 
 use camino::Utf8Path;
 use serde::Serialize;
@@ -56,9 +57,6 @@ pub struct RequestReport {
     /// The request's number on the forge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<u64>,
-    /// Whether the request stands armed after this run.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub armed: Option<bool>,
     /// Every file the request commit changed.
     pub files: Vec<String>,
 }
@@ -76,7 +74,6 @@ impl RequestReport {
             proposal: None,
             tag: None,
             request: None,
-            armed: None,
             files: Vec::new(),
         }
     }
@@ -149,31 +146,17 @@ pub fn run(target: &Utf8Path) -> Result<Done<RequestReport>, RkError> {
             "opened",
         ),
     };
-    let arms = guard::arms(
-        context.forge,
-        context.integration,
-        context.style,
-        &base,
-        &context.trunk,
-    );
-    let armed = arms && client.arm(number, context.merge_form)?;
+    // SATISFIES release-engine:the-request-never-arms
     let mut lines = compared;
     lines.push(format!(
         "{state} release request #{number} proposing {} on {branch} into {base}",
         next.spelled(context.driver())
     ));
-    lines.push(match (arms, armed) {
-        (true, true) => "armed: the request merges itself once its checks pass".to_owned(),
-        (true, false) => {
-            "arm deferred: the forge cannot take it before the request's first pipeline; the next push re-arms".to_owned()
-        }
-        (false, _) => "not armed: a person merges this request".to_owned(),
-    });
+    lines.push("not armed: the request waits for the operator's order to merge".to_owned());
     report.state = state;
     report.proposal = Some(next.spelled(context.driver()));
     report.tag = Some(tag);
     report.request = Some(number);
-    report.armed = Some(armed);
     report.files = files;
     Ok(Done {
         report,

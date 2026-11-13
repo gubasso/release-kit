@@ -237,10 +237,6 @@ fn refuse_an_excluded_step(ctx: &Ctx, step: &StepSpec) -> Result<(), RkError> {
 /// On GitLab `--required-check` is a usage error, per the forge document:
 /// the forge requires the whole pipeline and names no individual check, and
 /// a flag silently discarded would read as configured while nothing uses it.
-///
-/// The same reason holds for the release gate's second answer, which the
-/// landing verbs refuse on GitLab for this one reason rather than a
-/// second of their own.
 fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
     if ctx.forge == Some(Forge::Gitlab) && ctx.required_check.is_some() {
         return Err(RkError::Usage(
@@ -256,9 +252,8 @@ fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
 /// stopping. A target that excludes the protection is asked for nothing,
 /// because the value would answer a step this run never reaches, or one
 /// whose effective policy carries no required-check rule. Both integration
-/// modes normally carry that rule; local integration also renders the same
-/// name into its release gate. The landing verbs refuse an unanswered gate,
-/// while this prerequisite stays about the ruleset step.
+/// modes normally carry that rule, and this prerequisite stays about the
+/// ruleset step.
 fn require_check_for(ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
     let needs = ctx.forge == Some(Forge::Github)
         && ctx.required_check.is_none()

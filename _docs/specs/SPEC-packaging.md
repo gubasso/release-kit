@@ -20,6 +20,7 @@
   - [`packaging:the-venue-and-the-manager-cross-in-one-matrix` — The venue and the manager cross in one matrix](#packagingthe-venue-and-the-manager-cross-in-one-matrix--the-venue-and-the-manager-cross-in-one-matrix)
   - [`packaging:a-pin-bump-is-all-or-nothing` — A pin bump is all or nothing](#packaginga-pin-bump-is-all-or-nothing--a-pin-bump-is-all-or-nothing)
   - [`packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell](#packagingthe-unattended-caller-never-fails-the-shell--the-unattended-caller-never-fails-the-shell)
+  - [`packaging:a-pin-moves-only-on-the-operators-order` — A pin moves only on the operator's order](#packaginga-pin-moves-only-on-the-operators-order--a-pin-moves-only-on-the-operators-order)
   - [`packaging:add-serves-a-fragment-and-edits-no-owned-file` — Add serves a fragment and edits no owned file](#packagingadd-serves-a-fragment-and-edits-no-owned-file--add-serves-a-fragment-and-edits-no-owned-file)
   - [`packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism](#packaginga-wired-target-runs-one-bump-mechanism--a-wired-target-runs-one-bump-mechanism)
   - [`packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge](#packagingthe-cleanup-removes-only-what-it-can-judge--the-cleanup-removes-only-what-it-can-judge)
@@ -223,19 +224,31 @@ Verify: `cargo nextest run -E 'test(a_failed_devshell_build_restores_both_files)
 
 ### `packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell
 
-Under `--caller envrc`, every reported outcome of `rk self-depend sync` MUST exit 0 with the outcome in the report, because the line runs on every directory entry and a shell that refuses to start over a stale pin is worse than one that says so.
+The `.envrc` line MUST run `rk self-depend check || true`, and the check MUST exit 0 on every outcome, a configuration it cannot read included, with each finding on stderr, because the line runs on every directory entry and a shell that refuses to start over a stale pin is worse than one that says so. The check MUST read only its cache, one file per checkout under `$XDG_CACHE_HOME/release-kit/self-depend/`, keyed as the state key, holding the time of the last attempt, the time of the last success, the latest release found, and the last error. It MUST read the latest release only where a refresh is due: one hour after a failed attempt, whatever an older success says, and otherwise where the cache is missing, holds no success, or holds a success seven days old or more, with times compared as times. A due refresh MUST take an OS file lock beside the cache without waiting, and a check that finds it held MUST warn from the cache it has and read nothing, because another process is refreshing. Under the lock it MUST record the attempt before it reads, and a warning MUST NOT change the attempt time. It MUST warn on every entry where the cache holds a newer release than the pin, naming both and `rk self-depend sync --apply`, and where the cache holds an error, naming it and the next try. Where the cache cannot be written it MUST say so and read nothing. `RK_DEVSHELL_SYNC=0` and a CI variable MUST stop it before it reads anything. It MUST write no file but its cache and its lock, and MUST NOT move a pin.
 
-#### Scenario: The network is down on directory entry
+#### Scenario: A week-old success is refreshed once
 
-- GIVEN a consumer entering the directory with no network
-- WHEN the `.envrc` line runs
-- THEN the run reports `unreachable`, writes nothing, and exits 0, and the shell starts
+- GIVEN a cache whose last success is seven days old, and a second check entering at the same moment
+- WHEN both checks run
+- THEN one reads the latest release under the lock, the other warns from the cache without reading, and the tracked files are byte-identical
 
-Verify: `cargo nextest run -E 'test(every_envrc_path_exits_zero)'`
+Verify: `cargo nextest run -E 'test(a_failed_read_warns_with_its_reason_and_exits_zero) or test(the_seeded_envrc_line_is_the_check) or test(a_fresh_cache_reads_no_network) or test(an_update_warns_from_the_cache) or test(check_is_silent_when_current) or test(a_failure_after_an_overdue_success_waits_one_hour) or test(a_failed_first_check_retries_after_one_hour) or test(cached_error_warnings_do_not_postpone_the_retry) or test(an_unwritable_cache_warns_and_reads_no_network) or test(overlapping_checks_read_the_network_once) or test(a_held_lock_warns_from_the_cache_and_reads_nothing) or test(check_writes_no_file_but_its_cache) or test(the_off_switch_stops_check_but_not_an_operator_sync)'`
+
+### `packaging:a-pin-moves-only-on-the-operators-order` — A pin moves only on the operator's order
+
+`rk self-depend sync --apply` MUST move the pin only as the operator's act: `--caller envrc` MUST refuse as a usage error that names `rk self-depend check`, and where `DIRENV_IN_ENVRC` is set, which direnv's stdlib exports while it evaluates an `.envrc`, the sync MUST move nothing, warn with the cause and `nix develop -c rk self-depend sync --apply`, and exit 1, because an older `.envrc` line still runs the sync on every entry. The off switch and a CI variable MUST NOT stop it. `rk self-depend status` MUST report an `.envrc` that still carries the retired sync line, and `rk self-depend clean --apply` MUST swap it for the check line.
+
+#### Scenario: An old line runs the sync on directory entry
+
+- GIVEN a consumer whose `.envrc` still runs `rk self-depend sync --apply || true`, and a release newer than its pin
+- WHEN direnv evaluates the `.envrc`
+- THEN the sync moves nothing, warns with the command that moves the pin from a shell, and exits 1, and the shell starts
+
+Verify: `cargo nextest run -E 'test(sync_inside_an_envrc_moves_nothing) or test(sync_apply_from_a_shell_moves_the_pin) or test(the_envrc_caller_is_a_usage_error) or test(the_old_sync_line_is_reported_and_swapped)'`
 
 ### `packaging:add-serves-a-fragment-and-edits-no-owned-file` — Add serves a fragment and edits no owned file
 
-`rk self-depend add` MUST print the fragments for one manager and venue pair with their anchors and placements and MUST NOT edit a manager file or an `.envrc` the target owns, seeding a file only where the target has none, because a lexical observation does not justify a write into another project's manager file and the splice into Nix attrsets was rejected by decision. The `.envrc` MUST be seeded for the flake pair alone, because `use flake` is what puts `rk` on the path there and no other manager loads through direnv by default; every other pair prints the sync line for the operator to place.
+`rk self-depend add` MUST print the fragments for one manager and venue pair with their anchors and placements and MUST NOT edit a manager file or an `.envrc` the target owns, seeding a file only where the target has none, because a lexical observation does not justify a write into another project's manager file and the splice into Nix attrsets was rejected by decision. The `.envrc` MUST be seeded for the flake pair alone, because `use flake` is what puts `rk` on the path there and no other manager loads through direnv by default; every other pair prints the check line for the operator to place.
 
 #### Scenario: A target owns its manager file
 
@@ -271,11 +284,11 @@ Verify: `cargo nextest run -E 'test(self_depend_clean_apply_leaves_the_justfile_
 
 ### `packaging:the-setup-offers-the-freshness-wire` — The setup offers the freshness wire
 
-Where a landing records a target for the first time and that target is wired to a manager and carries no sync line, the setup skill MUST raise that gap as a decision the operator answers before the task closes, and MUST record the answer, because `packaging:add-serves-a-fragment-and-edits-no-owned-file` refuses the binary an edit into an `.envrc` the target already owns and a capability nobody offers reaches only the operator who already knew about it. The skill MUST read the gap and the manager from `rk self-depend status --json` rather than from a manager list of its own, and MUST raise nothing under this requirement where `wired` names no manager or where the landing is an upgrade of a recorded target.
+Where a landing records a target for the first time and that target is wired to a manager and carries no check line, the setup skill MUST raise that gap as a decision the operator answers before the task closes, and MUST record the answer, because `packaging:add-serves-a-fragment-and-edits-no-owned-file` refuses the binary an edit into an `.envrc` the target already owns and a capability nobody offers reaches only the operator who already knew about it. The skill MUST read the gap and the manager from `rk self-depend status --json` rather than from a manager list of its own, and MUST raise nothing under this requirement where `wired` names no manager or where the landing is an upgrade of a recorded target.
 
 #### Scenario: A first landing closes over a pin nobody moves
 
-- GIVEN a target with no record, whose manager pins release-kit and whose `.envrc` carries no sync line
+- GIVEN a target with no record, whose manager pins release-kit and whose `.envrc` carries no check line
 - WHEN the landing reaches its last step
 - THEN the skill states what the line does and asks the operator, and a refusal closes the landing as a recorded answer
 
@@ -283,7 +296,7 @@ Verify: `cargo nextest run -E 'test(the_setup_skill_offers_the_freshness_wire_to
 
 ### `packaging:the-setup-offers-the-acquisition-route` — The setup offers the acquisition route
 
-Where a landing records a target for the first time and `rk self-depend status` reports no manager, the setup skill MUST raise how the project obtains `rk` as a decision the operator answers before the task closes, and MUST record the answer, because the same refusal that leaves the sync line unplaceable leaves the manager file unchosen: the binary seeds only a file the target lacks, so nothing but the skill can ask which manager the project runs. The decision MUST offer a manager the binary can wire, a host install, and an answer for an operator who wires it themselves, and MUST state that a host install serves one version to every project on that machine. The skill MUST ask once per landing and MUST NOT repeat a question an answer already closed.
+Where a landing records a target for the first time and `rk self-depend status` reports no manager, the setup skill MUST raise how the project obtains `rk` as a decision the operator answers before the task closes, and MUST record the answer, because the same refusal that leaves the check line unplaceable leaves the manager file unchosen: the binary seeds only a file the target lacks, so nothing but the skill can ask which manager the project runs. The decision MUST offer a manager the binary can wire, a host install, and an answer for an operator who wires it themselves, and MUST state that a host install serves one version to every project on that machine. The skill MUST ask once per landing and MUST NOT repeat a question an answer already closed.
 
 #### Scenario: A first landing leaves the target on a host install
 

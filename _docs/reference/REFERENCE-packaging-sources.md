@@ -72,7 +72,9 @@ Bearing: `packaging:the-consumer-pin-has-two-facts-and-one-mover` — the sync r
 - <https://direnv.net/man/direnv-stdlib.1.html>
 - <https://github.com/direnv/direnv/blob/master/stdlib.sh>
 
-Bearing: `packaging:the-unattended-caller-never-fails-the-shell` — the sync runs after `use flake`, with the pinned `rk` from the shell it is about to replace, and a moved pair reloads on its own because both files are watched.
+The stdlib exports `DIRENV_IN_ENVRC=1` at its top level, so a program can detect that it runs inside an `.envrc` evaluation, and the diffing leaves the variable out of the environment direnv exports afterward. `direnv exec`, which evaluates the `.envrc` and runs one command in that environment, still hands it to the command: the rk test suite meets it there.
+
+Bearing: `packaging:the-unattended-caller-never-fails-the-shell` — the check runs after `use flake`, with the pinned `rk`, and exits 0 on every outcome — and `packaging:a-pin-moves-only-on-the-operators-order`, whose sync refuses under `DIRENV_IN_ENVRC`, so an older line that still runs it on entry moves no pin.
 
 ## GitHub, on the latest release
 

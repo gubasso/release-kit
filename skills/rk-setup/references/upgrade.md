@@ -4,7 +4,7 @@ Take a record older than the installed `rk` to this binary's projection, and app
 
 ## Pre-flight
 
-1. Read `config.pending` in `rk status --target . --json`. Ask each key the record predates, with its consequence. Ask first a key the upgrade refuses without, the release style: under `trunk`, the release request is armed and a green trunk ships on its own.
+1. Read `config.pending` in `rk status --target . --json`. Ask each key the record predates, with its consequence. Ask first a key the upgrade refuses without, the release style: `trunk` ships from the trunk alone, and `lines` keeps older lines. In neither style does a release request merge itself.
 2. A record that predates the integration mode reads as `forge`. State that, offer the change once, and add the answer to the Stage step's flags.
 3. A record that predates the workflow guards reads them as a pending answer. Ask once whether to keep them or drop them, with keep as the default.
 4. Read the guidance files the stage copies into `reference/guidance`, each release above the recorded one whose destinations the target has. `0.9.8.md` carries the order an upgrade to it takes: the registry answer, the upgrade, the gated dist jobs, the checkpoint, and one commit with the proof.

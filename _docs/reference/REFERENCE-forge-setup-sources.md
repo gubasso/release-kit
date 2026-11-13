@@ -49,8 +49,12 @@ GitHub gates the feature on the repository setting `allow_auto_merge`, readable 
 - <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request>
 - <https://docs.github.com/en/rest/repos/repos>
 - <https://docs.gitlab.com/user/project/merge_requests/auto_merge/>
+- <https://cli.github.com/manual/gh_pr_merge>
+- <https://docs.gitlab.com/api/merge_requests/>
 
-Bearing: `forge-setup:the-setup-permits-a-request-to-merge-itself` and the `auto-merge` step. The missing GitLab switch is why that forge's observation reports a limitation rather than a pass, and the unmet-requirement precondition is why the step needs no ordering against `protect-trunk`: a repository whose checks are all green simply merges immediately.
+`gh pr merge --disable-auto` turns auto-merge off on one pull request. GitLab's merge request API cancels merge-when-pipeline-succeeds on one merge request with `POST /projects/:id/merge_requests/:merge_request_iid/cancel_merge_when_pipeline_succeeds`.
+
+Bearing: `forge-setup:an-armed-release-request-faults` and the `merge-on-order` step. The repository switch serves the project's own requests too, which is why the step reports it and never judges it, and the per-request calls are how the step disarms a release request that rk 0.9.14 or older armed.
 
 ## Default workflow permissions for GITHUB_TOKEN
 
@@ -367,14 +371,14 @@ Bearing: `method/03-operate.md`. The release request waits for its bot refresh; 
 
 ## Release request refresh paths
 
-release-plz describes overwriting and force-pushing with the reason "changes done by bots are not valuable, so we can overwrite them", unavailable on Gitea and GitLab. A non-bot commit after the first selects closing the old request and opening a new one, "to preserve the git history of maintainers' changes". The trunk style's bot-only GitHub release request takes the force-push path; the workflow re-arms on every refresh using the returned request number, including a replacement request.
+release-plz describes overwriting and force-pushing with the reason "changes done by bots are not valuable, so we can overwrite them", unavailable on Gitea and GitLab. A non-bot commit after the first selects closing the old request and opening a new one, "to preserve the git history of maintainers' changes". The trunk style's bot-only GitHub release request takes the force-push path.
 
 The implementation selects an in-place update when the contributor list is empty, and closes the request when it is not, confirming the condition despite the usage page's ambiguous bullet ordering.
 
 - <https://release-plz.dev/docs/usage/release-pr>
 - <https://github.com/release-plz/release-plz/blob/main/crates/release_plz_core/src/command/release_pr/mod.rs>
 
-Bearing: `landing:the-arming-identity-is-the-bot` and `forge-setup:a-merge-carries-the-trunk-it-was-tested-against`. Refresh recomputes release contents; a plain branch update cannot substitute for it. The landed arm makes both refresh paths compatible with a hands-off release.
+Bearing: `forge-setup:a-merge-carries-the-trunk-it-was-tested-against`. Refresh recomputes release contents; a plain branch update cannot substitute for it.
 
 ## Upstream record of the release race
 
@@ -420,3 +424,17 @@ Checked 2026-09-15 for the pin. `ossf/scorecard-action` publishes exact release 
 - <https://github.com/ossf/scorecard-action/tags>
 
 Two claims in release-kit issue 117 do not survive these sources, and the forge paragraph states neither. Branch-Protection does not need a long-lived classic personal access token: a non-admin run is scored as though every administrator requirement is met, so the short-lived App token this convention uses costs the check nothing. And Pinned-Dependencies is no longer capped by tag-referenced actions, because `ADR-pin-every-action-by-commit.md` pins every action in the snippets by commit. What remains is the generated release workflow's two piped installers, which `KI-dist-generates-an-unhardened-workflow.md` already owns.
+
+## Dispatching the merge job
+
+GitHub starts a `workflow_dispatch` run through `POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` with a `ref` and its `inputs`, and any collaborator with write access may call it. A `run-name` expression names the run, and a run whose name is empty or only whitespace takes the event's default name. `github.triggering_actor` is the user who started the run, and `GET /repos/{owner}/{repo}/collaborators/{username}/permission` answers that user's role. GitLab creates a pipeline through `POST /projects/:id/pipeline` with a `ref` and `variables`, and passing a variable needs the role the project setting `ci_pipeline_variables_minimum_override_role` names: `no_one_allowed`, `owner`, `maintainer`, or `developer`, with `no_one_allowed` the default for a new project in a new namespace on GitLab.com since 17.7. Its merge call `PUT /projects/:id/merge_requests/:merge_request_iid/merge` refuses where the `sha` it names is not the request's head.
+
+- <https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event>
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#run-name>
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#github-context>
+- <https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user>
+- <https://docs.gitlab.com/api/pipelines/#create-a-new-pipeline>
+- <https://docs.gitlab.com/ci/variables/#restrict-pipeline-variables>
+- <https://docs.gitlab.com/api/merge_requests/#merge-a-merge-request>
+
+Bearing: `git:the-release-request-integrates-at-the-forge` and `release-state:the-operator-merges-through-the-verb`. Any writer can dispatch, so the job reads the caller's role; the run name carries the correlation the verb waits on; and the guidance step names the GitLab variable setting, which rk does not observe.

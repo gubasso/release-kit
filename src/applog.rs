@@ -30,6 +30,21 @@ pub fn state_root() -> Option<PathBuf> {
     Some(base.join("release-kit"))
 }
 
+/// The cache directory a disposable answer lives under:
+/// `${XDG_CACHE_HOME:-$HOME/.cache}/release-kit`.
+#[must_use]
+pub fn cache_root() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|v| !v.is_empty())
+                .map(|home| PathBuf::from(home).join(".cache"))
+        })?;
+    Some(base.join("release-kit"))
+}
+
 /// Append one info record for a finished command, best effort.
 pub fn record(op: &str, status: &str, dur_ms: u128) {
     if !info_enabled(std::env::var("RUST_LOG").ok().as_deref()) {
