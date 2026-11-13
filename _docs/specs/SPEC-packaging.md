@@ -176,7 +176,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover
 
-Where a consumer pins release-kit as a flake input, the binary MUST treat the tag in `flake.nix` as the version and the `release-kit` node in `flake.lock` as the content, and `rk self-depend sync` MUST move both in one run, because a tag without its lock is a promise the shell has not kept and nothing else in the tree may name an rk version. Where the wired manager records one fact, the sync MUST move that one fact in place and name the same `from` and `to` in the form the manager records, because the manager's own install takes the version from there and a second file would be a second pin.
+Where a consumer pins release-kit as a flake input, the binary MUST treat the tag in `flake.nix` as the version and the `flake.lock` node that the root's `release-kit` input resolves to as the content, and `rk self-depend sync` MUST move both in one run, because a tag without its lock is a promise the shell has not kept and nothing else in the tree may name an rk version. Where the wired manager records one fact, the sync MUST move that one fact in place and name the same `from` and `to` in the form the manager records, because the manager's own install takes the version from there and a second file would be a second pin.
 
 #### Scenario: A sync moves the pin
 

@@ -28,7 +28,7 @@ rk self-depend add --target . --apply
 git add flake.nix .envrc && git commit -m 'chore(<scope>): pin rk in the devshell'
 # check: the pair is committed; nix reads only tracked files, and the sync refuses uncommitted edits to flake.nix or flake.lock
 rk self-depend sync --target . --apply
-# check: bumped or current; the pin in flake.nix is the version, the release-kit node in flake.lock is the content, and the build proved the pair
+# check: bumped or current; the pin in flake.nix is the version, the flake.lock node of the root release-kit input is the content, and the build proved the pair
 git add flake.lock && git commit -m 'chore(<scope>): lock the rk self-depend pin'
 direnv allow
 # check: the shell loads and rk --version answers from the devshell

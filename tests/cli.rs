@@ -22307,7 +22307,11 @@ if [[ "$*" == "eval --raw --impure --expr builtins.currentSystem" ]]; then print
 if [[ "$1" == "flake" ]]; then
   if [[ -f "$STATE/nix_fail_update" ]]; then echo "error: could not update the lock" >&2; exit 1; fi
   tag=$(sed -n 's/.*release-kit\/\(v[^"]*\)".*/\1/p' flake.nix | head -1)
-  printf '{"nodes":{"release-kit":{"locked":{"rev":"rev-of-%s","ref":"refs/tags/%s"}},"root":{}},"version":7}\n' "$tag" "$tag" > flake.lock
+  if [[ -f "$STATE/nix_nested_lock" ]]; then
+    printf '{"nodes":{"dep":{"inputs":{"release-kit":"release-kit"}},"release-kit":{"locked":{"rev":"rev-of-nested","ref":"refs/tags/v0.1.0"}},"release-kit_2":{"locked":{"rev":"rev-of-%s","ref":"refs/tags/%s"}},"root":{"inputs":{"dep":"dep","release-kit":"release-kit_2"}}},"root":"root","version":7}\n' "$tag" "$tag" > flake.lock
+  else
+    printf '{"nodes":{"release-kit":{"locked":{"rev":"rev-of-%s","ref":"refs/tags/%s"}},"root":{"inputs":{"release-kit":"release-kit"}}},"root":"root","version":7}\n' "$tag" "$tag" > flake.lock
+  fi
   exit 0
 fi
 if [[ "$1" == "build" ]]; then
@@ -22421,7 +22425,7 @@ impl SelfDependFixture {
         std::fs::write(
             self.target().join("flake.lock"),
             format!(
-                "{{\"nodes\":{{\"release-kit\":{{\"locked\":{{\"rev\":\"rev-of-{tag}\",\"ref\":\"refs/tags/{tag}\"}}}},\"root\":{{}}}},\"version\":7}}\n"
+                "{{\"nodes\":{{\"release-kit\":{{\"locked\":{{\"rev\":\"rev-of-{tag}\",\"ref\":\"refs/tags/{tag}\"}}}},\"root\":{{\"inputs\":{{\"release-kit\":\"release-kit\"}}}}}},\"root\":\"root\",\"version\":7}}\n"
             ),
         )
         .expect("the lock writes");
@@ -22855,6 +22859,42 @@ fn the_flake_entry_carries_the_tag_and_the_lock_node() {
             "{other} carries no lock field"
         );
     }
+}
+
+/// A lock names a node after the input that introduced it first, so a
+/// dependency's own release-kit input can hold the name `release-kit`.
+/// Every verb reads the node the root's input resolves to.
+#[test]
+fn the_locked_node_follows_the_root_input() {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.15");
+    std::fs::write(
+        fixture.target().join("flake.lock"),
+        r#"{"nodes":{"dep":{"inputs":{"release-kit":"release-kit"}},"release-kit":{"locked":{"rev":"rev-of-nested","ref":"refs/tags/v0.1.0"}},"release-kit_2":{"locked":{"rev":"rev-of-v0.2.15","ref":"refs/tags/v0.2.15"}},"root":{"inputs":{"dep":"dep","release-kit":"release-kit_2"}}},"root":"root","version":7}"#,
+    )
+    .expect("the lock writes");
+    fixture.commit_all();
+    let status = fixture.json(&["self-depend", "status"]);
+    let flake = manager_entry(&status, "flake");
+    assert_eq!(flake["locked_rev"], "rev-of-v0.2.15", "{status}");
+    assert_eq!(flake["locked_ref"], "refs/tags/v0.2.15");
+    fixture
+        .rk(&["self-depend", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("locked at rev-of-v0.2.15"))
+        .stdout(predicate::str::contains("rev-of-nested").not());
+    let check = fixture.json(&["self-depend", "check"]);
+    assert_eq!(check["pin"], "v0.2.15", "{check}");
+    fixture.seed("nix_nested_lock", "1");
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--apply"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped", "{report}");
+    assert!(fixture.read("flake.lock").contains("rev-of-nested"));
+    let after = fixture.json(&["self-depend", "status"]);
+    let flake = manager_entry(&after, "flake");
+    assert_eq!(flake["locked_rev"], "rev-of-v0.2.16", "{after}");
+    assert_eq!(flake["locked_ref"], "refs/tags/v0.2.16");
 }
 
 #[test]

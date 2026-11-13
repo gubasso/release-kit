@@ -267,14 +267,51 @@ pub fn has_check_line(text: &str) -> bool {
         .any(|line| line.trim_start().starts_with("rk self-depend check"))
 }
 
-/// The `release-kit` node's locked commit and ref, from a `flake.lock`.
+/// The deepest chain of follows paths [`input_node`] walks before it
+/// gives up: a lock that loops reads as one naming no input.
+const MAX_FOLLOWS: usize = 32;
+
+/// The locked commit and ref of the node the root's `release-kit` input
+/// resolves to, from a `flake.lock`.
+///
+/// A lock names a node after the input that first introduced it, so a
+/// dependency's own `release-kit` input can hold the name `release-kit`
+/// while the project's input is `release-kit_2`. The root node, which the
+/// lock's `root` key names, is the one owner of the project's inputs.
 fn locked_node(bytes: &[u8]) -> (Option<String>, Option<String>) {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return (None, None);
     };
-    let locked = &value["nodes"]["release-kit"]["locked"];
+    let nodes = &value["nodes"];
+    let root = value["root"].as_str().unwrap_or("root");
+    let Some(node) = input_node(nodes, root, root, "release-kit", 0) else {
+        return (None, None);
+    };
+    let locked = &nodes[node.as_str()]["locked"];
     let read = |field: &str| locked[field].as_str().map(str::to_owned);
     (read("rev"), read("ref"))
+}
+
+/// The node one input of `node` resolves to. The input names a node, or
+/// holds a follows path: a list of input names walked from the root node.
+fn input_node(
+    nodes: &serde_json::Value,
+    root: &str,
+    node: &str,
+    input: &str,
+    depth: usize,
+) -> Option<String> {
+    match &nodes[node]["inputs"][input] {
+        serde_json::Value::String(name) => Some(name.clone()),
+        serde_json::Value::Array(path) if depth < MAX_FOLLOWS => {
+            let mut at = root.to_owned();
+            for step in path {
+                at = input_node(nodes, root, &at, step.as_str()?, depth + 1)?;
+            }
+            Some(at)
+        }
+        _ => None,
+    }
 }
 
 /// The target as a canonical directory, or the missing-target refusal.
@@ -400,7 +437,7 @@ mod tests {
 
     #[test]
     fn the_locked_node_reads_the_release_kit_input() {
-        let lock = br#"{"nodes":{"release-kit":{"locked":{"rev":"9f3c","ref":"refs/tags/v0.2.16"}},"root":{}}}"#;
+        let lock = br#"{"nodes":{"release-kit":{"locked":{"rev":"9f3c","ref":"refs/tags/v0.2.16"}},"root":{"inputs":{"release-kit":"release-kit"}}},"root":"root"}"#;
         assert_eq!(
             locked_node(lock),
             (
@@ -410,5 +447,58 @@ mod tests {
         );
         assert_eq!(locked_node(b"not json"), (None, None));
         assert_eq!(locked_node(br#"{"nodes":{}}"#), (None, None));
+        assert_eq!(
+            locked_node(br#"{"nodes":{"release-kit":{"locked":{"rev":"9f3c"}},"root":{}}}"#),
+            (None, None),
+            "a node the root does not name is not the project's input"
+        );
+    }
+
+    #[test]
+    fn the_locked_node_follows_the_root_input() {
+        let lock = br#"{"nodes":{
+            "exobrain-tech":{"inputs":{"release-kit":"release-kit"},"locked":{"rev":"e0e0"}},
+            "release-kit":{"locked":{"rev":"0543ebe","ref":"refs/tags/v0.9.1"}},
+            "release-kit_2":{"locked":{"rev":"3fd21b5","ref":"refs/tags/v0.9.15"}},
+            "top":{"inputs":{"exobrain-tech":"exobrain-tech","release-kit":"release-kit_2"}}
+        },"root":"top","version":7}"#;
+        assert_eq!(
+            locked_node(lock),
+            (
+                Some("3fd21b5".to_owned()),
+                Some("refs/tags/v0.9.15".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn a_followed_root_input_resolves_through_its_path() {
+        let lock = br#"{"nodes":{
+            "exobrain-tech":{"inputs":{"release-kit":"release-kit_2"}},
+            "release-kit_2":{"locked":{"rev":"3fd21b5","ref":"refs/tags/v0.9.15"}},
+            "root":{"inputs":{"exobrain-tech":"exobrain-tech","release-kit":["exobrain-tech","release-kit"]}}
+        },"root":"root","version":7}"#;
+        assert_eq!(
+            locked_node(lock),
+            (
+                Some("3fd21b5".to_owned()),
+                Some("refs/tags/v0.9.15".to_owned())
+            )
+        );
+        let chained = br#"{"nodes":{
+            "a":{"inputs":{"release-kit":["b","release-kit"]}},
+            "b":{"inputs":{"release-kit":"release-kit_3"}},
+            "release-kit_3":{"locked":{"rev":"77aa"}},
+            "root":{"inputs":{"a":"a","b":"b","release-kit":["a","release-kit"]}}
+        },"version":7}"#;
+        assert_eq!(locked_node(chained), (Some("77aa".to_owned()), None));
+        let looped = br#"{"nodes":{
+            "root":{"inputs":{"release-kit":["release-kit"]}}
+        },"version":7}"#;
+        assert_eq!(locked_node(looped), (None, None), "a loop names no input");
+        let broken = br#"{"nodes":{
+            "root":{"inputs":{"release-kit":["absent","release-kit"]}}
+        },"version":7}"#;
+        assert_eq!(locked_node(broken), (None, None));
     }
 }
