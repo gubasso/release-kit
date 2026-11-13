@@ -12,10 +12,10 @@ The axes are orthogonal, and every pairing works. Parallel work still takes one 
 
 `git.integration` is a recorded Git workflow parameter. The landing verbs resolve it in this order:
 
-1. a flag;
-2. the committed configuration;
-3. a compatible record;
-4. a compiled default.
+1. A flag.
+2. The committed configuration.
+3. A compatible record.
+4. A compiled default.
 
 The verbs write it to `.release-kit/manifest.json` and render it into the committed hook block and the routing block. `rk status` reports it, and `rk status --check` judges it. To change it, run `rk upgrade --integration <mode> --apply`. Its committed diff reaches every clone through the trunk, and no ad hoc local toggle replaces it. The compiled default is `local`. A record written before this axis existed answers `forge`, because that is what such a target landed.
 
@@ -31,11 +31,16 @@ The form decides which messages the trunk keeps, so it decides which messages a 
 
 ## The invariant split
 
-An implementation reaches the trunk through a short-lived branch. The branch is validated and merged in the recorded merge form, and the trunk stays releasable at every commit. The recorded integration mode chooses the authority that performs that integration. A pull request is one integration mechanism, and it is not the definition of trunk-based development. [The model](./00-model.md) carries the branch forms. [The invariants](./01-invariants.md) carries the two rules this chapter splits.
+An implementation reaches the trunk through a short-lived branch. The project validates the branch and merges it in the recorded merge form, and the trunk stays releasable at every commit. The recorded integration mode chooses the authority that performs that integration. A pull request is one integration mechanism, and it is not the definition of trunk-based development. [The model](./00-model.md) carries the branch forms. [The invariants](./01-invariants.md) carries the two rules this chapter splits.
 
-The release request always integrates at the forge. Its bot branch carries the computed version and the new changelog entry. Merging it is the only event that authorizes the tag, the registry publish, the provenance, and the artifacts. Local implementation integration removes the forge from nothing in the release path.
+The release request always integrates at the forge. Its bot branch carries the computed version and the new changelog entry. Merging it is the only event that authorizes these:
 
-So the trunk carries ordinary commits in either mode. It carries one per implementation under `squash`, and every commit of the branch under `rebase`. A later push can carry several of them at once. The release bot reads the release intent of each one separately. It counts only a commit that [its binding](../bindings/README.md) attributes to the package. So a batch of local integrations produces the changelog that a sequence of forge merges would produce.
+- The tag.
+- The registry publish.
+- The provenance.
+- The artifacts.
+
+Local implementation integration removes the forge from nothing in the release path. So the trunk carries ordinary commits in either mode. It carries one per implementation under `squash`, and every commit of the branch under `rebase`. A later push can carry several of them at once. The release bot reads the release intent of each one separately. It counts only a commit that [its binding](../bindings/README.md) attributes to the package. So a batch of local integrations produces the changelog that a sequence of forge merges would produce.
 
 ## The gate boundary
 
@@ -60,7 +65,14 @@ git runs whatever hook the clone installed, through its own discovery, `core.hoo
 
 prek runs each nested `.pre-commit-config.yaml` as a project of its own, and pre-commit does not. A project that runs prek lists a fixture directory that holds such a file in a root `.prekignore`.
 
-Release-kit reads no hook identifier, no revision, no language, and no test category. The project owns everything in `.pre-commit-config.yaml` outside the marked block. It owns its stage assignment and the second axis below. That judgment lives in the project's own agent instructions. The `rk-setup` skill researches the current hooks for the project's technologies.
+Release-kit reads none of these:
+
+- A hook identifier.
+- A revision.
+- A language.
+- A test category.
+
+The project owns everything in `.pre-commit-config.yaml` outside the marked block. It owns its stage assignment and the second axis below. That judgment lives in the project's own agent instructions. The `rk-setup` skill researches the current hooks for the project's technologies.
 
 ## The scope axis
 
@@ -70,7 +82,7 @@ The stage says when a check runs. Scope says where it can run at all. Scope come
 | ------------ | ------------------------------------------------------ | ------------------------------------------------------- |
 | `both`       | the check runs at a desk and in continuous integration | a hook at its native stage, with CI invoking that stage |
 | `local-only` | the check is meaningless in continuous integration     | a hook whose id the CI sweep names in `SKIP`            |
-| `ci-only`    | the check is meaningless at a desk                     | no hook; it names the remote boundary it guards and why |
+| `ci-only`    | the check is meaningless at a desk                     | no hook. It names the remote boundary it guards and why |
 
 Most checks are `both`, and that value carries a rule. Such a check must have a local execution path and a remote one of equivalent coverage. The commands do not have to be identical. A desk that runs a suite through a devshell meets the rule, and so does a runner that runs it through a task runner. A check that exists on one side alone and claims `both` does not.
 
@@ -84,7 +96,13 @@ Continuous integration invokes the stages that the project declared, through the
 
 Local integration is the default. A single-writer project integrates one implementation after another with no forge round trip. It pushes the trunk when it decides to.
 
-Under this mode, the branch is born and dies in the checkout. It reaches no forge, so it has no pull request, no remote tip, and no review artifact. That is the mode's whole saving and its whole cost.
+Under this mode, the branch is born and dies in the checkout. It reaches no forge, so it has none of these:
+
+- A pull request.
+- A remote tip.
+- A review artifact.
+
+That is the mode's whole saving and its whole cost.
 
 `rk integrate <branch>` performs the transaction, and it is the only path that writes a local trunk commit. In order, it does these things:
 
@@ -105,11 +123,24 @@ A refresh of a held trunk before the gate can complete and stay unconfirmed. Tha
 
 Under `rebase`, the command builds no commit. Its rebase flattens every merge and moves no other branch, whatever the Git configuration asks. The published range holds no merge commit, and the command reads it back before it publishes. It judges the message of every commit between the trunk and the branch tip. It stages evidence that names the branch tip, and moves the trunk to that tip by the same publication. The trunk then carries the same commits as the branch, in order. The command refuses `-m` under `rebase`, because every commit keeps its own message.
 
-Nothing is undone, because nothing is published early. A trunk that moved under the gate refuses with no ref touched. So does a trunk whose holder changed. Evidence that names a commit the trunk does not reach proves nothing. So a refusal at the last step leaves inert residue, not a false proof.
+The command undoes nothing, because nothing is published early. A trunk that moved under the gate refuses with no ref touched. So does a trunk whose holder changed. Evidence that names a commit the trunk does not reach proves nothing. So a refusal at the last step leaves inert residue, not a false proof.
 
 The command holds two things that a forge would hold for it. First, every message it publishes passes the whole landed `commit-msg` judgment here, because the command that moves the trunk fires no hook. So a message with agent attribution, or with a reference to an ignored path, refuses at the desk before it reaches a permanent history. Second, the command observes the branch before the gate and again after it. The integrated tree and the tip that the evidence certifies are the one object that the gate judged. So a commit that lands in the seat during the transaction refuses. It neither rides in ungated nor leaves evidence for work that the trunk does not carry. A hook that commits or stages a change in the seat also refuses, and the seat stays as the hook left it. [Recovery](./04-recovery.md) gives the repair.
 
-The command never pushes. A preview refreshes nothing: it takes no lock, runs no fetch, and moves no ref. The trunk push is a separate operator action, and it takes the fast-forward form alone. Where another writer wins the push, the loser fetches, replays the implementation, runs the gates again, and retries. No local integration uses a force-push.
+The command never pushes. A preview refreshes nothing. It does none of these:
+
+- It takes a lock.
+- It runs a fetch.
+- It moves a ref.
+
+The trunk push is a separate operator action, and it takes the fast-forward form alone. Where another writer wins the push, the loser does these things in order:
+
+- It fetches.
+- It replays the implementation.
+- It runs the gates again.
+- It retries.
+
+No local integration uses a force-push.
 
 The local path cannot observe remote checks before the trunk push, because the push starts them. Whoever pushes watches the resulting run and the release request. That person repairs a failure as a fresh implementation, integrated the same way.
 
@@ -127,25 +158,32 @@ A recorded default binds no single execution. `--forge` and `--local` select the
 
 Under forge integration, the trunk keeps every protection that [setup](./02-setup.md) installs:
 
-- no direct push;
-- no force-push;
-- a request that carries the named passing check;
-- the merge method of the recorded form as the only one.
+- No direct push.
+- No force-push.
+- A request that carries the named passing check.
+- The merge method of the recorded form as the only one.
 
 Under local integration, GitHub keeps every trunk rule. This includes the request rule and the strict required check, wherever a forge gate lands. GitHub holds them in two rulesets:
 
 - The safety ruleset carries deletion and force-push protection, and names no bypass actor.
 - The trunk ruleset carries the request rule and the required check. It grants exactly the repository-administrator role an always bypass, for the deliberate direct push.
 
-The split is not decoration. A ruleset records a bypass actor, and that actor is excused from every rule in it. One ruleset with all four rules would hand the operator the force-push and the deletion along with the push. The release App is a distinct integration actor. It holds no repository role and reaches neither bypass. So its release request still cannot merge after the trunk advances.
+The split is not decoration. A ruleset records a bypass actor, and the ruleset excuses that actor from every rule in it. One ruleset with all four rules would hand the operator the force-push and the deletion along with the push. The release App is a distinct integration actor. It holds no repository role and reaches neither bypass. So its release request still cannot merge after the trunk advances.
 
-GitLab carries the local push authority through `protection.gitlab.push_access_level`. `rk setup` installs the shape that the recorded mode names, and its check expects that same shape. So a target that records `local` is neither locked out of its own integration nor stripped of atomic release freshness. Every tag protection stays the same in both modes.
+GitLab carries the local push authority through `protection.gitlab.push_access_level`. `rk setup` installs the shape that the recorded mode names, and its check expects that same shape. So the setup neither locks a target that records `local` out of its own integration nor strips its atomic release freshness. Every tag protection stays the same in both modes.
 
 A locally integrated target with no automatic release lands no forge gate, because no request merges at its forge. Its GitHub trunk ruleset then requires no status check, and its GitLab trunk requires no pipeline, because nothing would report one. No-deletion and no-force-push still hold. Under `release.mode = "none"`, the target carries no tag protection either.
 
 The local-mode release workflow retries the merge, but it is not the atomic protection. It wakes when the named workflow completes and after its push-side request job succeeds. It finds candidates across every result page, and proves the identity of the request against the forge. It attempts the merge only once the same recorded check concluded with success for the exact head. Any other answer is a successful no-op that leaves the request open. A merge that the trunk's own rules refuse is a no-op too. The job names what the forge answered and ends green, because a stale request withheld is the protection working. The ruleset makes the final base-freshness judgment at the merge boundary.
 
-The desk and the forge remain the two distances that [setup](./02-setup.md) describes. What changes is how far the forge's refusal reaches. Under local integration with the workflow guards, the desk refuses a commit on the trunk at the pre-commit stage. Two pre-push guards refuse a force push to the trunk and a push that carries a merge commit onto it. `rk integrate` passes them, because it moves the trunk ref and fires no commit hook. A hook is discipline, not a boundary. It dies to `--no-verify` in either mode. The integration transaction, the trunk gate, the post-push run, and the release request catch a bypass. The release request refuses to go green on a broken trunk.
+The desk and the forge remain the two distances that [setup](./02-setup.md) describes. What changes is how far the forge's refusal reaches. Under local integration with the workflow guards, the desk refuses a commit on the trunk at the pre-commit stage. Two pre-push guards refuse a force push to the trunk and a push that carries a merge commit onto it. `rk integrate` passes them, because it moves the trunk ref and fires no commit hook. A hook is discipline, not a boundary. It dies to `--no-verify` in either mode. Four things catch a bypass:
+
+- The integration transaction.
+- The trunk gate.
+- The post-push run.
+- The release request.
+
+The release request refuses to go green on a broken trunk.
 
 ## The release boundary
 

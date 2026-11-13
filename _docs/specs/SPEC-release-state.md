@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Rules governing what `rk release status` reports about a landed target's release: the recorded release style and Git workflow, the open release request, the last release, the release lines, the symptoms a stuck release shows, and the wait on the runs one commit starts. The boundary against `SPEC-landing.md` is the release itself: that spec binds what a landing wrote and whether it stayed truthful, and this one binds where the release process stands on the forge and the registry. Acting on that state, merging, holding, or re-running, is the operator's, and no rule here performs it. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification.
+This spec governs what `rk release status` reports about the release of a landed target. It covers the recorded release style and Git workflow, the open release request, the last release, and the release lines. It also covers the symptoms of a stuck release and the wait on the runs that one commit starts. The release itself is the boundary against `SPEC-landing.md`. That spec binds what a landing wrote and whether it stayed truthful. This spec binds where the release process stands on the forge and the registry. The operator acts on that state with a merge, a hold, or a rerun, and no rule here performs that action. No adopting project adopts this spec, because a project cannot violate a rule about how `rk` behaves and cannot run the verification.
 
 ## Requirements
 

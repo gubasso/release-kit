@@ -4,9 +4,15 @@ This chapter says what to do when a release goes wrong. Every path here ends bac
 
 ## A published version is defective
 
-Fix forward, then withdraw. The fix merges to the trunk as ordinary work. It ships as the next version through the normal sequence.
+Fix forward first. Then withdraw. The fix merges to the trunk as ordinary work. It ships as the next version through the normal sequence.
 
-Withdrawing the defective version is the second half. The tools are `cargo yank`, `npm deprecate`, and PyPI's yank. Fixing forward stops nothing until the bad version is withdrawn, because resolvers keep serving it to new consumers. Withdrawal is reversible. Deletion, where a registry offers it, is not the tool.
+Withdrawing the defective version is the second half. The tools are these:
+
+- `cargo yank`.
+- `npm deprecate`.
+- PyPI's yank.
+
+Fixing forward stops nothing until the project withdraws the bad version, because resolvers keep serving it to new consumers. Withdrawal is reversible. Deletion, where a registry offers it, is not the tool.
 
 The tag stays. It names what was published. Release-tag immutability exists so that a bad release remains inspectable.
 
@@ -27,7 +33,13 @@ The build of the bash and python pipelines then finds the restored version alrea
 
 The precondition is the fork: no tag, no release, nothing published. Where a tag or a release exists, the un-bump rewrites something public and is wrong, and the next section applies.
 
-In the bash and python pipelines, a failed build, provenance, or upload leaves no tag on either forge. Only `rk release publish` creates the tag, together with the forge release. So this fork is the recovery for every failure before that step.
+In the bash and python pipelines, a failure at any of these steps leaves no tag on either forge:
+
+- The build.
+- The provenance.
+- The upload.
+
+Only `rk release publish` creates the tag, together with the forge release. So this fork is the recovery for every failure before that step.
 
 A python release that uploaded to PyPI and stopped before the publish is published, so the fork does not apply. Re-run the release job at the same commit. The build compares its rebuild with the files PyPI serves. The upload skips them, and the publish creates the page and the tag.
 
@@ -40,7 +52,14 @@ First, make sure that the tag names the merged release commit, the bump that the
 1. A cause can be transient, such as a cancelled runner or a network error. In that case, re-run the failed jobs of the `release.yml` run. The tag push started that run. The run attaches the artifacts and mints their provenance.
 2. Where the cause was in the code, such as a target that does not build, fix it on the trunk. Release the next version. Record the gap where the project keeps its known issues: the version shipped without its release page. Once a newer release of the line is complete, the symptom drops out.
 
-On GitHub, a bash or python pipeline starts no run on the tag push. Its release workflow runs on the branch push alone. That one run at the bump commit builds, attests, uploads where the pair has a registry, and publishes. Where the cause was transient, re-run the failed `release` job of that branch-push run. Where it was in the code, take route 2.
+On GitHub, a bash or python pipeline starts no run on the tag push. Its release workflow runs on the branch push alone. That one run at the bump commit does four things:
+
+- It builds.
+- It attests.
+- It uploads, where the pair has a registry.
+- It publishes.
+
+Where the cause was transient, re-run the failed `release` job of that branch-push run. Where it was in the code, take route 2.
 
 On GitLab, take the routes in the same order. A bash or python pipeline reaches this state in three ways:
 
@@ -51,12 +70,17 @@ On GitLab, take the routes in the same order. A bash or python pipeline reaches 
 The routes on GitLab:
 
 1. Where the tag names the pipeline's own commit, re-run `publish`. It creates the release on that commit.
-2. Where the tag names the bump commit and the cause was transient, retry the failed job of the tag's pipeline on the same commit. Do this while the artifacts of `build` and `provenance` persist. `publish` uploads what the package registry lacks, and links what the release page lacks. It needs the artifacts of both jobs. Where they expired, retry these jobs in order, all on the same commit:
+2. Where the tag names the bump commit and the cause was transient, use the tag's pipeline. Retry its failed job on the same commit. Do this while the artifacts of `build` and `provenance` persist. `publish` uploads what the package registry lacks, and links what the release page lacks. It needs the artifacts of both jobs. Where they expired, retry these jobs in order, all on the same commit:
    1. `build`
    2. `provenance`, on that build
    3. `pypi`, where it runs
    4. `publish`
-3. Where the cause was in the pipeline or the code, or the tag names another commit, fix it on the trunk. Release the next version, as on GitHub.
+3. Each of these cases takes the same route:
+   - The cause is in the pipeline.
+   - The cause is in the code.
+   - The tag names another commit.
+
+   In each case, fix it on the trunk. Release the next version, as on GitHub.
 
 Never move or delete a protected tag, on either forge. The gated `dist-build` job of the Rust binding is the prevention. It builds every target before the merge, so a target that the code cannot build fails the request instead of the release.
 
@@ -80,7 +104,7 @@ Each command changes only the clone. It moves no tag on the forge, so it keeps t
 
 `rk release status` reports `request-armed` for an open release request that merges itself once its checks pass. An rk before 0.9.15 armed the request that way. A release happens only on the operator's order, so the arm is a defect, and the report exits non-zero.
 
-Disarm every open release request, and leave the project's own requests as they are:
+Disarm every open release request with this command. It leaves the project's own requests as they are:
 
 ```sh
 rk setup step merge-on-order --target . --apply
@@ -90,17 +114,21 @@ The symptom names the one call that disarms that request by hand. Then run `rk r
 
 ## The changelog shipped wrong
 
-A published entry is never edited. Land the correction on the trunk as an ordinary commit to the changelog file. It ships with the next release. The prevention is step 3 of [operate](./03-operate.md), the only point where a correction reaches the release it describes.
+Nobody edits a published entry. Land the correction on the trunk as an ordinary commit to the changelog file. It ships with the next release. The prevention is step 3 of [operate](./03-operate.md), the only point where a correction reaches the release it describes.
 
 ## An older line needs a patch
 
 The trunk rolled forward, and a user on an older version needs only the fix. When the line's branch does not exist, cut it from the tag. The branch is `release/<major>.<minor>`, at the line's latest `v<major>.<minor>.<z>`. The tag pins the exact commit that the line shipped from.
 
-Then fix on the trunk first, and cherry-pick the one commit onto the branch. [Branch for release](./07-branch-for-release.md) owns the sequence, the rc validation, and the four ways the pattern breaks.
+Then fix it on the trunk first. Cherry-pick the one commit onto the branch. [Branch for release](./07-branch-for-release.md) owns these:
+
+- The sequence.
+- The rc validation.
+- The four ways the pattern breaks.
 
 ## CI is down and the release cannot wait
 
-Publish by hand, and only for a version whose release request already merged:
+Publish by hand only for a version whose release request already merged. Follow these steps:
 
 1. Turn off the registry's require-trusted-publishing enforcement. While it is on, the registry rejects every token publish, so the manual path cannot succeed. Its failure message points at credentials, not at the switch.
 2. Publish with a token scoped like the bootstrap one: new versions of exactly this package, and the shortest expiry.

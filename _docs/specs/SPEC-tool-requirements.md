@@ -2,7 +2,13 @@
 
 ## Purpose
 
-Rules governing the tools the `rk` binary runs: which tools a verb checks, when it checks them, and what it says when one cannot serve it. A tool here is a dependency of the `rk` application, which the host supplies, and `rk` keeps that list short: it sends its own web requests and signs its own App token, so neither curl nor OpenSSL is on it. A project's own hook manager is not one: `rk integrate` asks git to run the clone's `pre-merge-commit` hook under `git:the-pre-merge-commit-hook-is-the-pre-integrate-contract`, and git runs whatever the project installed. The reports of `rk doctor` and `rk self-depend status` read a tool without stopping on it. `rk release status` stops on a missing tool like any verb, and reads `unknown` only for a credential the runtime lacks or a forge or registry that does not answer, under `release-state:a-forge-field-reads-unknown-without-credentials`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The sources behind the floors are `../reference/REFERENCE-tool-requirements-sources.md`.
+This spec governs the tools that the `rk` binary runs. It states three things:
+
+- Which tools a verb checks.
+- When the verb checks them.
+- What the verb says when a tool cannot serve it.
+
+A tool here is a dependency of the `rk` application, which the host supplies. `rk` keeps that list short. It sends its own web requests and signs its own App token, so neither curl nor OpenSSL is on it. The hook manager of a project is not such a tool. `rk integrate` asks git to run the clone's `pre-merge-commit` hook under `git:the-pre-merge-commit-hook-is-the-pre-integrate-contract`, and git runs whatever the project installed. The reports of `rk doctor` and `rk self-depend status` read a tool without stopping on it. `rk release status` stops on a missing tool like any verb. It reads `unknown` only for a credential the runtime lacks or a forge or registry that does not answer, under `release-state:a-forge-field-reads-unknown-without-credentials`. No adopting project adopts this spec, because a project cannot violate a rule about how `rk` behaves and cannot run the verification. The sources behind the floors are `../reference/REFERENCE-tool-requirements-sources.md`.
 
 ## Requirements
 
@@ -62,7 +68,13 @@ Verify: `cargo nextest run -E 'test(the_doctor_reports_a_missing_pre_merge_commi
 
 ### `tool-requirements:a-nested-hook-configuration-is-reported` — A nested hook configuration is reported
 
-`rk status` MUST report each tracked `.pre-commit-config.yaml` below the target's root whose every directory prek's walk enters, naming `.prekignore` as the repair, because prek runs such a file as a project of its own. A directory is left out where the first rule that names it ignores it, from the `.prekignore` files of the root and the directories above it, then their `.ignore` files, then git's ignore rules with the global excludes. A hidden directory is left out unless a rule keeps it, and a Cookiecutter template directory always. The report MUST be a warning, so `rk status --check` does not fail on it, because the file is the project's.
+`rk status` MUST report each tracked `.pre-commit-config.yaml` below the target's root whose every directory prek's walk enters, naming `.prekignore` as the repair, because prek runs such a file as a project of its own. The walk leaves out a directory where the first rule that names the directory ignores it. The walk reads the rules in this order:
+
+- The `.prekignore` files of the root and the directories above it.
+- The `.ignore` files of the same directories.
+- Git's ignore rules, with the global excludes.
+
+The walk leaves out a hidden directory unless a rule keeps it, and it always leaves out a Cookiecutter template directory. The report MUST be a warning, so `rk status --check` does not fail on it, because the file is the project's.
 
 #### Scenario: A test fixture carries a hook configuration
 

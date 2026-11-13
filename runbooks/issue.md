@@ -1,6 +1,10 @@
 # Issue runbook
 
-Starting work from an issue, with the forge naming the branch. The why is the short-lived branch section of [the model](../method/00-model.md), which states the two forms and prefers the minted one; this page owns the how. Mode-free to read: the verb reads the recorded workflow mode and seats accordingly, and each step says what it does under each. `<project>` is the main checkout's directory name and `<repo>` is the project path, filled in by `rk guide issue` where detection resolves it. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
+This runbook starts work from an issue, and the forge names the branch. The short-lived branch section of [the model](../method/00-model.md) owns the why. It states the two forms and prefers the minted one. This page owns the how.
+
+The page reads the same under every mode. The verb reads the recorded workflow mode and seats the branch to match, and each step says what it does under each mode. `<project>` is the directory name of the main checkout, and `<repo>` is the project path. `rk guide issue` fills both in where detection resolves them.
+
+The operator runs the commands. An agent serves a runbook and states the command. It runs one only where the operator's request named that step.
 
 ## 1. Preview the start
 
@@ -9,7 +13,17 @@ rk issue start <issue>
 # check: the report names the issue, the branch, and the seat, and says nothing was touched
 ```
 
-`<issue>` is a number, `#<number>`, or the issue's URL. A URL naming another project refuses before any call, because the branch would be minted on one project and seated in another. The hosts are compared as they are written, so an instance served under a separate SSH endpoint — `git@ssh.example.com` for `example.com` — refuses its own web URL: pass the issue number there, which names the same issue and asks no question about hosts. `--forge` and `--repo` fill in what detection could not read; either one contradicting the clone's own remote refuses for the same reason.
+`<issue>` takes one of three forms:
+
+- A number.
+- `#<number>`.
+- The URL of the issue.
+
+A URL that names another project refuses before any call. Otherwise the branch would be minted on one project and seated in another.
+
+The verb compares the hosts as they are written. An instance can serve SSH under a separate endpoint, for example `git@ssh.example.com` for `example.com`. Such an instance refuses its own web URL. There, pass the issue number. It names the same issue and asks no question about hosts.
+
+`--forge` and `--repo` fill in what detection could not read. If either one contradicts the clone's own remote, the run refuses for the same reason.
 
 ## 2. Read the report
 
@@ -25,7 +39,10 @@ A preview of an issue with no linked branch prints no branch name. GitHub names 
 
 On gitlab:
 
-A preview always prints the name, because rk renders it from the project's own template. A detail line names the template that was read, and it names the two cases the name comes out differently: a confidential issue, whose branch never carries the title, and a title carrying characters outside the transliteration table.
+A preview always prints the name, because rk renders it from the project's own template. A detail line names the template that rk read. It also names the two cases where the name comes out differently:
+
+- A confidential issue, whose branch never carries the title.
+- A title that carries characters outside the transliteration table.
 
 ## 3. Apply
 
@@ -36,39 +53,61 @@ rk issue start <issue> --apply
 
 On worktree:
 
-The branch is seated at `../<project>@<issue-id>-<slug>`, through the same derivation and the same refusals `rk worktree add` uses.
+The verb seats the branch at `../<project>@<issue-id>-<slug>`. It uses the same derivation and the same refusals as `rk worktree add`.
 
 On branches:
 
-The branch is checked out in the main checkout, whichever of the repository's worktrees you named. It asks for a clean checkout: uncommitted work there refuses the run before anything is created at the forge.
+The verb checks the branch out in the main checkout, whichever worktree of the repository you named. It asks for a clean checkout. Uncommitted work there refuses the run before the verb creates anything at the forge.
 
 ## 4. Prepare the seat
 
-A worktree is a fresh checkout: copy the untracked environment files the project needs, run its setup, and arm the hooks once per clone.
+A worktree is a fresh checkout. Copy the untracked environment files that the project needs. Run its setup. Arm the hooks once per clone.
 
 ```bash
 prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --hook-type pre-merge-commit
 # check: names each hook it installed; on git 2.54 or newer, git hook list pre-merge-commit names one too
 ```
 
-Running the verb twice is safe. A second run adopts what the forge already carries, mints nothing, and reports the standing seat.
+A second run of the verb is safe. It does three things:
+
+- It adopts what the forge already carries.
+- It mints nothing.
+- It reports the standing seat.
 
 ## 5. Land through the one path
 
-Commit, push, pull request, squash merge — the trunk's one path, unchanged by how the branch was named. `rk guide setup` step 4 owns the path and `rk guide release` step 1 the landing. Nothing is restated here.
+The one path to the trunk has four stages:
+
+- Commit.
+- Push.
+- Pull request.
+- Squash merge.
+
+The way the branch got its name does not change it. `rk guide setup` step 4 owns the path, and `rk guide release` step 1 owns the landing. This page restates neither.
 
 ### 5a. The divergent rerun
 
-Each of these stops the run and leaves the clone unchanged. The destination is what the report names.
+Each of these cases stops the run and leaves the clone unchanged. Go where the report names.
 
-- The forge CLI is absent or below the floor. The message names the version found, the floor, and the upgrade. `rk doctor` reports the same thing as `gh-version` and `glab-version`.
-- On GitLab, the project's branch name template renders a name this verb cannot use. The message names the rendered name and the setting that produced it. Two things can be wrong with it: the landed grammar refuses it, or GitLab would not link it to the issue, which needs the issue number followed by a hyphen at the start. Change the template at Settings, Repository, Branch defaults, Branch name template, or pass a name to `rk worktree add` instead.
-- The forge carries the branch and this clone cannot reach its tip. Run `git fetch origin`, then rerun. The apply refuses rather than seat a same-named branch cut from the trunk, which would share none of the forge's history.
-- This clone could not refresh from the forge. Run `git fetch origin`, then rerun. A remote-tracking ref an older fetch left behind is not the tip the forge holds now, so the apply refuses rather than seat from it.
+- The forge CLI is absent or below the floor. The message names three things:
+  - The version found.
+  - The floor.
+  - The upgrade.
+
+  `rk doctor` reports the same thing as `gh-version` and `glab-version`.
+- On GitLab, the project's branch name template renders a name this verb cannot use. The message names the rendered name and the setting that produced it. Two things can be wrong with it. The landed grammar refuses it, or GitLab does not link it to the issue. A link needs the issue number and a hyphen at the start. Change the template at Settings, Repository, Branch defaults, Branch name template. Or pass a name to `rk worktree add` instead.
+- The forge carries the branch and this clone cannot reach its tip. Run `git fetch origin`. Then rerun the verb. The apply refuses to seat a branch of the same name cut from the trunk. That branch shares none of the history that the forge holds.
+- This clone could not refresh from the forge. Run `git fetch origin`. Then rerun the verb. A remote-tracking ref that an older fetch left behind is not the tip that the forge holds now. So the apply refuses to seat from it.
 - Under the branches mode, the branch is already checked out in another worktree. The report names that worktree and the switch that frees it, and nothing is created at the forge.
-- Under the branches mode, the main checkout carries uncommitted work. Commit or stash it, then rerun. This mode checks the branch out there, so it asks for a clean checkout, which is stricter than git alone: nothing is created at the forge either way.
-- The clone's origin, or the issue URL where the clone names no host, is a GitHub host other than github.com. This verb reaches github.com alone. Start the branch with `gh issue develop --repo <host>/<owner>/<name>`, then `rk worktree add` it.
-- The forge answers a failure. The reason comes from the forge's own answer: authenticate the CLI, get access to the project, wait for a rate limit, or correct the issue number. A rerun is the fix only where the reason says the failure was transient.
-- The issue carries more than one linked branch. The report names every one it did not take. The name this run renders wins where the forge carries it, so a steady project keeps taking the same branch; otherwise the first in sort order wins.
-- The forge cannot say which branches the issue owns. The run stops rather than mint, because an unanswered read is not proof that no branch exists, and minting on that guess is what leaves one issue with two branches.
+- Under the branches mode, the main checkout carries uncommitted work. Commit or stash it. Then rerun the verb. This mode checks the branch out there, so it asks for a clean checkout. That is stricter than git alone. The verb creates nothing at the forge in either case.
+- The clone's origin, or the issue URL where the clone names no host, is a GitHub host other than github.com. This verb reaches github.com alone. Start the branch with `gh issue develop --repo <host>/<owner>/<name>`. Then seat it with `rk worktree add`.
+- The forge answers a failure. The reason comes from the forge's own answer. Take the one action that the reason names:
+  - Authenticate the CLI.
+  - Get access to the project.
+  - Wait for a rate limit.
+  - Correct the issue number.
+
+  A rerun is the fix only where the reason says that the failure was transient.
+- The issue carries more than one linked branch. The report names every one it did not take. Where the forge carries the name that this run renders, that name wins, so a steady project keeps taking the same branch. Otherwise the first in sort order wins.
+- The forge cannot say which branches the issue owns. The run stops and mints nothing. An unanswered read is not proof that no branch exists. A mint on that guess leaves one issue with two branches.
 - The branch is already seated somewhere other than its derived path. The report names the seat and the move that frees it, exactly as `rk worktree add` does.

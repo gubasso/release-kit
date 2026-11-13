@@ -5,13 +5,13 @@ This page gives the four steps of [integration](../method/12-integration.md) as 
 The recorded merge form, `git.merge_form`, decides what reaches the trunk under either mode:
 
 - `squash`, the default, writes one commit for the branch, with the message you give it.
-- `rebase` rebases the branch on the trunk tip and fast-forwards the trunk to it. Every commit of the branch arrives with its own message, and no new commit is written.
+- `rebase` rebases the branch on the trunk tip and fast-forwards the trunk to it. Every commit of the branch arrives with its own message, and the rebase writes no new commit.
 
 Choose `squash` where one implementation reads best as one trunk commit. Choose `rebase` where every commit of the branch is already a conventional step worth keeping on the trunk. `rk init --merge-form <form>` records the answer. `rk upgrade --merge-form <form> --apply` changes it. A project that never answered keeps `squash`. [Integration](../method/12-integration.md) owns the choice.
 
 ## 1. Ready the branch in its seat
 
-The implementation is committed on its short-lived branch, in the seat that [the worktree runbook](./worktree.md) created. Integration starts from a clean seat, because the gate judges the tree it finds.
+You committed the implementation on its short-lived branch, in the seat that [the worktree runbook](./worktree.md) created. Integration starts from a clean seat, because the gate judges the tree it finds.
 
 ```bash
 cd ../<project>@<type>-<slug>
@@ -58,11 +58,11 @@ rk integrate <type>/<slug> --forge --apply               # runs the pre-push sta
 # check: the report names the request command for this forge
 ```
 
-You open the request yourself, with the command that the report names. Under `squash`, its title becomes the trunk's commit message, so it follows the same convention as a local message. Judge the body with `rk message --check --kind body` before you post it. The forge holds the merge behind its required check.
+Open the request yourself, with the command that the report names. Under `squash`, its title becomes the trunk's commit message, so it follows the same convention as a local message. Judge the body with `rk message --check --kind body` before you post it. The forge holds the merge behind its required check.
 
 A local publication reads the trunk again right before it moves anything, and the worktree that holds it. A difference refuses. Where no worktree holds the trunk, the move is one compare-and-swap of the trunk ref. Where one does, the move is that worktree's fast-forward. `rk integrate` then confirms the move from the trunk's reflog, or from the full object names in the fast-forward's report. Git offers no compare-and-swap for a checked-out branch that also moves its worktree. So a writer outside `rk` can still move the trunk in between, and the trunk is then already published.
 
-Where the move started elsewhere, or neither source can confirm its start, `rk integrate` exits 1 with the reason `state-drift`. Its report names the published commit. Its diagnostic names the commit where the move started, or why the start is unconfirmed. Nothing is rolled back. In that case:
+Where the move started elsewhere, or neither source can confirm its start, `rk integrate` exits 1 with the reason `state-drift`. Its report names the published commit. Its diagnostic names the commit where the move started, or why the start is unconfirmed. The command rolls nothing back. In that case, follow these steps:
 
 1. Run the `git log` that the diagnostic names.
 2. Read the commits in the range that it names.
@@ -83,10 +83,10 @@ Where the move started elsewhere, the range runs from the observed tip to that s
 | a hook that committed        | keep its commit, the repair, `git reset -q --hard`, a clean status |
 | a hook that staged a change  | the repair, then `git reset -q`, then settle the changed files     |
 | a seat detached at the trunk | the repair, then re-run                                            |
-| a trunk that moved           | re-run; the second attempt rebases onto the tip that arrived       |
+| a trunk that moved           | re-run, and the second attempt rebases onto the tip that arrived   |
 | a trunk checked out since    | re-run, or remove the new worktree of the trunk first              |
-| another run holding the lock | wait for it; two integrations in one clone write one trunk ref     |
-| `-m` under the rebase form   | drop `-m`; every commit of the branch keeps its own message        |
+| another run holding the lock | wait for it. Two integrations in one clone write one trunk ref     |
+| `-m` under the rebase form   | drop `-m`. Every commit of the branch keeps its own message        |
 | a branch commit's message    | reword that commit in the seat, then re-run                        |
 
 The repair is `git -C <seat> symbolic-ref HEAD refs/heads/<branch>`. It leaves a commit that a hook made on no ref, so keep that commit first with `git branch <name> HEAD`. Re-run only when `git status --porcelain` prints nothing. [Recovery](../method/04-recovery.md) gives each case in full.
@@ -135,11 +135,17 @@ rk worktree prune --verify               # check: confirmed against the merged r
 rk worktree prune --apply                # check: pruned; the seat and the branch went together
 ```
 
-After a local rebase integration, a GitLab fast-forward merge, or a hand `git merge --ff-only`, the trunk reaches the branch tip itself. So the verify can name the reachable tip as the proof. A GitHub rebase merge writes new commits, so there the merged request stays the proof. Step 4 of [the worktree runbook](./worktree.md) lists the three proofs.
+Three integrations leave the trunk at the branch tip itself:
+
+- A local rebase integration.
+- A GitLab fast-forward merge.
+- A hand `git merge --ff-only`.
+
+After one of them, the verify can name the reachable tip as the proof. A GitHub rebase merge writes new commits, so there the merged request stays the proof. Step 4 of [the worktree runbook](./worktree.md) lists the three proofs.
 
 ### 4a. When the push turns the trunk red
 
-The local path cannot see the remote checks before the push, because the push starts them. Watch the run that the push started, and the release request that it refreshed. A failure leaves the release request open, so nothing publishes. The trunk's strict rule is the boundary, and no landed job merges the request. Repair the failure as a fresh implementation, integrated the same way. No local integration is erased, and nothing is reverted by hand.
+The local path cannot see the remote checks before the push, because the push starts them. Watch the run that the push started, and the release request that it refreshed. A failure leaves the release request open, so nothing publishes. The trunk's strict rule is the boundary, and no landed job merges the request. Repair the failure as a fresh implementation, integrated the same way. Nobody erases a local integration, and nobody reverts anything by hand.
 
 ## 5. Release
 

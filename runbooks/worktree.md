@@ -1,6 +1,10 @@
 # Worktree runbook
 
-The four steps of [worktrees](../method/08-worktrees.md) as commands: the chapter owns each step's why, this page owns its how. Mode-free by design — it documents the worktree form, which both checkout modes use; only step 1 notes where the `worktree` mode makes this the only path to a commit, and step 3 hands the integration to its own runbook. `<project>` is the main checkout's directory name, and `<repo>` is the project path, filled in by `rk guide worktree` where detection resolves it. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
+This runbook gives the four steps of [worktrees](../method/08-worktrees.md) as commands. The chapter owns the why of each step, and this page owns its how.
+
+The page reads the same under every mode, by design. It documents the worktree form, which both checkout modes use. Only step 1 notes where the `worktree` mode makes this the only path to a commit. Step 3 hands the integration to its own runbook. `<project>` is the directory name of the main checkout, and `<repo>` is the project path. `rk guide worktree` fills both in where detection resolves them.
+
+The operator runs the commands. An agent serves a runbook and states the command. It runs one only where the operator's request named that step.
 
 ## 1. Create the worktree
 
@@ -13,11 +17,11 @@ cd ../<project>@<type>-<slug>
 
 On worktree:
 
-In this mode the main checkout commits nothing, so this step is the only path to a commit: every code-changing branch takes its worktree before its first commit.
+In this mode the main checkout commits nothing, so this step is the only path to a commit. Every branch that changes code takes its worktree before its first commit.
 
 ### 1a. Adopt the forge-minted branch
 
-Work an issue names starts from `rk issue start <issue>`, which mints the branch at the forge and seats it here. [The issue runbook](./issue.md) owns that procedure. Where the branch already exists and only the seat is missing:
+Work that an issue names starts from `rk issue start <issue>`. That verb mints the branch at the forge and seats it here. [The issue runbook](./issue.md) owns that procedure. If the branch already exists and only the seat is missing, run this:
 
 ```bash
 rk worktree add <issue-id>-<slug> --apply
@@ -33,7 +37,7 @@ rk worktree add release/<line> --base "v<version>" --apply
 
 ### 1c. Adopt a bare branch
 
-When moving a branch — or the mode — out of the main checkout:
+To move a branch, or the mode, out of the main checkout, run this:
 
 ```bash
 git switch master                        # in the main checkout, so the branch is free
@@ -43,7 +47,7 @@ rk worktree add <branch> --apply
 
 ## 2. Prepare its environment
 
-A worktree is a fresh checkout: copy the untracked environment files the project needs, run its setup, and arm the hooks once per clone.
+A worktree is a fresh checkout. Copy the untracked environment files that the project needs. Run its setup. Arm the hooks once per clone.
 
 ```bash
 prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --hook-type pre-merge-commit
@@ -52,11 +56,11 @@ prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push 
 
 On rust:
 
-Each worktree builds into its own `target/` by default. A shared `CARGO_TARGET_DIR` stays correct under cargo's lock and serializes parallel builds; per-worktree targets trade disk for parallelism.
+Each worktree builds into its own `target/` by default. A shared `CARGO_TARGET_DIR` stays correct under the lock of cargo, and it serializes parallel builds. A target for each worktree trades disk space for parallel builds.
 
 ## 3. Integrate
 
-The seat's work reaches the trunk through the authority the record names, and [the integration runbook](./integration.md) owns both paths: `rk guide integration`. Nothing is restated here.
+The work of the seat reaches the trunk through the authority that the record names. [The integration runbook](./integration.md) owns both paths: `rk guide integration`. This page restates neither.
 
 ## 4. Prune after the integration
 
@@ -67,21 +71,32 @@ rk worktree prune --verify               # check: confirmed, and the row names w
 rk worktree prune --apply                # check: pruned; the branch and its configuration went with it
 ```
 
-The verify names one of three proofs, and each removal rests on one:
+The verify names one of three proofs. Each removal rests on one of them:
 
-- `request`: a merged request whose recorded head equals the branch's tip, the proof forge integration leaves.
-- `local-integration`: a recorded local integration whose branch tip equals it and whose commit the trunk reaches, the proof `rk integrate` leaves under either merge form.
-- `reachable-tip`: the trunk reaches the branch's current tip, and the branch moved from the commit its reflog's creation entry records. It needs no record and no forge answer, so it holds after a local rebase integration, a GitLab fast-forward merge, and a hand `git merge --ff-only`. A fresh branch still at its creation commit is never pruned by it, and a branch whose creation entry expired gets no such proof.
+- `request`: a merged request whose recorded head equals the tip of the branch. Forge integration leaves this proof.
+- `local-integration`: a recorded local integration whose branch tip equals the tip, and whose commit the trunk reaches. `rk integrate` leaves this proof under either merge form.
+- `reachable-tip`: the trunk reaches the current tip of the branch, and the branch moved from the commit that the creation entry of its reflog records. It needs no record and no forge answer. So it holds after each of these:
+  - A local rebase integration.
+  - A GitLab fast-forward merge.
+  - A hand `git merge --ff-only`.
 
-A squash writes a new commit and a GitHub rebase merge writes new commits with new SHAs, so after either the trunk does not reach the tip, and the merged request or the recorded integration stays the proof. [Integration](./integration.md) owns which one a target leaves, and [worktrees](../method/08-worktrees.md) owns why each proof is admissible. `rk branches prune --verify` names the same three proofs for a branch with no seat.
+  This proof never prunes a fresh branch still at its creation commit. A branch whose creation entry expired gets no such proof.
+
+A squash writes a new commit, and a GitHub rebase merge writes new commits with new SHAs. After either one, the trunk does not reach the tip. The merged request or the recorded integration stays the proof. [Integration](./integration.md) owns which one a target leaves, and [worktrees](../method/08-worktrees.md) owns why each proof is admissible. `rk branches prune --verify` names the same three proofs for a branch with no seat.
 
 ### 4a. The divergent rerun
 
-An interrupted cleanup recovers with `git worktree list` and `git worktree repair`, then `rk worktree prune` again. A kept row's reason names its unblocking: commit or stash for dirt, `git worktree unlock <path>` for a lock you own. A `branch-delete-failed` row means the worktree is gone and the branch survives with its work; `rk worktree add <branch> --apply` re-seats it.
+If a cleanup stopped partway, run `git worktree list`. Then run `git worktree repair`. Then run `rk worktree prune` again. The reason of a kept row names what unblocks it. For uncommitted work, commit or stash it. For a lock that you own, run `git worktree unlock <path>`. A `branch-delete-failed` row means that the worktree is gone and the branch survives with its work. `rk worktree add <branch> --apply` seats it again.
 
 ## 5. Promote to a workspace (optional)
 
-A workspace is a directory scoped to this project alone, holding its main checkout, its worktrees, and whatever else the project keeps beside them; the [chapter](../method/08-worktrees.md) states the layouts this is one of. Promotion is a move per seat, at any time:
+A workspace is a directory for this project alone. It holds these:
+
+- The main checkout.
+- The worktrees.
+- Whatever else the project keeps beside them.
+
+The [chapter](../method/08-worktrees.md) states the layouts, and this is one of them. Promotion moves each seat, at any time:
 
 ```bash
 mkdir ../<workspace>
