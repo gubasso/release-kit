@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.15](https://github.com/gubasso/release-kit/compare/v0.9.14...v0.9.15) - 2026-11-13
+
+### Added
+
+- *(release)* release only on the operator's order
+- *(release/engine)* open a release request only for a releasing change to the packed files
+- *(integrate)* run the clone's pre-merge-commit hook as the gate
+- *(landing)* install rk where a recorded environment carries none
+
 ## [0.9.14](https://github.com/gubasso/release-kit/compare/v0.9.13...v0.9.14) - 2026-11-12
 
 ### Added
