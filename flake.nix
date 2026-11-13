@@ -17,7 +17,7 @@
     # spec-driven-docs, with the URL's tag moved to match, followed by sdd
     # upgrade where the release moves the canon.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.15.2";
+      url = "github:gubasso/spec-driven-docs/v0.17.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # The store guard of the canon (exobrain): `exobrain store-guard --daily`

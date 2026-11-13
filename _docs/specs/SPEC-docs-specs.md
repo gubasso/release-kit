@@ -114,11 +114,11 @@ Verify: `pre-commit run spec-size-cap --all-files`
 
 ### `docs-specs:verification-names-a-live-hook` — A verification names a live hook
 
-Where a requirement's verification runs a hook, the author MUST name a hook the project still defines.
+Where a requirement's verification runs a hook, the author MUST name a hook the project still defines. A verification runs a hook as `prek run <hook>` or as `pre-commit run <hook>`, and a new verification uses `prek run <hook>`.
 
 #### Scenario: A hook is renamed
 
-- GIVEN a rule whose `Verify:` line runs `pre-commit run chapter-size-cap`
+- GIVEN a rule whose `Verify:` line runs `prek run chapter-size-cap`
 - WHEN the hook is renamed and the spec is not
 - THEN the rule is enforced by nothing while still reading as gated, and the gate reports it
 

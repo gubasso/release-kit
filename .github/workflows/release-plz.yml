@@ -13,35 +13,56 @@
 # pull-request half serializes per ref so racing pushes cannot fight over the
 # release pull request.
 name: release-plz
+# A merge run names itself by the correlation rk release merge waits on;
+# every other run keeps the forge's own name.
+run-name: ${{ inputs.action == 'merge' && format('rk release merge {0}', inputs.correlation) || '' }}
 
 permissions: {}
 
 on:
   push:
     branches: [master, 'release/**']
-  # A person mints a release candidate on purpose: the line, and the tip they
-  # read, so a line that moved since then refuses. Nothing watches a push.
+  # A person dispatches one action on purpose, and nothing watches a push.
+  # candidate mints or promotes a line's release candidate: the line, and
+  # the tip they read, so a line that moved since then refuses. merge is
+  # what rk release merge sends: the trunk's release request, the trunk tip
+  # and the head it read, and the correlation the run's name carries.
   workflow_dispatch:
     inputs:
-      line:
-        description: The release line, <major>.<minor>, as in 1.4
+      action:
+        description: What this dispatch does, candidate or merge
         required: true
+        type: choice
+        options: [candidate, merge]
+      line:
+        description: The release line, <major>.<minor>, as in 1.4 (candidate)
+        required: false
         type: string
       expect:
-        description: The line's tip you read, as a full commit SHA
-        required: true
+        description: The line's tip you read, as a full commit SHA (candidate)
+        required: false
         type: string
       promote:
-        description: Promote the line's newest candidate to its stable version instead of minting a new one
+        description: Promote the line's newest candidate to its stable version instead of minting a new one (candidate)
         required: false
         type: boolean
         default: false
-  # zizmor: ignore[dangerous-triggers] the gate below trusts no value this
-  # event carries: it reads the candidate back from the forge, proves its
-  # author, base, and head repository there, and merges nothing else.
-  workflow_run:
-    workflows: ["ci"]
-    types: [completed]
+      request:
+        description: The release request to merge, by number (merge)
+        required: false
+        type: string
+      base:
+        description: The trunk tip the merge expects, as a full commit SHA (merge)
+        required: false
+        type: string
+      head:
+        description: The request head the merge expects, as a full commit SHA (merge)
+        required: false
+        type: string
+      correlation:
+        description: The id rk release merge finds this run by (merge)
+        required: false
+        type: string
 
 jobs:
   # Merging the release pull request is the release: the bump push lands here,
@@ -111,9 +132,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # This half opens and refreshes the release request and then arms it, so
-      # its token carries pull-requests beside contents. The release half above
-      # takes contents alone.
+      # This half opens and refreshes the release request, so its token
+      # carries pull-requests beside contents. It never arms or merges the
+      # request: a release waits for the operator's order. The release half
+      # above takes contents alone.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
@@ -126,6 +148,20 @@ jobs:
         with:
           use-flakehub: false
           use-gha-cache: true
+      # The project records that its environment carries no rk, so this job
+      # installs rk at the landing version. The installer checks the
+      # archive's SHA-256 before it installs, and puts rk at
+      # $RUNNER_TEMP/rk/rk. The prefix keeps the runner's PATH, so the
+      # steps below find that rk, and every tool rk calls still comes from
+      # the environment. Where a comment below says the environment must
+      # carry rk, this step answers for it.
+      - name: install rk
+        env:
+          RK_VERSION: "0.9.15"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/gubasso/release-kit/releases/download/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
       # The release app commits and tags, so git takes its identity, read
       # from the app token the way release-plz's own action reads it. gh is
       # the runner's, never the project's: it carries the forge credential.
@@ -174,19 +210,37 @@ jobs:
               echo "held=false" >> "$GITHUB_OUTPUT"
               ;;
           esac
-      # The request half writes the whole JSON report as the pr output. The
-      # arm below reads the first request number in it, which is the one
-      # request release-plz maintains, and reads none where it opened none.
+      # release-plz opens a request for any change to a file the crate ships.
+      # A release also needs a releasing commit among the commits that made
+      # that change: feat, fix, or perf, or a breaking change. Where none is,
+      # release-pr is skipped and the reason logged; the request opens on the
+      # first push that carries one, and its changelog keeps every commit.
+      - name: judge whether a releasing commit changed the package
+        id: eligible
+        if: steps.candidate.outputs.held != 'true'
+        run: |
+          set -eu
+          answer="$(nix develop --command rk release eligible)"
+          printf '%s\n' "$answer"
+          case "$answer" in
+            eligible:*)
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "release-pr skipped: ${answer#not eligible: }"
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      # The request half opens or refreshes the one request and leaves it
+      # open: a release waits for the operator's order.
       - name: release-pr
         id: release-pr
-        if: steps.candidate.outputs.held != 'true'
+        if: steps.candidate.outputs.held != 'true' && steps.eligible.outputs.eligible == 'true'
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -eu
-          output="$(nix develop --command release-plz release-pr --git-token "$GITHUB_TOKEN" --repo-url "https://github.com/$GITHUB_REPOSITORY" -o json)"
-          printf '%s\n' "$output"
-          printf 'pr=%s\n' "$(printf '%s' "$output" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          nix develop --command release-plz release-pr --git-token "$GITHUB_TOKEN" --repo-url "https://github.com/$GITHUB_REPOSITORY"
 
   # A release candidate, minted on purpose. The job checks out the requested
   # line under the app token and persists it, because rk pushes the
@@ -199,7 +253,10 @@ jobs:
   # could not publish. A promotion writes the stable version alone, and the
   # line's release request proposes it.
   release-candidate:
-    if: github.repository_owner == 'gubasso' && github.event_name == 'workflow_dispatch'
+    if: >-
+      github.repository_owner == 'gubasso'
+      && github.event_name == 'workflow_dispatch'
+      && inputs.action == 'candidate'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -208,6 +265,18 @@ jobs:
       group: release-candidate-${{ inputs.line }}
       cancel-in-progress: false
     steps:
+      # A candidate's inputs are optional at the dispatch, because a merge
+      # dispatch carries none of them, so the job refuses here first.
+      - name: refuse a dispatch without its line and tip
+        env:
+          LINE: ${{ inputs.line }}
+          EXPECT: ${{ inputs.expect }}
+        run: |
+          set -eu
+          if [ -z "$LINE" ] || [ -z "$EXPECT" ]; then
+            echo "::error::a candidate dispatch names the line and the tip you read, as -f line=<major>.<minor> -f expect=<sha>; nothing minted."
+            exit 1
+          fi
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
@@ -245,6 +314,20 @@ jobs:
           fi
           sed 's/^release_always = false$/release_always = true/' release-plz.toml > "$RUNNER_TEMP/release-plz-rc.toml"
       - uses: DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19
+      # The project records that its environment carries no rk, so this job
+      # installs rk at the landing version. The installer checks the
+      # archive's SHA-256 before it installs, and puts rk at
+      # $RUNNER_TEMP/rk/rk. The prefix keeps the runner's PATH, so the
+      # steps below find that rk, and every tool rk calls still comes from
+      # the environment. Where a comment below says the environment must
+      # carry rk, this step answers for it.
+      - name: install rk
+        env:
+          RK_VERSION: "0.9.15"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/gubasso/release-kit/releases/download/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
 
       # rk, release-plz, and the toolchain come from the project's development
       # environment, through the prefix the project records, so the
@@ -270,36 +353,34 @@ jobs:
         run: |
           set -eu
           nix develop --command release-plz release --git-token "$GITHUB_TOKEN" --config "$RUNNER_TEMP/release-plz-rc.toml" -o json
-
-  # The release request's merger, never its authority. Under local
-  # integration the repository administrator bypasses the trunk ruleset for
-  # the deliberate direct push; this job holds no such bypass, so the trunk's
-  # own strict check still decides whether the request carries the trunk it
-  # was tested against. The job wakes when "ci" completes,
-  # and judges again after the push-side request job succeeds, so a request
-  # that was already green when nothing new ran still merges.
+  # The operator's order to release, and nothing else. rk release merge
+  # dispatches this job with the request, the trunk tip, and the head it
+  # read; no push and no other event reaches it. It runs as the release
+  # app, which is no bypass actor of the trunk ruleset, so the ruleset's
+  # strict check still decides at the write whether the request carries the
+  # trunk it was tested against.
   #
-  # It trusts no value the event carries. Every fact it acts on is read back
-  # from the forge: the request must be open, not a draft, based on the
-  # trunk, headed from this repository, and authored by the release app. The
-  # branch shape is a second, structural guard and never the proof of
-  # identity, because a branch pattern authenticates nothing.
-  release-gate:
-    needs: [release-plz-pr]
+  # It trusts no value the dispatch carries beyond what it compares. Every
+  # fact it acts on is read back from the forge: the caller holds the admin
+  # role, and the request is open, not a draft, based on the trunk, headed
+  # from this repository, authored by the release app, and still at the
+  # head and the base the operator read. The branch shape is a second,
+  # structural guard and never the proof of identity.
+  release-merge:
     if: >-
-      always()
-      && github.repository_owner == 'gubasso'
-      && ((github.event_name == 'push'
-      && needs.release-plz-pr.result == 'success')
-      || github.event.workflow_run.event == 'pull_request')
+      github.repository_owner == 'gubasso'
+      && github.event_name == 'workflow_dispatch'
+      && inputs.action == 'merge'
     runs-on: ubuntu-latest
     permissions: {}
+    concurrency:
+      group: release-merge
+      cancel-in-progress: false
     steps:
-      # The token is minted before the proofs rather than after them, because
-      # the app's own slug and every read below come from it. Minting grants
-      # nothing on its own: the merge is the only action this job takes, and
-      # every proof precedes it. Reading a check run is what adds
-      # permission-checks to the pair the request half takes.
+      # The token is minted before the proofs, because the app's own slug
+      # and every read below come from it. Minting grants nothing on its
+      # own: the merge is the only write this job makes, and every proof
+      # precedes it. Reading the check run is what adds permission-checks.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
@@ -309,100 +390,74 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-checks: read
-      - name: merge the release request once its check is green
+      - name: merge the release request the operator ordered
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
+          CALLER: ${{ github.triggering_actor }}
+          REQUEST: ${{ inputs.request }}
+          BASE: ${{ inputs.base }}
+          HEAD: ${{ inputs.head }}
           TRUNK: master
           GATE_CHECK: "gate"
           BRANCH_SHAPE: release-plz-
         run: |
           set -eu
-          # One candidate, or none. Every proof is read from the forge's own
-          # answer: open and not a draft, based on the trunk, headed from
-          # exactly this repository, and authored by the release app. A
-          # release line's request is based on the line rather than on the
-          # trunk, so this filter never sees it.
-          #
-          # The REST answer is what states the app's login as the app's own
-          # slug with the bot suffix. The pull-request list of the forge CLI
-          # renders the same actor as `app/<slug>`, and the GraphQL one as
-          # the bare slug, so a filter written against either would refuse
-          # every release rather than admit a foreign request.
-          #
-          # `--paginate` reads every page, and the forge CLI refuses to
-          # gather them into one array while a filter is given. So the
-          # filter judges each page alone and names every survivor, and the
-          # shell counts them across the whole set. Anything but one exact
-          # candidate merges nothing.
-          candidates="$(gh api --paginate "repos/{owner}/{repo}/pulls" -X GET \
-            -f state=open -f base="$TRUNK" -f per_page=100 \
-            --jq '.[]
-                  | select(.draft == false)
-                  | select(.base.ref == env.TRUNK)
-                  | select(.head.repo.full_name == env.GH_REPO)
-                  | select(.user.type == "Bot")
-                  | select(.user.login == env.APP_LOGIN)
-                  | select(.head.ref | startswith(env.BRANCH_SHAPE))
-                  | "\(.number) \(.head.sha)"')"
-          count="$(printf '%s\n' "$candidates" | grep -c '^[0-9]' || true)"
-          if [ "$count" != "1" ]; then
-            echo "no single release request the release app owns against $TRUNK; $count match and nothing merged."
-            exit 0
+          refuse() {
+            echo "::error::$1; nothing merged."
+            exit 1
+          }
+          # The dispatch's own inputs, each in its one exact shape.
+          case "$REQUEST" in
+            '' | *[!0-9]*) refuse "the dispatch names no request number" ;;
+          esac
+          for sha in "$BASE" "$HEAD"; do
+            if ! printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+              refuse "the dispatch names no full base and head commit"
+            fi
+          done
+          if [ -z "$GATE_CHECK" ]; then
+            refuse "the record names no required check for the trunk"
           fi
-          number="${candidates% *}"
-          head="${candidates#* }"
-          # The named check for that exact head, latest result only. A
-          # missing, duplicated, unfinished, or non-success answer all leave
-          # the request open, and the log says which one it was.
-          verdict="$(gh api "repos/{owner}/{repo}/commits/$head/check-runs" -X GET \
+          # Any write collaborator can dispatch a workflow, so the caller's
+          # role is what makes this job serve the operator's order alone.
+          role="$(gh api "repos/{owner}/{repo}/collaborators/$CALLER/permission" --jq .permission)"
+          if [ "$role" != "admin" ]; then
+            refuse "$CALLER holds the $role role, and only an administrator orders a release"
+          fi
+          # The request, read back from the forge. The REST answer is what
+          # states the app's login as the app's own slug with the bot
+          # suffix; the forge CLI's list renders it as app/<slug>.
+          facts="$(gh api "repos/{owner}/{repo}/pulls/$REQUEST" \
+            --jq '"\(.state) \(.draft) \(.merged) \(.base.ref) \(.head.repo.full_name) \(.user.type) \(.user.login) \(.head.ref) \(.head.sha)"')"
+          read -r state draft merged base repo kind login ref sha <<EOF
+          $facts
+          EOF
+          [ "$merged" = "false" ] || refuse "#$REQUEST is already merged"
+          [ "$state" = "open" ] || refuse "#$REQUEST is $state"
+          [ "$draft" = "false" ] || refuse "#$REQUEST is a draft"
+          [ "$base" = "$TRUNK" ] || refuse "#$REQUEST is based on $base, not on $TRUNK"
+          [ "$repo" = "$GH_REPO" ] || refuse "#$REQUEST is headed from $repo, not from $GH_REPO"
+          if [ "$kind" != "Bot" ] || [ "$login" != "$APP_LOGIN" ]; then
+            refuse "#$REQUEST is authored by $login, not by $APP_LOGIN"
+          fi
+          case "$ref" in
+            "$BRANCH_SHAPE"*) ;;
+            *) refuse "#$REQUEST is headed from $ref, which is no release branch" ;;
+          esac
+          [ "$sha" = "$HEAD" ] || refuse "#$REQUEST moved to $sha after the operator read $HEAD"
+          tip="$(gh api "repos/{owner}/{repo}/branches/$TRUNK" --jq .commit.sha)"
+          [ "$tip" = "$BASE" ] || refuse "$TRUNK moved to $tip after the operator read $BASE"
+          # The named check for that exact head, latest result only.
+          verdict="$(gh api "repos/{owner}/{repo}/commits/$HEAD/check-runs" -X GET \
             -f check_name="$GATE_CHECK" -f filter=latest \
             --jq 'if (.check_runs | length) == 1
                   then "\(.check_runs[0].status) \(.check_runs[0].conclusion)"
                   else "\(.check_runs | length) results" end')"
-          if [ "$verdict" != "completed success" ]; then
-            echo "the check $GATE_CHECK at $head reads: $verdict; #$number stays open."
-            exit 0
-          fi
-          # The match moves the stale-head proof into the write itself, so a
-          # refresh between the judgment and the merge refuses rather than
-          # merging bytes nothing judged. The trunk's own strict rule makes
-          # the base-freshness proof part of the same write, and this job
-          # holds no bypass of it.
-          if gh pr merge "$number" --match-head-commit "$head" --squash --delete-branch; then
-            echo "merged pull request #$number at $head."
-            exit 0
-          fi
-          # The forge computes mergeability after the fact, so a read taken
-          # right after a refused write can still answer UNKNOWN. Let it
-          # settle before reading what refused the merge.
-          for _ in 1 2 3 4 5 6; do
-            outcome="$(gh pr view "$number" --json state,mergeStateStatus,headRefOid \
-              --jq '"\(.state) \(.mergeStateStatus) \(.headRefOid)"')"
-            case "$outcome" in
-              "MERGED "*) break ;;
-              *" UNKNOWN "*) sleep 5 ;;
-              *) break ;;
-            esac
-          done
-          # Another run of this job may have merged the same judged head
-          # first. That is this job's own outcome reached by another route,
-          # and nothing else is.
-          case "$outcome" in
-            "MERGED "*" $head")
-              echo "pull request #$number was already merged at $head."
-              exit 0
-              ;;
-            # The trunk's own policy refused the merge: the request no longer
-            # carries the trunk, or the check it must carry is not satisfied
-            # for the state the merge would create. The request stays open
-            # and the next refresh rebuilds it, so this is the protection
-            # working rather than a broken job.
-            "OPEN BEHIND "*|"OPEN BLOCKED "*)
-              echo "the trunk refused the merge of #$number and the request reads: $outcome."
-              exit 0
-              ;;
-          esac
-          echo "::error::the merge of #$number at $head failed and the request reads: $outcome."
-          exit 1
+          [ "$verdict" = "completed success" ] || refuse "the check $GATE_CHECK at $HEAD reads: $verdict"
+          # The match moves the stale-head proof into the write itself, and
+          # the trunk's strict rule makes the base proof part of the same
+          # write. This job holds no bypass of either.
+          gh pr merge "$REQUEST" --match-head-commit "$HEAD" --squash --delete-branch
+          echo "merged pull request #$REQUEST at $HEAD."

@@ -75,6 +75,9 @@ merge_access_level = 40 # F: floor thirty
 # release jobs run release-plz and the toolchain through it.
 [dev_environment]
 run = "nix develop --command"
+# The devshell carries no rk on purpose (see flake.nix), so each job that
+# runs rk installs the landing release through the shell installer.
+rk = "installer"
 
 [[dev_environment.github.setup]]
 uses = "DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea"
@@ -84,6 +87,3 @@ tag = "v19"
 uses = "DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39"
 tag = "v13"
 with = { use-flakehub = false, use-gha-cache = true }
-
-[landing]
-accepted_drift = { ".github/workflows/release-plz.yml" = { reason = "the request job's rk release eligible step needs release-kit 0.9.15, and this landing installs 0.9.14, so this file re-lands after that release", sha256 = "dccaabe6fb27c6dcb5001cf955b85997d05cb03e28c9d300b3fd18375d5d4c52" } }

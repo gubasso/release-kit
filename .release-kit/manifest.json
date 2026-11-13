@@ -1,6 +1,6 @@
 {
   "schema_version": 12,
-  "rk_version": "0.9.14",
+  "rk_version": "0.9.15",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -52,7 +52,8 @@
             }
           }
         ]
-      }
+      },
+      "rk": "installer"
     }
   },
   "files": [
@@ -69,7 +70,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "b120d16dbb2179c42a634c4b1501a633d0db5bb53c59c53647e2857b812fe8e5"
+      "sha256": "9682290e7ccb5fea4b53cfd525440c0cd39c1735171e77e31f34dc50dd6a4bff"
     },
     {
       "destination": ".github/workflows/scorecard.yml",

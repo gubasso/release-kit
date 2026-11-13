@@ -1,7 +1,7 @@
 {
   "schema": "rk.setup-proof/1",
-  "rk_version": "0.9.14",
-  "verified_at": "2026-11-13T10:49:35Z",
+  "rk_version": "0.9.15",
+  "verified_at": "2026-11-13T14:56:34Z",
   "subject": {
     "target": {
       "bot_app_id": "",
