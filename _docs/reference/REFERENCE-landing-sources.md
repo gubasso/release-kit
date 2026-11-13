@@ -155,7 +155,7 @@ Verified 2026-11-12 with these versions:
 
 ## The bot identity of the release request
 
-Three upstream facts carry the request jobs that the landed release workflows render. GitHub states that with the exception of `workflow_dispatch` and `repository_dispatch`, events triggered by `GITHUB_TOKEN` do not create workflow runs at all. So a bump pushed or merged with the default token starts no publish. The release-plz action at the pinned commit declares a `pr` output. The output is the release request that the action opened or refreshed. It is a JSON object that carries these fields:
+Three upstream facts carry the request jobs that the landed release workflows render. GitHub states that an event triggered by `GITHUB_TOKEN` creates no workflow run, with two exceptions. A `workflow_dispatch` or `repository_dispatch` event always creates runs. A `pull_request` event of the type `opened`, `synchronize`, or `reopened` creates runs that wait for the approval of a user with write access, as read on 2026-11-13. A push stays suppressed. So a bump pushed or merged with the default token starts no publish, and a request opened with it reports no check until a person approves its runs. The release-plz action at the pinned commit declares a `pr` output. The output is the release request that the action opened or refreshed. It is a JSON object that carries these fields:
 
 - `number`
 - `head_branch`
@@ -165,6 +165,7 @@ Three upstream facts carry the request jobs that the landed release workflows re
 The release-plz tool refreshes by force-push on GitHub. On GitLab, it closes the outdated request and opens a fresh one. That is why rk 0.9.14 and older re-applied its arm on every run. The release-please action sets its outputs dynamically and not in `action.yml`: `prs_created` is true if any pull request was created or updated, and `pr` is a JSON string of the PullRequest object, unset when none exists.
 
 - <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>
+- <https://docs.github.com/en/actions/concepts/security/github_token>
 - <https://release-plz.dev/docs/github/output>
 - <https://github.com/release-plz/action/blob/66b324fd6c72d05d2a08568492ecdd62bfb8a62b/action.yml>
 - <https://github.com/googleapis/release-please-action/blob/45996ed1f6d02564a971a2fa1b5860e934307cf7/README.md>
@@ -173,7 +174,7 @@ Bearing: `release-engine:the-request-pushes-as-the-bot`, and the bot token that 
 
 ## Gating the release request
 
-The forge behavior that carried the release gate of rk 0.9.14 and older under local integration was verified on 2026-09-16. GitHub's recursion guard is the first fact. Events raised by a job that runs under `GITHUB_TOKEN` create no workflow run. GitHub documents `workflow_run` as the trigger that observes the finish of another workflow. That is why a check-run event cannot carry the gate and this one can. The `workflow_run` trigger requires a `workflows` key that names a workflow by its `name`. So the waking answer is a workflow name and never a filename. The check-runs endpoint for a commit takes `check_name` and `filter=latest`. That is how the gate reads one current result for the exact head it judged.
+The forge behavior that carried the release gate of rk 0.9.14 and older under local integration was verified on 2026-09-16. GitHub's recursion guard is the first fact. Events raised by a job that runs under `GITHUB_TOKEN` create no workflow run, except the dispatch events and the approval-required `pull_request` runs. A check-run event is not among those exceptions, as read again on 2026-11-13. GitHub documents `workflow_run` as the trigger that observes the finish of another workflow. That is why a check-run event cannot carry the gate and this one can. The `workflow_run` trigger requires a `workflows` key that names a workflow by its `name`. So the waking answer is a workflow name and never a filename. The check-runs endpoint for a commit takes `check_name` and `filter=latest`. That is how the gate reads one current result for the exact head it judged.
 
 The release-driver branch forms were verified against their pinned sources and a live Python request on 2026-09-21. Release-plz opens `release-plz-<...>`, and the bash pipeline writes `chore/release-v<version>` itself. The pinned release-please branch module builds `release-please--branches--<targetBranch>`, with an optional `--components--<component>` or `--groups--<group>` suffix. The live Python request carries the root form against `main`, which confirms the answer of the branch module outside its source.
 

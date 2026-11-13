@@ -63,7 +63,7 @@ Make `master` the repository default, so that the bot's release request targets 
 
 ## 2. Let automation act
 
-Grant the repository's CI permission to write and to open pull requests. Provide a bot identity. Store its credentials as repository secrets. On GitHub, the identity is an App installed on the repository. On GitLab, it is a project access token, or a service account that is a member of this one project on a GitLab.com Free group. The bot identity makes the bot's pushes start workflows. A push with the default CI token starts nothing. So a release request that it opens runs no checks, and a tag that it pushes silently skips the artifact build.
+Grant the repository's CI permission to write and to open pull requests. Provide a bot identity. Store its credentials as repository secrets. On GitHub, the identity is an App installed on the repository. On GitLab, it is a project access token, or a service account that is a member of this one project on a GitLab.com Free group. The bot identity makes the bot's pushes start workflows. A push with the default CI token starts no workflow. So a tag that it pushes silently skips the artifact build. On GitHub, a release request that the default token opens or refreshes runs its checks only after a person approves them. So every refresh of the request waits for a person. `rk forge github` states that rule of the forge.
 
 ## 3. Protect the trunk and the tags
 

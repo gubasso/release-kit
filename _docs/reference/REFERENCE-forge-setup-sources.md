@@ -36,11 +36,18 @@ Bearing: `runbooks/migration.md` steps 3a and 5a, the two gated removals a migra
 
 ## GITHUB_TOKEN and recursive workflow triggering
 
-Events triggered by the default `GITHUB_TOKEN` do not start new workflow runs.
+Verified on 2026-11-13 against the pages below. An event that the default `GITHUB_TOKEN` triggers creates no new workflow run, with two exceptions:
+
+- A `workflow_dispatch` or a `repository_dispatch` event always creates workflow runs.
+- A `pull_request` event of the type `opened`, `synchronize`, or `reopened` creates workflow runs in an approval-required state. The merge box shows a banner, and a user with write access starts the runs with Approve workflows to run. Other `pull_request` types create no run.
+
+A `push` event stays suppressed, even where a workflow runs on `push`. A GitHub App installation token or a personal access token lets the `pull_request` runs start with no approval.
 
 - <https://docs.github.com/en/actions/concepts/security/github_token>
+- <https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow>
+- <https://docs.github.com/en/actions/how-tos/manage-workflow-runs/approve-runs-from-forks>
 
-Bearing: this is the whole reason a bot identity exists. A tag pushed under the default token would never retrigger the artifact workflow, which is what `method/01-invariants.md` states as an invariant rather than a preference.
+Bearing: this is the reason a bot identity exists. A tag pushed under the default token never retriggers the artifact workflow, which `method/01-invariants.md` states as an invariant rather than a preference. A release request opened under the default token runs its checks only after a person approves them, on every refresh, so the required checks of the trunk never report unattended.
 
 ## Auto-merge on a pull request
 
