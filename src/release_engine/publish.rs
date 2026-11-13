@@ -162,7 +162,7 @@ fn read_build(target: &Utf8Path) -> Result<BuildReport, RkError> {
             RkError::refusal(
                 Diagnostic::new(
                     Reason::StateDrift,
-                    format!("no rk.release-build/1 report at {report_path}"),
+                    format!("no {} report at {report_path}", super::build::SCHEMA),
                 )
                 .expected("the report rk release build writes, carried to this job")
                 .action("run rk release build first, and carry .rk-release/ to this job")

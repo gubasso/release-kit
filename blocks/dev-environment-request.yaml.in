@@ -33,12 +33,33 @@ RK_DEV_SETUP_STEPSRK_DEV_GIT_USER
               echo "held=false" >> "$GITHUB_OUTPUT"
               ;;
           esac
+      # release-plz opens a request for any change to a file the crate ships.
+      # A release also needs a releasing commit among the commits that made
+      # that change: feat, fix, or perf, or a breaking change. Where none is,
+      # release-pr is skipped and the reason logged; the request opens on the
+      # first push that carries one, and its changelog keeps every commit.
+      - name: judge whether a releasing commit changed the package
+        id: eligible
+        if: steps.candidate.outputs.held != 'true'
+        run: |
+          set -eu
+          answer="$(RK_DEV_RUN rk release eligible)"
+          printf '%s\n' "$answer"
+          case "$answer" in
+            eligible:*)
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "release-pr skipped: ${answer#not eligible: }"
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
       # The request half writes the whole JSON report as the pr output. The
       # arm below reads the first request number in it, which is the one
       # request release-plz maintains, and reads none where it opened none.
       - name: release-pr
         id: release-pr
-        if: steps.candidate.outputs.held != 'true'
+        if: steps.candidate.outputs.held != 'true' && steps.eligible.outputs.eligible == 'true'
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |

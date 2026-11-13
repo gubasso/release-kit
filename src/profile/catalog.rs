@@ -362,13 +362,13 @@ pub fn registry_answer_fits(
 }
 
 /// Whether a build answer fits the release intent: an automatic bash
-/// release alone calls a project-supplied build command.
+/// release alone packs a declared archive.
 ///
 /// # Errors
 /// The refusal text, naming the key, what it found, and the shape it needs.
 pub fn build_answer_fits(mode: ReleaseMode, driver: Option<&str>) -> Result<(), String> {
     let shape = format!(
-        "profile.release.build names the command and the packages of a release whose pipeline builds the distribution, under profile.release.mode = \"automatic\" with profile.release.driver = \"{}\" alone",
+        "profile.release.build names what a release packs, profile.release.build.include and profile.release.build.exclude, the command that verifies it, and the packages that command needs, under profile.release.mode = \"automatic\" with profile.release.driver = \"{}\" alone",
         crate::profile::BuildAnswer::DRIVER
     );
     match (mode, driver) {

@@ -98,6 +98,10 @@ jobs:
       - name: install git-cliff
         run: pipx install git-cliff==2.14.2
 # RK_DEV_ENV_REQUEST_END
+      # The request builds the sdist with uv at this commit and at the last
+      # release tag, and opens only where a file it packs changed
+      # (release-engine:a-request-follows-the-packed-files). uv is the one
+      # build tool it needs.
       # The token is the release app's, never GITHUB_TOKEN: a push made with
       # the default token starts no workflow, and rk refuses it
       # (release-engine:the-request-pushes-as-the-bot).

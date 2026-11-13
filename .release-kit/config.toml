@@ -85,3 +85,6 @@ tag = "v19"
 uses = "DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39"
 tag = "v13"
 with = { use-flakehub = false, use-gha-cache = true }
+
+[landing]
+accepted_drift = { ".github/workflows/release-plz.yml" = { reason = "the request job's rk release eligible step needs release-kit 0.9.15, and this landing installs 0.9.14, so this file re-lands after that release", sha256 = "dccaabe6fb27c6dcb5001cf955b85997d05cb03e28c9d300b3fd18375d5d4c52" } }

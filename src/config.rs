@@ -701,19 +701,19 @@ fn release_vocabulary(raw: &toml::Value) -> Result<(), RkError> {
     }
 }
 
-/// Whether a build command can run as one shell line: one line, no
+/// Whether a verify command can run as one shell line: one line, no
 /// control character, and not empty, because `rk release build` runs it
 /// that way.
 ///
 /// # Errors
 /// The refusal text, naming the key and what it accepts.
-pub fn build_command_shape(raw: &str) -> Result<(), String> {
+pub fn build_verify_shape(raw: &str) -> Result<(), String> {
     if raw.trim().is_empty() {
-        return Err("profile.release.build.command is empty; it names the command that produces dist/*.tar.gz and its .sha256, such as make dist".to_owned());
+        return Err("profile.release.build.verify is empty; it names the command that proves the unpacked package builds and installs from its own files, such as make check".to_owned());
     }
     if raw.chars().any(char::is_control) {
         return Err(format!(
-            "profile.release.build.command is one line with no control character; found {raw:?}"
+            "profile.release.build.verify is one line with no control character; found {raw:?}"
         ));
     }
     Ok(())
@@ -738,6 +738,26 @@ pub fn build_packages_shape(raw: &str) -> Result<(), String> {
     }
 }
 
+/// Whether a pattern list reads as Cargo's `include` or `exclude` does.
+///
+/// Each gitignore-style pattern is one line with no control character,
+/// none is empty, and the gitignore matcher parses each. An empty list is
+/// no list, as in Cargo.
+///
+/// # Errors
+/// The refusal text, naming the key and the pattern it refuses.
+pub fn build_patterns_shape(key: &str, patterns: &[String]) -> Result<(), String> {
+    for pattern in patterns {
+        if pattern.trim().is_empty() || pattern.chars().any(char::is_control) {
+            return Err(format!(
+                "{key} holds gitignore-style patterns of one line each, with no control character and none empty; found {pattern:?}"
+            ));
+        }
+        crate::release_engine::packed::Declaration::parse(key, std::slice::from_ref(pattern))?;
+    }
+    Ok(())
+}
+
 /// Refuse a build answer under a mode or a driver the configuration names,
 /// and a value outside its shape; a driver the resolution derives settles
 /// the fit there.
@@ -745,11 +765,22 @@ fn build_fit(release: &Release) -> Result<(), RkError> {
     let Some(build) = &release.build else {
         return Ok(());
     };
-    if let Some(command) = &build.command {
-        build_command_shape(command).map_err(invalid)?;
+    if build.command.is_some() {
+        return Err(crate::profile::retired_build_command());
     }
     if let Some(packages) = &build.packages {
         build_packages_shape(packages).map_err(invalid)?;
+    }
+    if let Some(verify) = &build.verify {
+        build_verify_shape(verify).map_err(invalid)?;
+    }
+    for (key, patterns) in [
+        ("profile.release.build.include", &build.include),
+        ("profile.release.build.exclude", &build.exclude),
+    ] {
+        if let Some(patterns) = patterns {
+            build_patterns_shape(key, patterns).map_err(invalid)?;
+        }
     }
     if release.driver.is_some()
         || matches!(
@@ -1100,16 +1131,6 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
                 .map(|answer| answer.as_str().into()),
         ),
         (
-            "RK_CONFIG_PROFILE_RELEASE_BUILD_COMMAND",
-            config
-                .profile
-                .release
-                .build
-                .as_ref()
-                .and_then(|build| build.command.clone())
-                .map(toml_edit::Value::from),
-        ),
-        (
             "RK_CONFIG_PROFILE_RELEASE_BUILD_PACKAGES",
             config
                 .profile
@@ -1117,6 +1138,36 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
                 .build
                 .as_ref()
                 .and_then(|build| build.packages.clone())
+                .map(toml_edit::Value::from),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_BUILD_INCLUDE",
+            config
+                .profile
+                .release
+                .build
+                .as_ref()
+                .and_then(|build| build.include.as_deref())
+                .map(array),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_BUILD_EXCLUDE",
+            config
+                .profile
+                .release
+                .build
+                .as_ref()
+                .and_then(|build| build.exclude.as_deref())
+                .map(array),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_BUILD_VERIFY",
+            config
+                .profile
+                .release
+                .build
+                .as_ref()
+                .and_then(|build| build.verify.clone())
                 .map(toml_edit::Value::from),
         ),
         ("RK_CONFIG_GIT_TRUNK", Some(trunk.clone().into())),
@@ -1499,7 +1550,7 @@ const DERIVED_POLICY_KEYS: [&str; 5] = [
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 30] = [
+const PARAMETER_KEYS: [&str; 32] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -1508,8 +1559,10 @@ const PARAMETER_KEYS: [&str; 30] = [
     "profile.release.style",
     "profile.release.line_prefix",
     "profile.release.registry",
-    "profile.release.build.command",
     "profile.release.build.packages",
+    "profile.release.build.include",
+    "profile.release.build.exclude",
+    "profile.release.build.verify",
     "git.trunk",
     "git.checkout_mode",
     "git.integration",
@@ -2292,15 +2345,23 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
         ));
         let build = config.profile.release.build.as_ref();
         values.push((
-            "profile.release.build.command",
-            build
-                .and_then(|build| build.command.clone())
-                .map(toml_edit::Value::from),
-        ));
-        values.push((
             "profile.release.build.packages",
             build
                 .and_then(|build| build.packages.clone())
+                .map(toml_edit::Value::from),
+        ));
+        values.push((
+            "profile.release.build.include",
+            build.and_then(|build| build.include.as_deref()).map(array),
+        ));
+        values.push((
+            "profile.release.build.exclude",
+            build.and_then(|build| build.exclude.as_deref()).map(array),
+        ));
+        values.push((
+            "profile.release.build.verify",
+            build
+                .and_then(|build| build.verify.clone())
                 .map(toml_edit::Value::from),
         ));
     }

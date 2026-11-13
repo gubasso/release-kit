@@ -230,8 +230,10 @@ pub fn short(oid: &str) -> String {
 /// a warning names it by, or `None` for a type that states none.
 ///
 /// A breaking `!` on the subject's type or a `BREAKING CHANGE:` footer
-/// states a breaking change whatever the type; otherwise `feat` and `fix`
-/// are the two types a release bot bumps for.
+/// states a breaking change whatever the type; otherwise `feat`, `fix`,
+/// and `perf` are the types a release bot bumps for. This one classifier
+/// answers a releasing commit for the release engine, for `rk integrate`,
+/// and for the commit-message rule alike.
 #[must_use]
 pub fn release_intent(message: &str) -> Option<&'static str> {
     let mut lines = message.lines();
@@ -246,6 +248,7 @@ pub fn release_intent(message: &str) -> Option<&'static str> {
     match kind {
         "feat" => Some("a feat type"),
         "fix" => Some("a fix type"),
+        "perf" => Some("a perf type"),
         _ => None,
     }
 }
@@ -293,6 +296,26 @@ mod tests {
         assert_eq!(release_intent("docs(cli): explain it"), None);
         assert_eq!(release_intent("refactor(cli): tidy it"), None);
         assert_eq!(release_intent("no shape at all"), None);
+    }
+
+    /// SATISFIES release-engine:a-request-needs-a-releasing-commit
+    ///
+    /// The one classifier of a releasing commit: `feat`, `fix`, and `perf`,
+    /// and any type a `!` or a breaking footer marks.
+    #[test]
+    fn release_intent_classifies_perf_and_breaking() {
+        assert_eq!(release_intent("perf(cli): speed it"), Some("a perf type"));
+        assert_eq!(release_intent("perf: speed it"), Some("a perf type"));
+        assert_eq!(
+            release_intent("refactor!: rename it"),
+            Some("a breaking change")
+        );
+        assert_eq!(
+            release_intent("refactor(cli): move it\n\nBREAKING CHANGE: the flag is gone"),
+            Some("a breaking change")
+        );
+        assert_eq!(release_intent("build(deps): bump it"), None);
+        assert_eq!(release_intent("chore(deps): bump it"), None);
     }
 
     #[test]

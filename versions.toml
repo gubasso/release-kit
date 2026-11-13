@@ -101,7 +101,7 @@ name = "git-cliff"
 version = "2.14.2"
 sha256 = "fa21e2fc70046fcfd0e43e5e4613873ab799aff3d9dc8559c00d31b270e417d0"
 used_by = ["release.automation/bash", "release.automation/python"]
-purpose = "computes the bump from Conventional Commits and rewrites the changelog"
+purpose = "computes the bump from Conventional Commits and writes the new changelog section"
 check = "https://api.github.com/repos/orhun/git-cliff/releases/latest"
 checked = 2026-11-12
 

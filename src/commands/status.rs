@@ -620,6 +620,19 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
     let Some(manifest) = manifest::load(&args.target)? else {
         return report_absent(out, args, config.as_ref(), git_work_tree);
     };
+    // SATISFIES project-profile:release-intent-has-three-modes
+    // A record that still carries the retired build command fails with the
+    // diagnostic the release actions refuse with, so the operator meets it
+    // here before CI does.
+    if manifest
+        .profile
+        .release
+        .build
+        .as_ref()
+        .is_some_and(|build| build.command.is_some())
+    {
+        return Err(crate::profile::retired_build_command());
+    }
 
     let migration = open_migration(&args.target, config.as_ref());
     let accepted = config

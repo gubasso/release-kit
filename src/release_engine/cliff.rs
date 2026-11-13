@@ -86,14 +86,37 @@ pub fn require_pin(root: &Utf8Path) -> Result<String, RkError> {
     Ok(pinned)
 }
 
+/// The arguments that limit git-cliff to the commits that touch `paths`:
+/// one `--include-path` per file. No path filters nothing.
+fn include(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .flat_map(|path| {
+            [
+                "--include-path".to_owned(),
+                super::packed::cliff_pattern(path),
+            ]
+        })
+        .collect()
+}
+
+/// Run git-cliff with `args`, then the path filter of `paths`.
+fn run_on(root: &Utf8Path, args: &[&str], paths: &[String]) -> Result<String, RkError> {
+    let filter = include(paths);
+    let mut all: Vec<&str> = args.to_vec();
+    all.extend(filter.iter().map(String::as_str));
+    run(root, &all)
+}
+
 /// git-cliff's proposal for the next version, from the landed
-/// `cliff.toml` and the history.
+/// `cliff.toml` and the history of the commits that touch `paths`, or of
+/// every commit where `paths` is empty.
 ///
 /// # Errors
 ///
 /// git-cliff's failure.
-pub fn bumped(root: &Utf8Path) -> Result<String, RkError> {
-    let answer = run(root, &["--bumped-version"])?;
+pub fn bumped(root: &Utf8Path, paths: &[String]) -> Result<String, RkError> {
+    let answer = run_on(root, &["--bumped-version"], paths)?;
     Ok(answer
         .lines()
         .rev()
@@ -103,21 +126,41 @@ pub fn bumped(root: &Utf8Path) -> Result<String, RkError> {
         .to_owned())
 }
 
-/// Rewrite `CHANGELOG.md` with `tag` as the newest section.
+/// Add `tag` as the newest section of `CHANGELOG.md`, from the unreleased
+/// commits that touch `paths`.
+///
+/// git-cliff prepends the section below the header `cliff.toml` defines,
+/// so every released section keeps its bytes. git-cliff refuses to prepend to a file that does not exist, so a target
+/// with no changelog yet gets a new file with the header and the section.
 ///
 /// # Errors
 ///
 /// git-cliff's failure.
-pub fn changelog(root: &Utf8Path, tag: &str) -> Result<(), RkError> {
-    run(root, &["--tag", tag, "-o", "CHANGELOG.md"]).map(drop)
+pub fn changelog(root: &Utf8Path, tag: &str, paths: &[String]) -> Result<(), RkError> {
+    let write = if root.join("CHANGELOG.md").exists() {
+        "--prepend"
+    } else {
+        "-o"
+    };
+    run_on(
+        root,
+        &["--unreleased", "--tag", tag, write, "CHANGELOG.md"],
+        paths,
+    )
+    .map(drop)
 }
 
-/// Write the notes of the unreleased commits, as `tag`, into `out`. The
-/// tag does not exist yet, so the notes name it.
+/// Write the notes of the unreleased commits that touch `paths`, as `tag`,
+/// into `out`. The tag does not exist yet, so the notes name it.
 ///
 /// # Errors
 ///
 /// git-cliff's failure.
-pub fn notes(root: &Utf8Path, tag: &str, out: &Utf8Path) -> Result<(), RkError> {
-    run(root, &["--unreleased", "--tag", tag, "-o", out.as_str()]).map(drop)
+pub fn notes(root: &Utf8Path, tag: &str, out: &Utf8Path, paths: &[String]) -> Result<(), RkError> {
+    run_on(
+        root,
+        &["--unreleased", "--tag", tag, "-o", out.as_str()],
+        paths,
+    )
+    .map(drop)
 }

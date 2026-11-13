@@ -42,7 +42,7 @@ Four traps, and the chapter's [own warnings](../method/03-operate.md) explain th
 
 ## 1. Land the work
 
-Release intent captured in the squash titles, each on a change the bot attributes to the package as [the binding](../bindings/README.md) defines, the local check suite green, and the package still publishable — a failure found here costs seconds where the same failure after the merge costs the recovery chapter. Where the check runs a pre-commit sweep from the trunk's checkout, name the commit-time branch guard out of it: `SKIP=no-commit-to-branch`, the same form the landed hook block's comment gives a CI sweep.
+Release intent captured in the squash titles, each on a change the bot attributes to the package as [the binding](../bindings/README.md) defines: a release needs a `feat`, `fix`, or `perf` title, or a breaking change, on a file the package ships. A dependency update that changes what ships is `fix(deps)`, one for development only is `chore(deps-dev)` or `build(deps-dev)`, and a security update is always `fix(deps)` with the advisory ID in its body. The local check suite is green, and the package still publishable — a failure found here costs seconds where the same failure after the merge costs the recovery chapter. Where the check runs a pre-commit sweep from the trunk's checkout, name the commit-time branch guard out of it: `SKIP=no-commit-to-branch`, the same form the landed hook block's comment gives a CI sweep.
 
 ```bash
 just check                                    # or the binding's check command
@@ -52,7 +52,11 @@ rk setup step package-check --target . --apply
 
 ## 2. Read the release request
 
-The bot keeps one request open against `master`: the version bump and the changelog entry, publishing nothing. Every merged pull request refreshes it, so the proposed version and the entry describe the trunk's tip.
+The bot keeps one request open against `master`: the version bump and the changelog entry, publishing nothing. Every merged pull request that changes a file the release packs refreshes it, so the proposed version and the entry describe the trunk's tip. No request stands until a commit that changed a packed file carries a releasing type; `rk release eligible` says why, and writes nothing.
+
+```bash
+rk release eligible                           # check: "eligible:" and the commit that releases, or "not eligible:" and why
+```
 
 On github:
 
@@ -117,7 +121,7 @@ git log --oneline "v<previous version>^{commit}..origin/master"
 # check: every commit that should appear in the entry is listed
 ```
 
-Nothing missing: skip to step 4. Something missing: continue — and on a request still armed, run 3b first, because a correction pushed to an armed request races the checks it restarts.
+On rust, release-plz writes a lock-only dependency update as its own `chore: update Cargo.lock dependencies` line, not the `fix(deps)` title: where that update names an advisory, correct the entry so the advisory shows. Nothing missing: skip to step 4. Something missing: continue — and on a request still armed, run 3b first, because a correction pushed to an armed request races the checks it restarts.
 
 ### 3d. Correct it on the request's branch
 

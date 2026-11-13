@@ -134,6 +134,11 @@ impl Listing {
         )
     }
 
+    /// Every listed path, sorted.
+    pub fn paths(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+
     /// Whether the package ships exactly `path`. An exact line, never a
     /// substring: `docs/SECURITY.md` and `SECURITY.md.bak` are different
     /// files.
@@ -204,9 +209,179 @@ pub fn exclude_entries(shipped: &[&str]) -> Vec<String> {
     entries
 }
 
+/// The files release-plz reads its configuration from, in the order it
+/// tries them.
+pub const RELEASE_PLZ_CONFIGS: [&str; 3] = [
+    "release-plz.toml",
+    ".release-plz.toml",
+    ".config/release-plz.toml",
+];
+
+/// One workspace member release-plz releases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Released {
+    /// The package name.
+    pub name: String,
+    /// The package's manifest, as cargo metadata states it.
+    pub manifest_path: String,
+    /// Whether the package has a binary target, whose build ships the
+    /// lock file.
+    pub binary: bool,
+}
+
+/// The workspace members release-plz 0.4.3 releases, in the order cargo
+/// metadata lists them.
+///
+/// A member takes part where its release-plz `release` key is not `false`
+/// and Cargo's `publish` field lets it publish somewhere, or where the
+/// member is `git_only` and is not an example-only package that leaves
+/// `publish` unset. release-plz's own `publish` key only stops
+/// `cargo publish`, so it selects nothing. A `[[package]]` entry's key
+/// overrides the `[workspace]` key of the same name.
+#[must_use]
+pub fn released_packages(metadata: &[u8], config: Option<&str>) -> Vec<Released> {
+    let Ok(document) = serde_json::from_slice::<Value>(metadata) else {
+        return Vec::new();
+    };
+    let table: toml::Table = config
+        .and_then(|text| toml::from_str(text).ok())
+        .unwrap_or_default();
+    let workspace = table.get("workspace");
+    let packages = table.get("package").and_then(toml::Value::as_array);
+    let key = |name: &str, key: &str| -> Option<bool> {
+        packages
+            .and_then(|list| {
+                list.iter()
+                    .find(|entry| entry.get("name").and_then(toml::Value::as_str) == Some(name))
+            })
+            .and_then(|entry| entry.get(key))
+            .or_else(|| workspace.and_then(|table| table.get(key)))
+            .and_then(toml::Value::as_bool)
+    };
+    let members: Vec<&str> = document
+        .get("workspace_members")
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    document
+        .get("packages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|package| {
+            package
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| members.contains(&id))
+        })
+        .filter_map(|package| {
+            let name = package.get("name")?.as_str()?;
+            let kinds: Vec<Vec<&str>> = package
+                .get("targets")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|target| {
+                    target
+                        .get("kind")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect()
+                })
+                .collect();
+            let example = kinds.iter().all(|kind| kind.as_slice() == ["example"]);
+            let publish = package.get("publish").filter(|value| !value.is_null());
+            let publishable = publish.map_or(!example, |registries| {
+                registries.as_array().is_some_and(|list| !list.is_empty())
+            });
+            let git_only = key(name, "git_only").unwrap_or(false);
+            let unpublished_example = publish.is_none() && example;
+            let takes_part = publishable || (git_only && !unpublished_example);
+            (key(name, "release") != Some(false) && takes_part).then(|| Released {
+                name: name.to_owned(),
+                manifest_path: package
+                    .get("manifest_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                binary: kinds.iter().any(|kind| kind.contains(&"bin")),
+            })
+        })
+        .collect()
+}
+
+/// The files `cargo package --list` prints that the tree does not hold
+/// under that name.
+///
+/// They are the generated manifest copy, the VCS record, and the lock,
+/// which a workspace keeps at its root and which a caller adds only for a
+/// package with a binary target.
+pub const LISTED_NOT_TRACKED: [&str; 3] = ["Cargo.toml.orig", ".cargo_vcs_info.json", "Cargo.lock"];
+
 #[cfg(test)]
 mod tests {
-    use super::{Answer, Listing, Probe, exclude_entries, probe, release_kit_paths};
+    use super::{
+        Answer, Listing, Probe, exclude_entries, probe, release_kit_paths, released_packages,
+    };
+
+    /// cargo metadata for members `(name, publish, kinds)`.
+    fn metadata(members: &[(&str, serde_json::Value, &[&str])]) -> Vec<u8> {
+        let packages: Vec<serde_json::Value> = members
+            .iter()
+            .map(|(name, publish, kinds)| {
+                serde_json::json!({
+                    "id": format!("{name} 0.1.0"), "name": name, "publish": publish,
+                    "manifest_path": format!("/w/{name}/Cargo.toml"),
+                    "targets": kinds.iter().map(|kind| serde_json::json!({"kind": [kind]})).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let ids: Vec<String> = members
+            .iter()
+            .map(|(name, ..)| format!("{name} 0.1.0"))
+            .collect();
+        serde_json::json!({"packages": packages, "workspace_members": ids})
+            .to_string()
+            .into_bytes()
+    }
+
+    fn names(metadata: &[u8], config: Option<&str>) -> Vec<String> {
+        released_packages(metadata, config)
+            .into_iter()
+            .map(|package| package.name)
+            .collect()
+    }
+
+    /// SATISFIES release-engine:a-rust-target-releases-one-package
+    ///
+    /// release-plz 0.4.3's selection: Cargo's `publish` field, the
+    /// `git_only` key, the `release` key, and the example-only rule.
+    #[test]
+    fn release_plz_selects_the_released_members() {
+        let null = serde_json::Value::Null;
+        let none = serde_json::json!([]);
+        let helper = metadata(&[
+            ("widget", null.clone(), &["bin"]),
+            ("xtask", none.clone(), &["bin"]),
+        ]);
+        let registry = "[workspace]\npublish = true\n";
+        assert_eq!(names(&helper, Some(registry)), vec!["widget"]);
+        let git_only = "[workspace]\npublish = false\ngit_only = true\n";
+        assert_eq!(names(&helper, Some(git_only)), vec!["widget", "xtask"]);
+        let opted_out = format!("{git_only}[[package]]\nname = \"xtask\"\nrelease = false\n");
+        assert_eq!(names(&helper, Some(&opted_out)), vec!["widget"]);
+        let single = metadata(&[("exobrain", none, &["bin"])]);
+        assert_eq!(names(&single, Some(git_only)), vec!["exobrain"]);
+        assert!(names(&single, Some(registry)).is_empty());
+        let example = metadata(&[("demo", null.clone(), &["example"])]);
+        assert!(names(&example, Some(git_only)).is_empty());
+        let off = "[workspace]\nrelease = false\n";
+        assert!(names(&metadata(&[("widget", null, &["lib"])]), Some(off)).is_empty());
+        let released = released_packages(&helper, Some(registry));
+        assert!(released[0].binary);
+    }
 
     #[test]
     fn a_listing_is_trimmed_lines_without_blanks() {

@@ -129,8 +129,16 @@ pub fn run(args: &ReleaseArgs) -> Result<(), RkError> {
         ReleaseAction::Request { target, json } => {
             render_done(&release_engine::request::run(target)?, Output::new(*json))
         }
-        ReleaseAction::Build { target, json } => {
-            render_done(&release_engine::build::run(target)?, Output::new(*json))
+        ReleaseAction::Build { target, list, json } => {
+            let done = if *list {
+                release_engine::build::list(target)?
+            } else {
+                release_engine::build::run(target)?
+            };
+            render_done(&done, Output::new(*json))
+        }
+        ReleaseAction::Eligible { target, json } => {
+            render_done(&release_engine::eligible::run(target)?, Output::new(*json))
         }
         ReleaseAction::Publish { target, json } => {
             render_done(&release_engine::publish::run(target)?, Output::new(*json))

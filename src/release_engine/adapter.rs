@@ -1,6 +1,6 @@
 //! The driver adapters: the one owner of where each driver keeps its
-//! version, how the version is spelled, how it is written, and how the
-//! release artifacts build.
+//! version, how the version is spelled, how it is written, how the
+//! release artifacts build, and which files the release packs.
 //!
 //! The readers here serve every driver, release-plz's rust included,
 //! because `rk lines mint` and the release status read a rust version
@@ -10,6 +10,7 @@
 //!
 //! SATISFIES release-engine:the-adapter-owns-the-version-file
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -197,15 +198,37 @@ pub trait DriverAdapter {
     ///
     /// The build's failure, or a build that left no artifact.
     fn build(&self, root: &Utf8Path, epoch: &str) -> Result<Vec<Utf8PathBuf>, RkError>;
+
+    /// The files the release packs at the revision `rev` of the checkout
+    /// at `root`, each a tracked file of that revision, relative to the
+    /// root. A python build runs in a temporary worktree outside the
+    /// checkout, and a bash list reads the revision's tree alone.
+    ///
+    /// SATISFIES release-engine:a-request-follows-the-packed-files
+    ///
+    /// # Errors
+    ///
+    /// The build's failure, or a package that holds no tracked file.
+    fn packed(&self, root: &Utf8Path, rev: &str) -> Result<BTreeSet<String>, RkError>;
+
+    /// Why the request opens nothing where neither revision packs a file
+    /// past rk's own.
+    fn nothing_packed(&self) -> String;
 }
 
-/// The adapter for a driver the engine releases, with the bash build
-/// command where the driver is bash.
+/// The adapter for a driver the engine releases. A bash release takes the
+/// name its archive carries, `<name>-<version>.tar.gz`, and the verify
+/// command the record names.
 #[must_use]
-pub fn for_driver(driver: &str, build_command: &str) -> Option<Box<dyn DriverAdapter>> {
+pub fn for_driver(
+    driver: &str,
+    name: &str,
+    verify: Option<&str>,
+) -> Option<Box<dyn DriverAdapter>> {
     match driver {
         "bash" => Some(Box::new(Bash {
-            command: build_command.to_owned(),
+            name: name.to_owned(),
+            verify: verify.map(str::to_owned),
         })),
         "python" => Some(Box::new(Python)),
         _ => None,
@@ -297,13 +320,70 @@ fn empty_build(contract: &str) -> RkError {
     )
 }
 
-/// The bash driver: the `VERSION` file, and the project's own build
-/// command, whose output contract is `dist/<name>.tar.gz` and its
-/// `.sha256`.
+/// The bash driver: the `VERSION` file, and the archive `rk` packs from
+/// the declared tracked files of `HEAD`, `dist/<name>-<version>.tar.gz`
+/// beside its `.sha256`, proven by the recorded verify command.
+///
+/// SATISFIES release-engine:the-bash-release-packs-its-declaration
 #[derive(Debug, Clone)]
 pub struct Bash {
-    /// The `[profile.release.build].command` the target records.
-    pub command: String,
+    /// The name the archive and its top directory carry: the last segment
+    /// of the project path on the forge.
+    pub name: String,
+    /// The `[profile.release.build].verify` command the target records.
+    pub verify: Option<String>,
+}
+
+impl Bash {
+    /// Run the verify command in the unpacked archive, in a temporary
+    /// directory outside the checkout, with `SOURCE_DATE_EPOCH` set.
+    fn verify(&self, archive: &Utf8Path, top: &str, epoch: &str) -> Result<(), RkError> {
+        let Some(verify) = &self.verify else {
+            return Ok(());
+        };
+        let scratch = super::packed::TempDir::new("verify")?;
+        super::packed::unpack(archive, scratch.path())?;
+        let output = std::process::Command::new(crate::probes::sh_bin())
+            .args(["-c", verify])
+            .current_dir(scratch.path().join(top).as_std_path())
+            .env("SOURCE_DATE_EPOCH", epoch)
+            .output()
+            .map_err(|source| {
+                RkError::refusal(
+                    Diagnostic::new(
+                        Reason::PrerequisiteUnmet,
+                        format!("the verify command {verify:?} did not run: {source}"),
+                    )
+                    .expected("sh on PATH")
+                    .target_state("no upload, tag, or release ran"),
+                )
+            })?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let detail = super::last_line(if output.stderr.is_empty() {
+            &output.stdout
+        } else {
+            &output.stderr
+        });
+        Err(RkError::check_failed(
+            Diagnostic::new(
+                Reason::PostconditionFailed,
+                format!(
+                    "the verify command {verify:?}, {}, failed in the unpacked {top}.tar.gz: {detail}",
+                    super::packed::VERIFY_KEY
+                ),
+            )
+            .expected("a package that builds and installs from its own files")
+            .action(format!(
+                "ship the files the command needs through {} and {}, or correct {}; rk release build --list prints what the package holds",
+                super::packed::INCLUDE_KEY,
+                super::packed::EXCLUDE_KEY,
+                super::packed::VERIFY_KEY
+            ))
+            .target_state("no upload, tag, or release ran"),
+        ))
+    }
 }
 
 impl DriverAdapter for Bash {
@@ -335,32 +415,51 @@ impl DriverAdapter for Bash {
         Ok(vec![Utf8PathBuf::from("VERSION")])
     }
 
+    /// Pack the declared set of `HEAD` from its git objects, never from
+    /// the working tree, then verify it before anything publishes.
     fn build(&self, root: &Utf8Path, epoch: &str) -> Result<Vec<Utf8PathBuf>, RkError> {
         clear_dist(root)?;
-        let mut command = std::process::Command::new(crate::probes::sh_bin());
-        command
-            .args(["-c", &self.command])
-            .current_dir(root.as_std_path())
-            .env("SOURCE_DATE_EPOCH", epoch);
-        run_tool(command, &format!("the build command {:?}", self.command))?;
-        let tarballs = listed(root, "dist", &[".tar.gz"])?;
-        if tarballs.is_empty() {
-            return Err(empty_build("dist/<name>.tar.gz"));
+        let files = self.packed(root, "HEAD")?;
+        if super::packed::is_empty_package(&files) {
+            return Err(super::packed::empty_package("HEAD"));
         }
-        // Each tarball needs its `.sha256`, which the binding's contract
-        // names beside it.
-        let mut artifacts = Vec::new();
-        for tarball in tarballs {
-            let checksum = Utf8PathBuf::from(format!("{tarball}.sha256"));
-            if !root.join(&checksum).is_file() {
-                return Err(empty_build(
-                    checksum.file_name().unwrap_or(checksum.as_str()),
-                ));
-            }
-            artifacts.push(tarball);
-            artifacts.push(checksum);
+        let at_head = super::git_ok(root, &["show", "HEAD:VERSION"], "VERSION at HEAD")?;
+        let version = Version::parse(at_head.trim())
+            .ok_or_else(|| unreadable("VERSION", at_head.trim()))?
+            .spelled("bash");
+        let top = format!("{}-{version}", self.name);
+        let tarball = Utf8PathBuf::from(format!("dist/{top}.tar.gz"));
+        let checksum = Utf8PathBuf::from(format!("dist/{top}.tar.gz.sha256"));
+        std::fs::create_dir_all(root.join("dist")).map_err(RkError::Io)?;
+        let time = epoch.trim().parse::<u64>().map_err(|_| {
+            RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!("the commit time {epoch:?} is not a number of seconds"),
+                )
+                .expected("git log --format=%ct")
+                .target_state("unchanged"),
+            )
+        })?;
+        super::packed::pack(root, "HEAD", &files, &top, time, &root.join(&tarball))?;
+        let digest = super::file_sha256(&root.join(&tarball))?;
+        std::fs::write(root.join(&checksum), format!("{digest}  {top}.tar.gz\n"))
+            .map_err(RkError::Io)?;
+        if let Err(error) = self.verify(&root.join(&tarball), &top, epoch) {
+            clear_dist(root)?;
+            return Err(error);
         }
-        Ok(artifacts)
+        Ok(vec![tarball, checksum])
+    }
+
+    /// The declared set of the revision, read from its own tree and its
+    /// own configuration, with no build.
+    fn packed(&self, root: &Utf8Path, rev: &str) -> Result<BTreeSet<String>, RkError> {
+        super::packed::bash_set(root, rev)
+    }
+
+    fn nothing_packed(&self) -> String {
+        super::packed::NOTHING_YET.to_owned()
     }
 }
 
@@ -416,6 +515,41 @@ impl DriverAdapter for Python {
             return Err(empty_build("sdist or wheel"));
         }
         Ok(artifacts)
+    }
+
+    /// The sdist's members are source paths and hold every file the wheel
+    /// builds from, so the sdist alone is the list, with every backend.
+    fn packed(&self, root: &Utf8Path, rev: &str) -> Result<BTreeSet<String>, RkError> {
+        let tracked = super::packed::tracked(root, rev)?;
+        let scratch = super::packed::Scratch::new(root, rev)?;
+        let out = scratch.out();
+        let mut command = std::process::Command::new(crate::probes::uv_bin());
+        command
+            .args(["build", "--sdist", "--out-dir", out.as_str()])
+            .current_dir(scratch.tree().as_std_path())
+            .env("SOURCE_DATE_EPOCH", super::packed::epoch(root, rev)?);
+        run_tool(command, "uv build --sdist")?;
+        let mut members = Vec::new();
+        for entry in std::fs::read_dir(&out).map_err(RkError::Io)? {
+            let path = entry.map_err(RkError::Io)?.path();
+            let Some(path) = Utf8Path::from_path(&path) else {
+                continue;
+            };
+            if path.as_str().ends_with(".tar.gz") {
+                members.extend(super::packed::drop_generated(super::packed::strip_top(
+                    &super::packed::members(path)?,
+                )));
+            }
+        }
+        let kept = super::packed::keep_tracked(members, &tracked);
+        if kept.is_empty() {
+            return Err(super::packed::mirrors_nothing("the sdist uv builds", rev));
+        }
+        Ok(kept)
+    }
+
+    fn nothing_packed(&self) -> String {
+        "no packed file exists yet: the sdist holds no tracked file past rk's own".to_owned()
     }
 }
 

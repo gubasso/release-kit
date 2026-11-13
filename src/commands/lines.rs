@@ -713,7 +713,7 @@ fn commit_and_push(
     // A python version is written through the adapter, uv version, which
     // relocks, so the commit carries pyproject.toml and uv.lock together.
     let written = if *driver == "python" {
-        let python = adapter::for_driver(driver, "")
+        let python = adapter::for_driver(driver, "", None)
             .ok_or_else(|| RkError::Usage(format!("no version writer for the {driver} driver")))?;
         python
             .write_version(target, version)?

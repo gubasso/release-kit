@@ -15,12 +15,12 @@ A binding is the release automation capability at two dimensions: the release dr
 
 ## The answers, per technology
 
-| Axis                | Rust            | Python                               | JS and Node                          | Go                     | Bash                        |
-| ------------------- | --------------- | ------------------------------------ | ------------------------------------ | ---------------------- | --------------------------- |
-| Version file        | `Cargo.toml`    | `pyproject.toml` `[project] version` | `package.json` `version`             | the tag itself         | `VERSION`                   |
-| Release-request bot | release-plz     | rk with git-cliff                    | Changesets                           | none                   | rk with git-cliff           |
-| Registry and auth   | crates.io, OIDC | PyPI, OIDC                           | npm, OIDC                            | none; the module proxy | none                        |
-| Artifact builder    | cargo-dist      | wheels and sdist are the artifacts   | the registry tarball is the artifact | GoReleaser             | the build command's tarball |
+| Axis                | Rust            | Python                               | JS and Node                          | Go                     | Bash                              |
+| ------------------- | --------------- | ------------------------------------ | ------------------------------------ | ---------------------- | --------------------------------- |
+| Version file        | `Cargo.toml`    | `pyproject.toml` `[project] version` | `package.json` `version`             | the tag itself         | `VERSION`                         |
+| Release-request bot | release-plz     | rk with git-cliff                    | Changesets                           | none                   | rk with git-cliff                 |
+| Registry and auth   | crates.io, OIDC | PyPI, OIDC                           | npm, OIDC                            | none; the module proxy | none                              |
+| Artifact builder    | cargo-dist      | wheels and sdist are the artifacts   | the registry tarball is the artifact | GoReleaser             | the tarball of the declared files |
 
 Rust, Python, and Bash have full bindings under [bindings](../bindings/README.md). The JS and Go columns state the answers for when their bindings land; Go is the degenerate case, where the tag is the version file and pushing it is the publish.
 
@@ -36,8 +36,8 @@ Because the two vary independently, the release automation a project selects is 
 (rust,   gitlab) -> Cargo.toml, release-plz, crates.io+OIDC, none, glab
 (python, github) -> pyproject.toml, rk with git-cliff, PyPI+OIDC, wheels, gh
 (python, gitlab) -> pyproject.toml, rk with git-cliff, PyPI+OIDC, wheels, glab
-(bash,   github) -> VERSION, rk with git-cliff, none, the build command's tarball, gh
-(bash,   gitlab) -> VERSION, rk with git-cliff, none, the build command's tarball, glab
+(bash,   github) -> VERSION, rk with git-cliff, none, the tarball of the declared files, gh
+(bash,   gitlab) -> VERSION, rk with git-cliff, none, the tarball of the declared files, glab
 ```
 
 The bot is a choice per pair. A pair takes an upstream tool where one keeps the release request and writes the version file on both forges, and the release engine in `rk` where none does. Rust keeps release-plz. The python and bash pairs run the engine: `rk release request` keeps one request per base on the branch `rk-release/<base>`, and the release half runs `rk release build`, then the provenance and the registry upload CI owns, then `rk release publish`, which creates the release page and the tag last. [The engine decision](../_docs/decisions/ADR-run-the-release-through-the-rk-engine.md) records why.

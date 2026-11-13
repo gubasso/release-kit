@@ -122,37 +122,85 @@ impl RegistryAnswer {
     pub const SHAPE: &'static str = "crates-io or none for profile.release.driver = \"rust\", and pypi or none for profile.release.driver = \"python\"";
 }
 
-/// How an automatic bash release builds its distribution.
+/// What an automatic bash release ships, and how it proves the package.
 ///
 /// The answer of `[profile.release.build]`. Each key absent reads as its
-/// default, so a target that never answered keeps its behavior and its
-/// record.
+/// default, so a target that never answered keeps its record: every
+/// tracked file ships, no command verifies the package, and the release
+/// job installs `make`.
 ///
 /// SATISFIES project-profile:release-intent-has-three-modes
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct BuildAnswer {
-    /// The command that produces `dist/*.tar.gz` and its `.sha256`.
+    /// The retired build command. It is read so a configuration or a
+    /// record that still carries it refuses with its replacement, and no
+    /// resolution writes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// The packages the release image installs before it runs the command.
+    /// The packages the release image installs before it runs the verify
+    /// command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub packages: Option<String>,
+    /// Gitignore-style patterns of the tracked files the release ships,
+    /// which override `exclude`, as Cargo's `include` does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    /// Gitignore-style patterns of the tracked files the release leaves
+    /// out, as Cargo's `exclude` does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+    /// The command that proves the package builds and installs from its own
+    /// files, run in the unpacked archive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify: Option<String>,
 }
 
 impl BuildAnswer {
     /// The one driver the answer is valid for.
     pub const DRIVER: &'static str = "bash";
-    /// The command an unanswered target builds with.
-    pub const COMMAND: &'static str = "make dist";
     /// The packages an unanswered target installs.
     pub const PACKAGES: &'static str = "make";
 
-    /// Whether neither key is answered.
+    /// Whether no key is answered.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.command.is_none() && self.packages.is_none()
+        self.command.is_none()
+            && self.packages.is_none()
+            && self.include.is_none()
+            && self.exclude.is_none()
+            && self.verify.is_none()
     }
+}
+
+/// The key the bash build command took before the release packed its own
+/// archive.
+pub const RETIRED_BUILD_COMMAND: &str = "profile.release.build.command";
+
+/// The refusal of a configuration or a record that still carries
+/// `profile.release.build.command`.
+///
+/// One diagnostic, the same from every verb that meets it, names the keys
+/// that replace it and the guidance step that walks the change.
+///
+/// SATISFIES project-profile:release-intent-has-three-modes
+#[must_use]
+pub fn retired_build_command() -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::ConfigInvalid,
+            format!(
+                "{RETIRED_BUILD_COMMAND} is retired: rk release build packs the archive itself from the tracked files that profile.release.build.include and profile.release.build.exclude select, and runs profile.release.build.verify in it"
+            ),
+        )
+        .expected(format!(
+            "a [profile.release.build] table without {RETIRED_BUILD_COMMAND}, in .release-kit/config.toml and in the landing record"
+        ))
+        .action(format!(
+            "replace {RETIRED_BUILD_COMMAND} in .release-kit/config.toml with profile.release.build.include and profile.release.build.exclude, and with profile.release.build.verify where the command checked something, then run rk upgrade --apply, as guidance/0.9.15.md states for a target that records the command"
+        ))
+        .target_state("unchanged"),
+    )
 }
 
 /// The release intent: the mode and, for an automatic release, its driver,
@@ -179,9 +227,9 @@ pub struct ReleaseIntent {
     /// reads as the driver's registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<RegistryAnswer>,
-    /// How the distribution builds; answered for an automatic bash release
-    /// alone, and absent where nothing answered it, which reads as
-    /// `make dist` and `make`.
+    /// What the distribution ships and how it is verified; answered for an
+    /// automatic bash release alone, and absent where nothing answered it,
+    /// which reads as every tracked file, no verify command, and `make`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildAnswer>,
 }
@@ -361,8 +409,6 @@ pub struct Inputs<'a> {
     /// The workflow whose completion wakes the release gate, overriding
     /// the configuration.
     pub required_workflow: Option<&'a str>,
-    /// The build command override, an automatic bash release alone.
-    pub build_command: Option<&'a str>,
     /// The build packages override, an automatic bash release alone.
     pub build_packages: Option<&'a str>,
     /// Nix packaging request override.
@@ -1228,9 +1274,11 @@ pub fn resolve(
         (Some(value), source)
     });
 
-    // How a bash release builds: each key by the same precedence, with no
-    // observation and an absent default, so a target that never answered
-    // keeps its record and every landed byte as they were.
+    // What a bash release ships and how it verifies: each key by the same
+    // precedence, with no observation and an absent default, so a target
+    // that never answered keeps its record and every landed byte as they
+    // were. The retired command never resolves: a configuration that
+    // carries it refused when it loaded, and a record's copy drops here.
     let build_key = |flag: Option<&str>, read: fn(&BuildAnswer) -> Option<String>| {
         answered([
             (flag.map(str::to_owned), Source::Flag),
@@ -1249,19 +1297,55 @@ pub fn resolve(
             (Some(value), source)
         })
     };
-    let (build_command, command_source) =
-        build_key(flags.build_command, |build| build.command.clone());
     let (build_packages, packages_source) =
         build_key(flags.build_packages, |build| build.packages.clone());
-    if let Some(command) = &build_command {
-        crate::config::build_command_shape(command).map_err(crate::config::invalid)?;
-    }
+    let (build_verify, verify_source) = build_key(None, |build| build.verify.clone());
     if let Some(packages) = &build_packages {
         crate::config::build_packages_shape(packages).map_err(crate::config::invalid)?;
     }
-    let build = (build_command.is_some() || build_packages.is_some()).then_some(BuildAnswer {
-        command: build_command,
+    if let Some(verify) = &build_verify {
+        crate::config::build_verify_shape(verify).map_err(crate::config::invalid)?;
+    }
+    // The pattern lists take no flag: a declaration is recorded in the
+    // configuration, where the operator reads the package it describes.
+    let pattern_key = |read: fn(&BuildAnswer) -> Option<Vec<String>>| {
+        answered([
+            (None, Source::Flag),
+            (
+                config.and_then(|c| c.profile.release.build.as_ref().and_then(read)),
+                Source::Config,
+            ),
+            (
+                record.and_then(|r| r.profile.release.build.as_ref().and_then(read)),
+                Source::Record,
+            ),
+            (None, Source::Observation),
+            (None, Source::Default),
+        ])
+        .map_or((None, Source::Default), |(value, source)| {
+            (Some(value), source)
+        })
+    };
+    let (build_include, include_source) = pattern_key(|build| build.include.clone());
+    let (build_exclude, exclude_source) = pattern_key(|build| build.exclude.clone());
+    for (key, patterns) in [
+        ("profile.release.build.include", &build_include),
+        ("profile.release.build.exclude", &build_exclude),
+    ] {
+        if let Some(patterns) = patterns {
+            crate::config::build_patterns_shape(key, patterns).map_err(crate::config::invalid)?;
+        }
+    }
+    let build = (build_packages.is_some()
+        || build_include.is_some()
+        || build_exclude.is_some()
+        || build_verify.is_some())
+    .then_some(BuildAnswer {
+        command: None,
         packages: build_packages,
+        include: build_include,
+        exclude: build_exclude,
+        verify: build_verify,
     });
 
     // A reporting purpose never refuses what it can state: `rk profile`
@@ -1342,8 +1426,10 @@ pub fn resolve(
                 sources.insert("profile.release.registry", registry_source);
             }
             if driver.as_deref() == Some(BuildAnswer::DRIVER) {
-                sources.insert("profile.release.build.command", command_source);
                 sources.insert("profile.release.build.packages", packages_source);
+                sources.insert("profile.release.build.include", include_source);
+                sources.insert("profile.release.build.exclude", exclude_source);
+                sources.insert("profile.release.build.verify", verify_source);
             }
             ReleaseIntent {
                 mode,
@@ -1377,14 +1463,24 @@ pub fn resolve(
                     registry_source,
                 ),
                 (
-                    "profile.release.build.command",
-                    build.as_ref().is_some_and(|build| build.command.is_some()),
-                    command_source,
-                ),
-                (
                     "profile.release.build.packages",
                     build.as_ref().is_some_and(|build| build.packages.is_some()),
                     packages_source,
+                ),
+                (
+                    "profile.release.build.include",
+                    build.as_ref().is_some_and(|build| build.include.is_some()),
+                    include_source,
+                ),
+                (
+                    "profile.release.build.exclude",
+                    build.as_ref().is_some_and(|build| build.exclude.is_some()),
+                    exclude_source,
+                ),
+                (
+                    "profile.release.build.verify",
+                    build.as_ref().is_some_and(|build| build.verify.is_some()),
+                    verify_source,
                 ),
             ] {
                 if present

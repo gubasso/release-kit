@@ -226,7 +226,7 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:an-unanswered-key-is-absent-and-not-empty` — An unanswered key is absent and not empty
 
-Where the resolved answers omit a class P key — the repository of a project with no forge, the driver, style, and line prefix of a release that is not automatic, and an unanswered `profile.release.build.command` or `profile.release.build.packages` — the writer MUST leave the key out of the file rather than write it empty, and MUST leave out a table every one of whose keys it omitted, keeping one blank line between the tables on either side.
+Where the resolved answers omit a class P key — the repository of a project with no forge, the driver, style, and line prefix of a release that is not automatic, and an unanswered key of `profile.release.build` — the writer MUST leave the key out of the file rather than write it empty, and MUST leave out a table every one of whose keys it omitted, keeping one blank line between the tables on either side.
 
 #### Scenario: A release-less project with no forge lands
 

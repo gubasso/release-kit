@@ -70,6 +70,13 @@ jobs:
               RK_IF_NO_RELEASE_echo "commit $commit: the subject '$subject' must read type or type(scope) then a colon and a description, with any scope lowercase letters, digits, and _ . / -"
               fail=1
             fi
+            #RK_IF_RELEASE_ A message that names a security advisory releases: its type is feat,
+            #RK_IF_RELEASE_ fix, or perf, or it marks a breaking change. A security update is fix(deps).
+            RK_IF_RELEASE_unset advisory
+            RK_IF_RELEASE_printf '%s\n' "$message" | grep -Eq '(^|[^A-Za-z0-9])(RUSTSEC-[0-9]{4}-[0-9]{4}|CVE-[0-9]{4}-[0-9]{4,}|GHSA(-[0-9a-z]{4}){3})' && advisory=yes
+            RK_IF_RELEASE_printf '%s' "$subject" | grep -Eq '^((feat|fix|perf)(\([^)]*\)){0,1}!{0,1}|[a-z]+(\([^)]*\)){0,1}!): ' && advisory=
+            RK_IF_RELEASE_printf '%s\n' "$message" | grep -Eq '^BREAKING[ -]CHANGE:' && advisory=
+            RK_IF_RELEASE_test -z "${advisory:-}" || { echo "commit $commit: the message names a security advisory, so its type must release: feat, fix, or perf, or a breaking change; a security update is fix(deps)"; fail=1; }
             while IFS='|' read -r class pattern; do
               if printf '%s' "$message" | grep -Eq "$pattern"; then
                 echo "commit $commit: the message carries a $class finding: a line matches $pattern"

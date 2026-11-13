@@ -5753,8 +5753,8 @@ impl ForgeFixture {
         fixture.seed("branch_develop", "abc123");
         fixture.seed("branch_main", "abc123");
         std::fs::write(fixture.target.path().join("VERSION"), "0.1.0\n").expect("VERSION writes");
-        // The default build command is make dist, so a bash target owes a
-        // makefile with that target; the package-check tests remove it.
+        // A bash target's makefile, which the package-check tests of a
+        // make verify command rewrite or remove.
         std::fs::write(
             fixture.target.path().join("Makefile"),
             "dist:\n\tmkdir -p dist\n",
@@ -6997,7 +6997,7 @@ fn package_check_names_the_binding_limitation_for_bash_and_python() {
     let fixture = ForgeFixture::new();
     let line = package_check_line(&fixture);
     assert!(line.starts_with("ok package-check"), "{line}");
-    assert!(line.contains("make dist"), "{line}");
+    assert!(line.contains("rk release build --list"), "{line}");
     assert!(line.contains("unproved"), "{line}");
 
     let fixture = ForgeFixture::new();
@@ -18571,7 +18571,7 @@ fn the_message_json_is_one_object_with_the_schema() {
         .clone();
     let report: serde_json::Value =
         serde_json::from_slice(&out).expect("one JSON object on stdout");
-    assert_eq!(report["schema"], "rk.message/3");
+    assert_eq!(report["schema"], "rk.message/4");
     assert_eq!(report["kind"], "commit");
     assert_eq!(report["exempt"], false);
     assert_eq!(report["findings"][0]["class"], "internal-path");
@@ -31970,7 +31970,7 @@ fn the_rust_github_request_waits_while_a_line_carries_a_candidate() {
         let at = request.find(publish).expect("the request step renders");
         assert!(
             request[at + publish.len()..]
-                .starts_with("        if: steps.candidate.outputs.held != 'true'\n"),
+                .starts_with("        if: steps.candidate.outputs.held != 'true' && steps.eligible.outputs.eligible == 'true'\n"),
             "{request}"
         );
         assert!(
@@ -46491,7 +46491,7 @@ fn workflow_only_message_check_accepts_a_header_with_no_scope() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.message/3");
+    assert_eq!(report["schema"], "rk.message/4");
     assert_eq!(report["findings"][0]["class"], "scope-missing", "{report}");
     assert!(
         report["findings"][0]["detail"]
@@ -49064,14 +49064,18 @@ fn workflow_step(workflow: &str, name: &str) -> String {
     rest[..end].to_owned()
 }
 
-/// The one apt install line of a landed bash pipeline, trimmed.
+/// The apt install line of the build packages in a landed bash pipeline,
+/// trimmed: one in the job that runs `rk release build`, on either forge,
+/// beside the GitLab base's install of its own tools.
 fn apt_install_line(pipeline: &str) -> String {
     let lines: Vec<&str> = pipeline
         .lines()
         .filter(|line| line.contains("apt-get install -y --no-install-recommends"))
+        .filter(|line| !line.contains("ca-certificates curl git xz-utils"))
+        .map(str::trim)
         .collect();
-    assert_eq!(lines.len(), 1, "one apt install line: {pipeline}");
-    lines[0].trim().to_owned()
+    assert_eq!(lines.len(), 1, "the apt install lines: {pipeline}");
+    lines[0].to_owned()
 }
 
 /// A rendered pipeline keeps none of the landing's own tokens or markers.
@@ -49181,8 +49185,10 @@ fn the_build_packages_install_through_apt_on_both_forges() {
         let line = apt_install_line(&pipeline);
         assert!(line.ends_with(" make zstd"), "{forge}: {line}");
         if forge == "gitlab" {
+            let build = gitlab_job(&pipeline, "build");
+            assert!(build.contains(&line), "{build}");
             let tooling = gitlab_job(&pipeline, ".tooling");
-            assert!(tooling.contains(&line), "{tooling}");
+            assert!(!tooling.contains(" make zstd"), "{tooling}");
             assert!(!tooling.contains("apk "), "{tooling}");
             let image = tooling
                 .lines()
@@ -50125,8 +50131,9 @@ fn assert_installs_rk_before(job: &str, first_rk: &str) {
 
 /// Under `rk = "installer"`, the rust candidate job takes the recorded
 /// setup, installs rk at the landing version onto PATH, and runs the mint
-/// and release-plz through the prefix. The release halves run no rk, so
-/// they install none.
+/// and release-plz through the prefix. The request half installs it too,
+/// before it runs `rk release eligible`, and the release half runs no rk,
+/// so it installs none.
 ///
 /// SATISFIES packaging:a-landed-job-takes-rk-by-one-route
 #[test]
@@ -50144,10 +50151,10 @@ fn the_rust_candidate_job_installs_rk_under_an_installer_answer() {
         candidate.contains("nix develop --command release-plz release --git-token"),
         "{candidate}"
     );
-    for half in ["release-plz-release", "release-plz-pr"] {
-        let job = workflow_job(&workflow, half);
-        assert!(!job.contains("release-kit-installer.sh"), "{job}");
-    }
+    let release = workflow_job(&workflow, "release-plz-release");
+    assert!(!release.contains("release-kit-installer.sh"), "{release}");
+    let request = workflow_job(&workflow, "release-plz-pr");
+    assert_installs_rk_before(request, "nix develop --command rk release eligible");
 }
 
 /// Under `rk = "installer"`, every bash and python GitHub job that runs
@@ -50716,21 +50723,12 @@ fn the_gitlab_rk_jobs_reach_glab_without_an_environment() {
 fn a_build_parameter_resolves_by_precedence_and_renders() {
     for forge in ["gitlab", "github"] {
         let target = land_pair("bash", forge);
-        let config = target.path().join(".release-kit/config.toml");
-        let text = std::fs::read_to_string(&config).expect("reads");
-        std::fs::write(
-            &config,
-            format!("{text}\n[profile.release.build]\ncommand = \"make dist\"\n"),
-        )
-        .expect("writes");
+        append_target_config(
+            target.path(),
+            "\n[profile.release.build]\npackages = \"make\"\nverify = \"make check\"\n",
+        );
         let out = rk()
-            .args([
-                "profile",
-                "--json",
-                "--build-command",
-                "just dist",
-                "--target",
-            ])
+            .args(["profile", "--json", "--build-packages", "just", "--target"])
             .arg(target.path())
             .assert()
             .success()
@@ -50739,38 +50737,38 @@ fn a_build_parameter_resolves_by_precedence_and_renders() {
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
         assert_eq!(
-            report["sources"]["profile.release.build.command"], "flag",
+            report["sources"]["profile.release.build.packages"], "flag",
             "{report}"
         );
         assert_eq!(
-            report["profile"]["release"]["build"]["command"], "just dist",
+            report["sources"]["profile.release.build.verify"], "config",
             "{report}"
         );
-        rk().args([
-            "upgrade",
-            "--apply",
-            "--build-command",
-            "just dist",
-            "--build-packages",
-            "just",
-            "--target",
-        ])
-        .arg(target.path())
-        .assert()
-        .success();
-        // rk reads the command from the record, so the pipeline names no
-        // command, and the packages render into its apt install.
+        assert_eq!(
+            report["profile"]["release"]["build"]["packages"], "just",
+            "{report}"
+        );
+        rk().args(["upgrade", "--apply", "--build-packages", "just", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+        // rk reads the verify command from the record, so the pipeline
+        // names no command, and the packages render into its apt install.
         let pipeline = landed_bash_pipeline(target.path(), forge);
-        assert!(!pipeline.contains("just dist"), "{forge}: {pipeline}");
-        assert!(!pipeline.contains("make dist"), "{forge}: {pipeline}");
+        assert!(!pipeline.contains("make check"), "{forge}: {pipeline}");
         assert!(
             apt_install_line(&pipeline).ends_with(" just"),
             "{forge}: {pipeline}"
         );
         let record = read_manifest(target.path());
         assert_eq!(
-            record["profile"]["release"]["build"]["command"],
-            "just dist"
+            record["profile"]["release"]["build"]["verify"],
+            "make check"
+        );
+        assert!(
+            record["profile"]["release"]["build"]
+                .get("command")
+                .is_none()
         );
         seed_setup_proof(target.path());
         rk().args(["status", "--check", "--target"])
@@ -50788,7 +50786,7 @@ fn a_build_parameter_refuses_a_driver_that_is_not_bash() {
     let text = std::fs::read_to_string(&config).expect("reads");
     std::fs::write(
         &config,
-        format!("{text}\n[profile.release.build]\ncommand = \"make dist\"\n"),
+        format!("{text}\n[profile.release.build]\npackages = \"make\"\n"),
     )
     .expect("writes");
     rk().args(["upgrade", "--apply", "--target"])
@@ -50801,11 +50799,95 @@ fn a_build_parameter_refuses_a_driver_that_is_not_bash() {
         );
 }
 
-/// An unanswered build parameter is absent: the record carries no build
-/// key, rk builds with make dist, the pipelines install make, and nothing
-/// reads as pending.
+/// The declaration of `[profile.release.build]`, `include`, `exclude`,
+/// and `verify`, belongs to the bash driver alone, refuses an empty
+/// pattern, a pattern of more than one line, and an empty verify command
+/// by name, and
+/// resolves from the configuration into the record, where the upgrade
+/// writes it back.
 #[test]
-fn a_record_without_build_parameters_reads_as_make_dist() {
+fn a_build_declaration_is_valid_only_for_bash() {
+    for key in [
+        "include = [\"src/\"]",
+        "exclude = [\"docs/\"]",
+        "verify = \"make check\"",
+    ] {
+        let target = land_pair("rust", "github");
+        append_target_config(
+            target.path(),
+            &format!("\n[profile.release.build]\n{key}\n"),
+        );
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .failure()
+            .stderr(
+                predicate::str::contains("profile.release.build")
+                    .and(predicate::str::contains("driver is rust")),
+            );
+    }
+    for (keys, refused) in [
+        ("include = [\"\"]\n", Some("profile.release.build.include")),
+        (
+            "exclude = [\"docs/\\t\"]\n",
+            Some("profile.release.build.exclude"),
+        ),
+        ("verify = \"  \"\n", Some("profile.release.build.verify")),
+        (
+            "include = [\"src/\", \"!*.test.sh\"]\nexclude = [\"/docs/\"]\nverify = \"make check\"\n",
+            None,
+        ),
+    ] {
+        let target = land_pair("bash", "gitlab");
+        append_target_config(target.path(), &format!("\n[profile.release.build]\n{keys}"));
+        let mut upgrade = rk();
+        upgrade
+            .args(["upgrade", "--apply", "--target"])
+            .arg(target.path());
+        if let Some(key) = refused {
+            upgrade
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(key));
+            continue;
+        }
+        upgrade.assert().success();
+        let out = rk()
+            .args(["profile", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        for key in ["include", "exclude", "verify"] {
+            assert_eq!(
+                report["sources"][format!("profile.release.build.{key}")],
+                "config",
+                "{report}"
+            );
+        }
+        let build = &read_manifest(target.path())["profile"]["release"]["build"];
+        assert_eq!(build["include"], serde_json::json!(["src/", "!*.test.sh"]));
+        assert_eq!(build["exclude"], serde_json::json!(["/docs/"]));
+        assert_eq!(build["verify"], "make check");
+        let config =
+            std::fs::read_to_string(target.path().join(".release-kit/config.toml")).expect("reads");
+        assert!(
+            config.contains("include = [\"src/\", \"!*.test.sh\"]")
+                && config.contains("exclude = [\"/docs/\"]")
+                && config.contains("verify = \"make check\""),
+            "{config}"
+        );
+    }
+}
+
+/// An unanswered build parameter is absent: the record carries no build
+/// key, the release ships every tracked file and verifies nothing, the
+/// pipelines install make, and nothing reads as pending.
+#[test]
+fn a_record_without_build_parameters_keeps_its_defaults() {
     for forge in ["gitlab", "github"] {
         let target = land_pair("bash", forge);
         let record = std::fs::read_to_string(target.path().join(".release-kit/manifest.json"))
@@ -50825,8 +50907,8 @@ fn a_record_without_build_parameters_reads_as_make_dist() {
             .success()
             .stdout(predicate::str::contains("profile.release.build").not());
     }
-    // A schema 1 configuration migrates with no build answer, renders make
-    // dist, and holds under the status check with a compatible proof.
+    // A schema 1 configuration migrates with no build answer, installs
+    // make, and holds under the status check with a compatible proof.
     let target = land_pair("bash", "gitlab");
     std::fs::write(
         target.path().join(".release-kit/config.toml"),
@@ -50848,22 +50930,19 @@ fn a_record_without_build_parameters_reads_as_make_dist() {
         .success();
 }
 
-/// An empty build command refuses as configuration, naming the key.
+/// An empty verify command refuses as configuration, naming the key.
 #[test]
-fn an_empty_build_command_refuses_by_name() {
+fn an_empty_verify_command_refuses_by_name() {
     let target = land_pair("bash", "gitlab");
-    let config = target.path().join(".release-kit/config.toml");
-    let text = std::fs::read_to_string(&config).expect("reads");
-    std::fs::write(
-        &config,
-        format!("{text}\n[profile.release.build]\ncommand = \"  \"\n"),
-    )
-    .expect("writes");
+    append_target_config(
+        target.path(),
+        "\n[profile.release.build]\nverify = \"  \"\n",
+    );
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("profile.release.build.command"));
+        .stderr(predicate::str::contains("profile.release.build.verify"));
 }
 
 /// Only the two bash pipelines carry the build tokens, and no landed file
@@ -50909,28 +50988,31 @@ fn only_the_bash_pipelines_carry_the_build_tokens() {
     }
 }
 
-/// The default command needs a makefile: none reads unsatisfied, naming
-/// the file and the output contract.
+/// A make verify command needs a makefile: none reads unsatisfied,
+/// naming the file and the key.
 #[test]
 fn package_check_faults_a_make_command_with_no_makefile() {
     let fixture = ForgeFixture::new();
+    fixture.verify("make check");
     std::fs::remove_file(fixture.target.path().join("Makefile")).expect("removes");
     let line = package_check_line(&fixture);
     assert!(line.starts_with("unsatisfied package-check"), "{line}");
     assert!(line.contains("Makefile"), "{line}");
-    assert!(line.contains("dist/<name>.tar.gz"), "{line}");
+    assert!(line.contains("profile.release.build.verify"), "{line}");
 }
 
-/// A makefile whose dist target exists resolves under make -n, and the
-/// step reads ok with the tarball limitation; a missing target does not.
+/// A makefile whose check target exists resolves under make -n, and the
+/// step reads ok with the package limitation; a missing target does not.
 #[test]
 fn package_check_resolves_a_make_target_where_make_exists() {
     let fixture = ForgeFixture::new();
+    fixture.verify("make check");
+    std::fs::write(fixture.target.path().join("Makefile"), "check:\n\ttrue\n").expect("writes");
     let line = package_check_line(&fixture);
     assert!(line.starts_with("ok package-check"), "{line}");
-    assert!(line.contains("make dist resolves"), "{line}");
-    assert!(line.contains("tarball is not inspected"), "{line}");
-    assert!(fixture.log().contains("make -n dist"), "{}", fixture.log());
+    assert!(line.contains("make check resolves"), "{line}");
+    assert!(line.contains("rk release build --list"), "{line}");
+    assert!(fixture.log().contains("make -n check"), "{}", fixture.log());
     std::fs::write(fixture.target.path().join("Makefile"), "build:\n\ttrue\n").expect("writes");
     let missing = package_check_line(&fixture);
     assert!(
@@ -50940,25 +51022,69 @@ fn package_check_resolves_a_make_target_where_make_exists() {
     assert!(missing.contains("make -n does not resolve"), "{missing}");
 }
 
-/// A command that is not make is the project's own: ok, with a limitation
-/// naming the command and the contract it owes.
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+///
+/// The build runs the verify command through `sh -c`, so the step runs
+/// `make -n` only on one plain make invocation. A command with a shell
+/// operator or a quoted argument reads ok, with the limitation that its
+/// resolution is not proved, and runs no make. A plain `make check` still
+/// runs `make -n check`.
+#[test]
+fn package_check_judges_only_a_plain_make_command() {
+    for command in ["make check && make check", "make check ARGS='a b'"] {
+        let fixture = ForgeFixture::new();
+        fixture.verify(command);
+        std::fs::write(fixture.target.path().join("Makefile"), "check:\n\ttrue\n").expect("writes");
+        let line = package_check_line(&fixture);
+        assert!(line.starts_with("ok package-check"), "{command}: {line}");
+        assert!(line.contains("not proved"), "{command}: {line}");
+        assert!(
+            line.contains("rk release build --list"),
+            "{command}: {line}"
+        );
+        assert!(
+            !fixture.log().contains("make -n"),
+            "{command}: {}",
+            fixture.log()
+        );
+    }
+    let fixture = ForgeFixture::new();
+    fixture.verify("make check");
+    std::fs::write(fixture.target.path().join("Makefile"), "check:\n\ttrue\n").expect("writes");
+    let line = package_check_line(&fixture);
+    assert!(line.contains("make check resolves"), "{line}");
+    assert!(fixture.log().contains("make -n check"), "{}", fixture.log());
+}
+
+/// A verify command that is not make is the project's own: ok, with a
+/// limitation naming the listing that reads the package.
 #[test]
 fn package_check_names_a_foreign_command_as_the_projects_own() {
     let fixture = ForgeFixture::new();
     std::fs::remove_file(fixture.target.path().join("Makefile")).expect("removes");
-    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
-    std::fs::write(
-        fixture.target.path().join(".release-kit/config.toml"),
-        "schema_version = 2\n\n[profile.release]\nmode = \"automatic\"\ndriver = \"bash\"\n\n[profile.release.build]\ncommand = \"just dist\"\n",
-    )
-    .expect("the config writes");
+    fixture.verify("just check");
     let line = package_check_line(&fixture);
     assert!(line.starts_with("ok package-check"), "{line}");
     assert!(
-        line.contains("just dist is the project's own build command"),
+        line.contains("just check is the project's own verify command"),
         "{line}"
     );
-    assert!(line.contains("dist/<name>.tar.gz"), "{line}");
+    assert!(line.contains("rk release build --list"), "{line}");
+}
+
+impl ForgeFixture {
+    /// Record `command` as the bash release's verify command.
+    fn verify(&self, command: &str) {
+        std::fs::create_dir_all(self.target.path().join(".release-kit")).expect("the dir");
+        std::fs::write(
+            self.target.path().join(".release-kit/config.toml"),
+            format!(
+                "schema_version = 2\n\n[profile.release]\nmode = \"automatic\"\ndriver = \"bash\"\n\n[profile.release.build]\nverify = {}\n",
+                toml::Value::String(command.to_owned())
+            ),
+        )
+        .expect("the config writes");
+    }
 }
 
 /// The seeded changelog template renders a null version as unreleased
@@ -51075,23 +51201,18 @@ fn a_dropped_table_leaves_one_blank_line_between_its_neighbours() {
     }
 }
 
-/// A build command that names a file of the project is judged here: one
+/// A verify command that names a file of the project is judged here: one
 /// that is absent, or present and not executable, refuses naming the
-/// command and the output contract, and an executable one reads ok.
+/// command and the key, and an executable one reads ok.
 #[test]
 fn package_check_refuses_a_missing_or_unexecutable_local_command() {
     use std::os::unix::fs::PermissionsExt as _;
     let fixture = ForgeFixture::new();
-    std::fs::create_dir_all(fixture.target.path().join(".release-kit")).expect("the dir");
-    std::fs::write(
-        fixture.target.path().join(".release-kit/config.toml"),
-        "schema_version = 2\n\n[profile.release]\nmode = \"automatic\"\ndriver = \"bash\"\n\n[profile.release.build]\ncommand = \"./build-dist release\"\n",
-    )
-    .expect("the config writes");
+    fixture.verify("./build-dist release");
     let absent = package_check_line(&fixture);
     assert!(absent.starts_with("unsatisfied package-check"), "{absent}");
     assert!(absent.contains("./build-dist"), "{absent}");
-    assert!(absent.contains("dist/<name>.tar.gz"), "{absent}");
+    assert!(absent.contains("profile.release.build.verify"), "{absent}");
     let script = fixture.target.path().join("build-dist");
     std::fs::write(&script, "#!/bin/sh\n").expect("the script writes");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).expect("mode");
@@ -51488,7 +51609,7 @@ fn the_status_hook_passes_on_a_repository_with_accepted_drift() {
 fn an_upgrade_refuses_an_accepted_file_changed_mid_landing() {
     let (target, _) = accepted_drift_target();
     let before = tree_digests(target.path());
-    let paused = PausedLanding::start(target.path(), &["upgrade", "--build-command", "just dist"]);
+    let paused = PausedLanding::start(target.path(), &["upgrade", "--build-packages", "make jq"]);
     let pipeline = target.path().join(".gitlab-ci.yml");
     let mut bytes = std::fs::read(&pipeline).expect("reads");
     bytes.extend_from_slice(b"# an edit after validation\n");
@@ -52007,48 +52128,63 @@ const ENGINE_CLIFF: &str = r#"#!/bin/sh
 # A stand-in git-cliff: it reads the release tags and the Conventional
 # Commit subjects since the newest one, bumps by the landed cliff.toml's
 # rules (initial tag v0.1.0; before 1.0.0 a feature bumps the patch and a
-# breaking change the minor), and writes a changelog section.
+# breaking change the minor), and writes a changelog section. Each
+# --include-path keeps only the commits that touch that path, as
+# git-cliff's path filter does; a bracketed character is unescaped.
 S="$(dirname "$0")/state"
 printf 'git-cliff %s\n' "$*" >> "$S/log"
 die() { echo "$1" >&2; exit 1; }
 latest() { git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null; }
+mode=""; tag=""; out=""; prepend=""; unreleased=""; paths=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version) echo "git-cliff $(cat "$S/cliff-version")"; exit 0 ;;
+    --bumped-version) mode=bump; shift ;;
+    --include-path) paths="$paths $(printf '%s' "$2" | sed 's/\[\(.\)\]/\1/g')"; shift 2 ;;
+    --tag) tag="$2"; shift 2 ;;
+    -o|--output) out="$2"; shift 2 ;;
+    -p|--prepend) prepend="$2"; shift 2 ;;
+    --unreleased) unreleased=1; shift ;;
+    --bump) die "the engine never passes --bump" ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
 subjects() {
-  if [ -n "$(latest)" ]; then git log --format=%s "$(latest)..HEAD"; else git log --format=%s; fi | grep -v '^chore(release)' || true
+  # shellcheck disable=SC2086
+  if [ -n "$(latest)" ]; then git log --format=%s "$(latest)..HEAD" -- $paths; else git log --format=%s -- $paths; fi | grep -v '^chore(release)' || true
 }
 section() { printf '## [%s]\n\n' "${1#v}"; subjects | sed 's/^/- /'; }
-case "$1" in
-  --version) echo "git-cliff $(cat "$S/cliff-version")"; exit 0 ;;
-  --bumped-version)
-    if [ -f "$S/cliff-propose" ]; then cat "$S/cliff-propose"; exit 0; fi
-    tag="$(latest)"
-    if [ -z "$tag" ]; then echo v0.1.0; exit 0; fi
-    IFS=. read -r major minor patch <<EOT
+if [ "$mode" = bump ]; then
+  if [ -f "$S/cliff-propose" ]; then cat "$S/cliff-propose"; exit 0; fi
+  tag="$(latest)"
+  if [ -z "$tag" ]; then echo v0.1.0; exit 0; fi
+  IFS=. read -r major minor patch <<EOT
 ${tag#v}
 EOT
-    patch="${patch%%-*}"
-    all="$(subjects)"
-    if printf '%s\n' "$all" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE'; then
-      if [ "$major" = 0 ]; then minor=$((minor + 1)); patch=0; else major=$((major + 1)); minor=0; patch=0; fi
-    elif printf '%s\n' "$all" | grep -qE '^feat(\([^)]*\))?:'; then
-      if [ "$major" = 0 ]; then patch=$((patch + 1)); else minor=$((minor + 1)); patch=0; fi
-    elif printf '%s\n' "$all" | grep -qE '^fix(\([^)]*\))?:'; then
-      patch=$((patch + 1))
-    fi
-    echo "v$major.$minor.$patch" ;;
-  *)
-    tag=""; out=""; unreleased=""
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --tag) tag="$2"; shift 2 ;;
-        -o|--output) out="$2"; shift 2 ;;
-        --unreleased) unreleased=1; shift ;;
-        --bump) die "the engine never passes --bump" ;;
-        *) die "unknown argument: $1" ;;
-      esac
-    done
-    [ -n "$tag" ] && [ -n "$out" ] || die "the stand-in writes a named tag to a file"
-    if [ -n "$unreleased" ]; then section "$tag" > "$out"; else { printf '# Changelog\n\n'; section "$tag"; } > "$out"; fi ;;
-esac
+  patch="${patch%%-*}"
+  all="$(subjects)"
+  if printf '%s\n' "$all" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE'; then
+    if [ "$major" = 0 ]; then minor=$((minor + 1)); patch=0; else major=$((major + 1)); minor=0; patch=0; fi
+  elif printf '%s\n' "$all" | grep -qE '^feat(\([^)]*\))?:'; then
+    if [ "$major" = 0 ]; then patch=$((patch + 1)); else minor=$((minor + 1)); patch=0; fi
+  elif printf '%s\n' "$all" | grep -qE '^fix(\([^)]*\))?:'; then
+    patch=$((patch + 1))
+  fi
+  echo "v$major.$minor.$patch"
+  exit 0
+fi
+if [ -n "$prepend" ]; then
+  # As git-cliff does, refuse a file that does not exist, and write the
+  # header, the new section, and the rest of the file below its header.
+  [ -f "$prepend" ] || die "IO error: No such file or directory (os error 2)"
+  rest="$(mktemp)"
+  awk 'NR == 1 && /^# Changelog$/ { h = 1; next } NR == 2 && h && $0 == "" { next } { print }' "$prepend" > "$rest"
+  { printf '# Changelog\n\n'; section "$tag"; cat "$rest"; } > "$prepend"
+  rm -f "$rest"
+  exit 0
+fi
+[ -n "$tag" ] && [ -n "$out" ] || die "the stand-in writes a named tag to a file"
+if [ -n "$unreleased" ]; then section "$tag" > "$out"; else { printf '# Changelog\n\n'; section "$tag"; } > "$out"; fi
 "#;
 
 /// The stand-in uv of the engine tests.
@@ -52076,6 +52212,31 @@ case "$1" in
         echo "$name $current => $2" ;;
     esac ;;
   build)
+    if [ "$2" = "--sdist" ]; then
+      # The sdist the engine lists: a real archive whose members sit under
+      # <name>-<version>/, with the generated PKG-INFO. A uv_build backend
+      # packs pyproject.toml, README.md, and src/, and writes
+      # pyproject.toml.orig; every other backend packs each tracked file,
+      # as hatchling's default does.
+      [ "$3" = "--out-dir" ] && [ -n "$4" ] || die "the stand-in lists an sdist into --out-dir alone"
+      top="$name-$current"
+      stage="$(mktemp -d)"
+      mkdir -p "$stage/$top"
+      if grep -q '^build-backend = "uv_build"' pyproject.toml; then
+        git ls-files -- pyproject.toml README.md src
+        cp pyproject.toml "$stage/$top/pyproject.toml.orig"
+      else
+        git ls-files
+      fi | while IFS= read -r file; do
+        mkdir -p "$stage/$top/$(dirname "$file")"
+        cp "$file" "$stage/$top/$file"
+      done
+      printf 'Metadata-Version: 2.4\nName: %s\nVersion: %s\n' "$name" "$current" > "$stage/$top/PKG-INFO"
+      mkdir -p "$4"
+      tar -czf "$4/$top.tar.gz" -C "$stage" "$top"
+      rm -rf "$stage"
+      exit 0
+    fi
     [ -z "$2" ] || die "the stand-in builds into dist/ alone"
     mkdir -p dist
     printf '*\n' > dist/.gitignore
@@ -52098,10 +52259,6 @@ key="$(printf '%s' "$url" | tr '/:.?&=' '______')"
 if [ -f "$S/pypi/$key.redirect" ]; then cat "$S/pypi/$key.redirect"; printf '\n302'; exit 0; fi
 if [ -f "$S/pypi/$key" ]; then cat "$S/pypi/$key"; printf '\n200'; else printf '{"message": "Not Found"}\n404'; fi
 "#;
-
-/// The bash build command of the engine fixtures, under the binding's
-/// output contract.
-const ENGINE_BUILD: &str = "mkdir -p dist\nv=\"$(cat VERSION)\"\nprintf 'widget %s %s\\n' \"$v\" \"$SOURCE_DATE_EPOCH\" > \"dist/widget-$v.tar.gz\"\n(cd dist && sha256sum \"widget-$v.tar.gz\" > \"widget-$v.tar.gz.sha256\")\n";
 
 /// The variables a CI job sets that the engine reads; every engine run
 /// starts without them, so the host's CI never leaks into a fixture.
@@ -52156,14 +52313,13 @@ impl Engine {
             .args(["--repo", "acme/widget", "--target"])
             .arg(work.path())
             .args(init);
-        if tech == "bash" {
-            land.args(["--build-command", "sh build.sh"]);
-        }
         land.arg("--apply").assert().success();
         let dir = work.path();
+        // A bash release ships the project's own tracked files, so the
+        // fixture carries one beside the version file.
         if tech == "bash" {
-            std::fs::write(dir.join("build.sh"), ENGINE_BUILD).expect("writes");
             std::fs::write(dir.join("VERSION"), format!("{version}\n")).expect("writes");
+            std::fs::write(dir.join("widget.sh"), "echo widget\n").expect("writes");
         }
         let remote = tempfile::tempdir().expect("a scratch remote exists");
         git_in(remote.path(), &["init", "-q", "--bare", "-b", "master"]);
@@ -52171,7 +52327,9 @@ impl Engine {
         git_in(dir, &["config", "user.email", "rk@example.invalid"]);
         git_in(dir, &["config", "user.name", "rk test"]);
         git_in(dir, &["add", "-A"]);
-        git_in(dir, &["commit", "-qm", "chore: land release-kit"]);
+        // The first commit ships the package, so a first release has the
+        // releasing commit it needs.
+        git_in(dir, &["commit", "-qm", "feat: land the widget"]);
         git_in(
             dir,
             &[
@@ -52244,6 +52402,7 @@ impl Engine {
                 "RK_HTTP_ORIGIN",
                 script_http(self.stubs.path().join("http-answers")).origin(),
             )
+            .env("RK_TEST_BUILD_LOG", self.state().join("log"))
             .env(token, "bot-token")
             .args(["release", action, "--json", "--target"])
             .arg(self.dir());
@@ -52426,6 +52585,42 @@ impl Engine {
             ],
         );
         out.split_whitespace().next().map(str::to_owned)
+    }
+
+    /// Put the git-cliff the devshell carries behind the stand-in's name,
+    /// logged as the stand-in logs, so its own path filter decides. The
+    /// test names the version it ran, which must be the pin.
+    fn use_real_cliff(&self) {
+        let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join("git-cliff"))
+            .find(|path| path.is_file())
+            .expect("git-cliff is in the devshell, which flake.nix owns");
+        let ran = std::process::Command::new(&real)
+            .arg("--version")
+            .output()
+            .expect("git-cliff runs");
+        assert_eq!(
+            String::from_utf8_lossy(&ran.stdout).trim(),
+            format!("git-cliff {}", pinned("git-cliff")),
+            "the proof runs at the pin the pipelines install"
+        );
+        let path = self.stubs.path().join("git-cliff");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf 'git-cliff %s\\n' \"$*\" >> \"$(dirname \"$0\")/state/log\"\nexec '{}' \"$@\"\n",
+                real.display()
+            ),
+        )
+        .expect("the wrapper writes");
+    }
+
+    /// The worktrees git records for the checkout, the main one included.
+    fn worktrees(&self) -> usize {
+        git_out(self.dir(), &["worktree", "list", "--porcelain"])
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count()
     }
 
     /// The files the tip of the request branch changed against its parent.
@@ -52960,53 +53155,6 @@ fn the_build_keeps_support_files_out_of_dist() {
                 "{tech}: {file}"
             );
         }
-    }
-}
-
-/// SATISFIES release-engine:the-adapter-owns-the-version-file
-///
-/// The bash output contract is the tarball and its `.sha256`. A custom
-/// build that writes only the tarball fails the build postcondition: no
-/// report, no support file, and no forge write.
-#[test]
-fn a_bash_build_without_its_checksum_fails() {
-    for forge in ["github", "gitlab"] {
-        let engine = Engine::new("bash", forge, &[], "0.1.0");
-        engine.commit(
-            "build: write the tarball alone",
-            &[(
-                "build.sh",
-                "mkdir -p dist\nv=\"$(cat VERSION)\"\nprintf 'widget %s\\n' \"$v\" > \"dist/widget-$v.tar.gz\"\n",
-            )],
-        );
-        let report = engine.ok("request");
-        engine.merge(report["request"].as_u64().expect("a request"));
-        engine.clear_log();
-        let diagnostic = engine.refused("build", 1);
-        assert_eq!(
-            diagnostic["reason"], "postcondition-failed",
-            "{forge}: {diagnostic}"
-        );
-        assert!(
-            diagnostic["message"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("widget-0.1.0.tar.gz.sha256"),
-            "{forge}: {diagnostic}"
-        );
-        for file in ["build.json", "notes.md", "SHA256SUMS"] {
-            assert!(
-                !engine.dir().join(".rk-release").join(file).exists(),
-                "{forge}: {file}"
-            );
-        }
-        assert!(
-            engine_writes(&engine.log()).is_empty(),
-            "{forge}: {}",
-            engine.log()
-        );
-        assert!(engine.tag("v0.1.0").is_none(), "{forge}");
-        assert!(engine.release("v0.1.0").is_none(), "{forge}");
     }
 }
 
@@ -53699,9 +53847,9 @@ fn the_engine_refuses_git_cliff_off_its_pin() {
 fn each_engine_action_prints_its_schema() {
     let engine = Engine::new("bash", "gitlab", &[], "0.1.0");
     let request = engine.ok("request");
-    assert_eq!(request["schema"], "rk.release-request/1");
+    assert_eq!(request["schema"], "rk.release-request/2");
     let build = engine.ok("build");
-    assert_eq!(build["schema"], "rk.release-build/1");
+    assert_eq!(build["schema"], "rk.release-build/2");
     let written: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(engine.dir().join(".rk-release/build.json")).expect("reads"),
     )
@@ -53743,6 +53891,2767 @@ fn the_build_writes_its_report_to_the_github_output() {
     assert_eq!(
         written.lines().last(),
         Some(format!("rk-release-{merge}").as_str())
+    );
+}
+
+// ---- a request follows the packed files ----
+
+/// The file of each driver's package the tests change.
+fn packed_file(tech: &str) -> &'static str {
+    if tech == "python" {
+        "src/acme/__init__.py"
+    } else {
+        "src/tool.sh"
+    }
+}
+
+/// The bash declaration of [`packed_engine`]: every tracked file but the
+/// makefile, `docs/`, and `ci/`.
+const PACKED_EXCLUDE: &str = "exclude = [\"/Makefile\", \"docs/\", \"ci/\"]\n";
+
+/// An engine pair released at `v0.1.0` whose package is narrower than its
+/// tree, running the git-cliff the devshell carries. A bash release leaves
+/// out what its declaration excludes, `Makefile`, `docs/`, and `ci/`. A
+/// python sdist under `backend` packs what that backend packs: `uv_build`
+/// keeps `pyproject.toml`, `README.md`, and `src/`, and hatchling every
+/// tracked file.
+fn packed_engine(tech: &str, forge: &'static str, backend: &str) -> Engine {
+    packed_engine_declared(tech, forge, backend, PACKED_EXCLUDE)
+}
+
+/// [`packed_engine`] with the bash `declaration` given.
+fn packed_engine_declared(
+    tech: &str,
+    forge: &'static str,
+    backend: &str,
+    declaration: &str,
+) -> Engine {
+    let engine = Engine::new(tech, forge, &[], "0.1.0");
+    let dir = engine.dir();
+    for sub in ["src/acme", "docs", "ci"] {
+        std::fs::create_dir_all(dir.join(sub)).expect("the layout creates");
+    }
+    let mut files = vec![
+        ("README.md", "# widget\n".to_owned()),
+        ("Makefile", "dist:\n\tsh build.sh\n".to_owned()),
+        ("docs/guide.md", "# guide\n".to_owned()),
+        ("ci/test.yml", "test: true\n".to_owned()),
+        (packed_file(tech), "echo one\n".to_owned()),
+    ];
+    if tech == "python" {
+        let project = std::fs::read_to_string(dir.join("pyproject.toml")).expect("reads");
+        let requires = if backend == "uv_build" {
+            "uv_build"
+        } else {
+            "hatchling"
+        };
+        let entry = if backend == "uv_build" {
+            "uv_build"
+        } else {
+            "hatchling.build"
+        };
+        files.push((
+            "pyproject.toml",
+            format!(
+                "{project}\n[build-system]\nrequires = [\"{requires}\"]\nbuild-backend = \"{entry}\"\n"
+            ),
+        ));
+    } else {
+        engine.declare(declaration);
+    }
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    engine.commit("chore: lay out the project", &borrowed);
+    engine.released("v0.1.0", &engine.head());
+    engine.use_real_cliff();
+    engine
+}
+
+/// Every engine pair, with the backend its python sdist builds with.
+const PACKED_PAIRS: [(&str, &str); 4] = [
+    ("bash", "github"),
+    ("bash", "gitlab"),
+    ("python", "github"),
+    ("python", "gitlab"),
+];
+
+impl Engine {
+    /// An open release request on `rk-release/master`, as an earlier run
+    /// left it, with its branch on the origin.
+    fn stale_request(&self, number: u64) {
+        let pull = if self.forge == "github" {
+            serde_json::json!({"number": number, "title": "chore(release): v0.1.1",
+                "head": {"ref": "rk-release/master"}, "base": {"ref": "master"},
+                "state": "open", "auto_merge": null})
+        } else {
+            serde_json::json!({"iid": number, "title": "chore(release): v0.1.1",
+                "source_branch": "rk-release/master", "target_branch": "master",
+                "state": "opened"})
+        };
+        std::fs::write(
+            self.state().join(format!("pulls/{number}.json")),
+            pull.to_string(),
+        )
+        .expect("writes");
+        git_in(
+            self.dir(),
+            &["push", "-q", "origin", "HEAD:refs/heads/rk-release/master"],
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// After a release, a `build:` commit on a `Makefile` the package leaves
+/// out, a `ci:` commit on the landed pipeline file, and a `docs:` commit
+/// outside the package each leave no request, and the request an earlier
+/// run left open closes.
+#[test]
+fn a_commit_outside_the_package_opens_no_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.stale_request(5);
+        let pipeline = if forge == "github" {
+            ".github/workflows/release.yml"
+        } else {
+            ".gitlab-ci.yml"
+        };
+        let landed = std::fs::read_to_string(engine.dir().join(pipeline)).expect("reads");
+        let commits = [
+            (
+                "build: build with two jobs",
+                "Makefile",
+                "dist:\n\tsh build.sh -j2\n".to_owned(),
+            ),
+            (
+                "ci: note the pipeline",
+                pipeline,
+                format!("{landed}# noted\n"),
+            ),
+            (
+                "docs: describe the guide",
+                "docs/guide.md",
+                "# guide, longer\n".to_owned(),
+            ),
+        ];
+        for (at, (subject, path, text)) in commits.iter().enumerate() {
+            engine.commit(subject, &[(*path, text.as_str())]);
+            let report = engine.ok("request");
+            let state = if at == 0 { "closed" } else { "nothing" };
+            assert_eq!(report["state"], state, "{tech} {forge} {subject}: {report}");
+            assert_eq!(
+                report["reason"], "no packed file changed since v0.1.0",
+                "{tech} {forge} {subject}: {report}"
+            );
+            assert_eq!(report["compared"], "v0.1.0", "{tech} {forge}: {report}");
+        }
+        let state = engine.pull(5)["state"].clone();
+        assert!(state == "closed", "{tech} {forge}: {state}");
+        assert_eq!(
+            engine.remote_branch("rk-release/master"),
+            None,
+            "{tech} {forge}"
+        );
+        assert_eq!(
+            engine.worktrees(),
+            1,
+            "{tech} {forge}: every listing worktree is gone"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// A `fix:` on a packed file proposes the next patch, and the changelog
+/// lists that commit and no commit outside the package. After a bash
+/// release whose tag sits on a commit that changes `VERSION` alone, the
+/// next fix proposes the patch after it.
+#[test]
+fn a_fix_in_a_packed_file_opens_a_patch_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.commit(
+            "docs: describe the guide",
+            &[("docs/guide.md", "# guide, longer\n")],
+        );
+        engine.commit("fix: mend the tool", &[(packed_file(tech), "echo two\n")]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{tech} {forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{tech} {forge}: {report}");
+        assert_eq!(report["compared"], "v0.1.0", "{tech} {forge}: {report}");
+        assert!(
+            report["packed"].as_u64().unwrap_or(0) > 0,
+            "{tech} {forge}: {report}"
+        );
+        let changelog = engine.request_file("master", "CHANGELOG.md").to_lowercase();
+        assert!(
+            changelog.contains("mend the tool"),
+            "{tech} {forge}: {changelog}"
+        );
+        assert!(
+            !changelog.contains("describe the guide"),
+            "{tech} {forge}: {changelog}"
+        );
+        assert!(
+            engine.log().contains("--include-path"),
+            "{tech} {forge}: {}",
+            engine.log()
+        );
+        if tech != "bash" {
+            continue;
+        }
+        // The release commit changes the version file alone, so the tag
+        // sits outside the packed files and still bounds the history.
+        engine.commit("chore(release): v0.1.1", &[("VERSION", "0.1.1\n")]);
+        engine.released("v0.1.1", &engine.head());
+        engine.commit(
+            "fix: mend the tool again",
+            &[(packed_file(tech), "echo three\n")],
+        );
+        let report = engine.ok("request");
+        assert_eq!(
+            report["state"], "refreshed",
+            "{tech} {forge} next: {report}"
+        );
+        assert_eq!(report["proposal"], "0.1.2", "{tech} {forge} next: {report}");
+        assert_eq!(
+            report["compared"], "v0.1.1",
+            "{tech} {forge} next: {report}"
+        );
+        let changelog = engine.request_file("master", "CHANGELOG.md").to_lowercase();
+        assert!(
+            changelog.contains("mend the tool again"),
+            "{tech} {forge} next: {changelog}"
+        );
+        assert!(
+            !changelog.contains("mend the tool\n"),
+            "{tech} {forge} next: {changelog}"
+        );
+    }
+}
+
+/// The bytes of `path` at the tip of the request branch, untrimmed.
+fn request_bytes(engine: &Engine, path: &str) -> Vec<u8> {
+    git_in(
+        engine.dir(),
+        &["fetch", "-q", "origin", "rk-release/master"],
+    );
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["show", &format!("FETCH_HEAD:{path}")])
+        .current_dir(engine.dir())
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git show {path}: {out:?}");
+    out.stdout
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// A target whose `CHANGELOG.md` holds a released section that lists a
+/// commit outside the package keeps that section byte for byte. Each
+/// request, the first and a refresh with a new proposal, adds one section
+/// above it that lists only the packed commits.
+#[test]
+fn the_changelog_keeps_its_released_sections() {
+    const HEADER: &str =
+        "# Changelog\n\nAll notable changes to this project are documented in this file.\n";
+    const RELEASED: &str = "## [0.1.0] - 2026-11-01\n\n### Documentation\n\n- Describe the guide\n\n### Fixed\n\n- Note the pipeline\n";
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.commit(
+            "docs: describe the guide",
+            &[("docs/guide.md", "# guide, longer\n")],
+        );
+        let release = engine.commit(
+            "chore(release): v0.1.0",
+            &[("CHANGELOG.md", &format!("{HEADER}{RELEASED}"))],
+        );
+        engine.released("v0.1.0", &release);
+        engine.commit(
+            "docs: extend the guide",
+            &[("docs/guide.md", "# guide, longest\n")],
+        );
+        engine.commit("fix: mend the tool", &[(packed_file(tech), "echo two\n")]);
+        for (proposal, subject, text) in [
+            ("0.1.1", None, ""),
+            ("0.2.0", Some("feat!: rework the tool"), "echo three\n"),
+        ] {
+            if let Some(subject) = subject {
+                engine.commit(subject, &[(packed_file(tech), text)]);
+            }
+            let report = engine.ok("request");
+            assert_eq!(report["proposal"], proposal, "{tech} {forge}: {report}");
+            let bytes = request_bytes(&engine, "CHANGELOG.md");
+            let changelog = String::from_utf8(bytes).expect("UTF-8");
+            let added = changelog
+                .strip_prefix(HEADER)
+                .and_then(|rest| rest.strip_suffix(RELEASED))
+                .unwrap_or_else(|| panic!("{tech} {forge} {proposal}: {changelog}"));
+            assert_eq!(
+                added.matches("## [").count(),
+                1,
+                "{tech} {forge} {proposal}: {changelog}"
+            );
+            assert!(
+                added.starts_with(&format!("## [{proposal}]")),
+                "{tech} {forge} {proposal}: {added}"
+            );
+            let lower = added.to_lowercase();
+            assert!(lower.contains("mend the tool"), "{tech} {forge}: {added}");
+            assert!(!lower.contains("guide"), "{tech} {forge}: {added}");
+        }
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// A `fix:` on a packed file and its revert leave the package as it
+/// released, so the request the fix opened closes.
+#[test]
+fn a_change_reverted_before_the_release_opens_no_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.commit("fix: mend the tool", &[(packed_file(tech), "echo two\n")]);
+        let number = engine.ok("request")["request"].as_u64().expect("a request");
+        engine.commit(
+            "revert: undo the mend",
+            &[(packed_file(tech), "echo one\n")],
+        );
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "closed", "{tech} {forge}: {report}");
+        assert_eq!(report["request"].as_u64(), Some(number), "{tech} {forge}");
+        assert_eq!(
+            report["reason"], "no packed file changed since v0.1.0",
+            "{tech} {forge}: {report}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// A commit that adds a file to the package, and one that deletes a
+/// packed file, each open a request: the list holds the files of both
+/// revisions.
+#[test]
+fn a_packed_file_added_or_removed_counts() {
+    for (tech, forge) in PACKED_PAIRS {
+        let added = if tech == "python" {
+            "src/acme/extra.py"
+        } else {
+            "src/extra.sh"
+        };
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.commit("feat: add a helper", &[(added, "echo extra\n")]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{tech} {forge} add: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{tech} {forge} add: {report}");
+        let engine = packed_engine(tech, forge, "uv_build");
+        git_in(engine.dir(), &["rm", "-q", packed_file(tech)]);
+        engine.commit("fix: drop the tool", &[]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{tech} {forge} delete: {report}");
+        assert_eq!(
+            report["proposal"], "0.1.1",
+            "{tech} {forge} delete: {report}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// On a released target, the commit that `rk upgrade --apply` writes,
+/// the pipeline, the record, and the hook files, opens no request, also
+/// where the package ships those files: a hatchling sdist, which packs
+/// every tracked file, and a bash declaration whose `include` names the
+/// landed hook configuration.
+#[test]
+fn the_commit_that_takes_an_rk_release_opens_no_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine_declared(
+            tech,
+            forge,
+            "hatchling",
+            "include = [\"src/\", \"/.pre-commit-config.yaml\"]\n",
+        );
+        if tech == "bash" {
+            let listed = engine.list(false);
+            assert!(
+                String::from_utf8_lossy(&listed.stdout)
+                    .lines()
+                    .any(|line| line == ".pre-commit-config.yaml"),
+                "{forge}: the package ships the landed file"
+            );
+        }
+        let mut upgrade = rk();
+        upgrade
+            .args(["upgrade", "--apply", "--integration", "forge"])
+            .env("RK_UV_BIN", engine.stubs.path().join("uv"));
+        if tech == "bash" {
+            upgrade.args(["--build-packages", "make jq"]);
+        }
+        upgrade.arg("--target").arg(engine.dir()).assert().success();
+        let changed = git_out(engine.dir(), &["status", "--short"]);
+        assert!(
+            changed.contains(".pre-commit-config.yaml"),
+            "{tech} {forge}: {changed}"
+        );
+        assert!(
+            changed.contains(".release-kit/manifest.json"),
+            "{tech} {forge}: {changed}"
+        );
+        engine.commit("ci(release): take the release-kit release", &[]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "nothing", "{tech} {forge}: {report}");
+        assert_eq!(
+            report["reason"], "no packed file changed since v0.1.0",
+            "{tech} {forge}: {report}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// Each revision subtracts the destinations its own record names: a file
+/// the tag's record names and `HEAD`'s does not, and one `HEAD`'s record
+/// names and the tag's does not, each count from the side where the
+/// project owned it, while a file both records name never counts.
+#[test]
+fn a_destination_rk_started_or_stopped_managing_follows_its_own_manifest() {
+    let record_names = |engine: &Engine, path: &str, named: bool| {
+        let mut manifest = read_manifest(engine.dir());
+        let files = manifest["files"].as_array_mut().expect("a file list");
+        files.retain(|file| file["destination"] != path);
+        if named {
+            files.push(serde_json::json!({"destination": path, "kind": "rendered",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}));
+        }
+        std::fs::write(
+            engine.dir().join(".release-kit/manifest.json"),
+            serde_json::to_string_pretty(&manifest).expect("serializes"),
+        )
+        .expect("writes");
+    };
+    for (tech, forge) in PACKED_PAIRS {
+        let file = packed_file(tech);
+        for (at_tag, at_head, opens) in [
+            (true, false, true),
+            (false, true, true),
+            (true, true, false),
+        ] {
+            let engine = Engine::new(tech, forge, &[], "0.1.0");
+            std::fs::create_dir_all(engine.dir().join("src/acme")).expect("creates");
+            std::fs::write(engine.dir().join(file), "echo one\n").expect("writes");
+            record_names(&engine, file, at_tag);
+            engine.commit("chore: lay out the project", &[]);
+            engine.released("v0.1.0", &engine.head());
+            engine.use_real_cliff();
+            record_names(&engine, file, at_head);
+            engine.commit("fix: mend the tool", &[(file, "echo two\n")]);
+            let report = engine.ok("request");
+            let label = format!("{tech} {forge} tag={at_tag} head={at_head}");
+            if opens {
+                assert_eq!(report["state"], "opened", "{label}: {report}");
+                assert_eq!(report["proposal"], "0.1.1", "{label}: {report}");
+            } else {
+                assert_eq!(report["state"], "nothing", "{label}: {report}");
+                assert_eq!(
+                    report["reason"], "no packed file changed since v0.1.0",
+                    "{label}: {report}"
+                );
+            }
+        }
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// A `uv_build` and a hatchling project each list the tracked files of
+/// their sdist, without the generated `PKG-INFO` and
+/// `pyproject.toml.orig`: a `fix:` under `tests/` counts for hatchling
+/// alone.
+#[test]
+fn the_python_list_holds_for_every_backend() {
+    for forge in ["github", "gitlab"] {
+        for (backend, opens) in [("uv_build", false), ("hatchling", true)] {
+            let engine = packed_engine("python", forge, backend);
+            std::fs::create_dir_all(engine.dir().join("tests")).expect("creates");
+            engine.commit(
+                "fix: ship a test of the tool",
+                &[("tests/test_tool.py", "def test(): pass\n")],
+            );
+            let report = engine.ok("request");
+            let tracked: std::collections::BTreeSet<String> = git_out(engine.dir(), &["ls-files"])
+                .lines()
+                .map(str::to_owned)
+                .collect();
+            let recorded: std::collections::BTreeSet<String> = read_manifest(engine.dir())["files"]
+                .as_array()
+                .expect("a file list")
+                .iter()
+                .filter_map(|file| file["destination"].as_str().map(str::to_owned))
+                .collect();
+            let expected = if backend == "uv_build" {
+                3
+            } else {
+                tracked
+                    .iter()
+                    .filter(|path| !recorded.contains(*path) && !path.starts_with(".release-kit/"))
+                    .count()
+            };
+            assert_eq!(report["packed"], expected, "{forge} {backend}: {report}");
+            let state = if opens { "opened" } else { "nothing" };
+            assert_eq!(report["state"], state, "{forge} {backend}: {report}");
+            assert!(
+                engine.log().contains("uv build --sdist --out-dir"),
+                "{forge} {backend}: {}",
+                engine.log()
+            );
+        }
+    }
+}
+
+// ---- a request needs a releasing commit ----
+
+/// The request after one commit of `message` on the packed file of
+/// [`packed_engine`], with a request an earlier run left open.
+fn request_after(tech: &str, forge: &'static str, message: &str) -> (Engine, serde_json::Value) {
+    let engine = packed_engine(tech, forge, "uv_build");
+    engine.stale_request(5);
+    engine.commit(message, &[(packed_file(tech), "echo two\n")]);
+    let report = engine.ok("request");
+    (engine, report)
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A `build:` commit on a packed file changes what ships, and states no
+/// release: no request opens, and the one an earlier run left closes.
+#[test]
+fn a_build_commit_on_a_packed_file_opens_no_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let (engine, report) = request_after(tech, forge, "build: rebuild the tool");
+        assert_eq!(report["state"], "closed", "{tech} {forge}: {report}");
+        assert_eq!(
+            report["reason"],
+            "none of the 1 commit that touched the packed files since v0.1.0 is a releasing commit: feat, fix, perf, or a breaking change",
+            "{tech} {forge}: {report}"
+        );
+        assert_eq!(engine.pull(5)["state"], "closed", "{tech} {forge}");
+        assert_eq!(engine.remote_branch("rk-release/master"), None);
+    }
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A `fix:` commit on a packed file opens the next patch.
+#[test]
+fn a_fix_commit_on_a_packed_file_opens_a_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let (_engine, report) = request_after(tech, forge, "fix: mend the tool");
+        assert_eq!(report["state"], "refreshed", "{tech} {forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{tech} {forge}: {report}");
+    }
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A `refactor` that a `!` or a breaking footer marks is a releasing
+/// commit, whatever its type.
+#[test]
+fn a_breaking_refactor_opens_a_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        for message in [
+            "refactor!: rework the tool",
+            "refactor: rework the tool\n\nBREAKING CHANGE: the flag is gone",
+        ] {
+            let (_engine, report) = request_after(tech, forge, message);
+            assert_eq!(
+                report["state"], "refreshed",
+                "{tech} {forge} {message}: {report}"
+            );
+            assert_ne!(
+                report["proposal"], "0.1.0",
+                "{tech} {forge} {message}: {report}"
+            );
+        }
+    }
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A `perf:` commit on a packed file is a releasing commit.
+#[test]
+fn a_perf_commit_opens_a_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let (_engine, report) = request_after(tech, forge, "perf: speed the tool up");
+        assert_eq!(report["state"], "refreshed", "{tech} {forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{tech} {forge}: {report}");
+    }
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A `feat:` commit outside the packed files releases nothing: the type
+/// says whether a change is worth a release, and only a packed change is
+/// a change to what ships.
+#[test]
+fn a_feat_outside_the_packed_files_opens_no_request() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.commit(
+            "feat: describe a new guide",
+            &[("docs/guide.md", "# guide, longer\n")],
+        );
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "nothing", "{tech} {forge}: {report}");
+        assert_eq!(
+            report["reason"], "no packed file changed since v0.1.0",
+            "{tech} {forge}: {report}"
+        );
+    }
+}
+
+/// A bash engine released at `v0.1.0` whose package is `src/` alone,
+/// with an unchanged readme beside it, after one commit of `subject` that
+/// widens `include` to that readme and edits nothing else.
+fn widened_include(forge: &'static str, subject: &str) -> serde_json::Value {
+    let engine = Engine::new("bash", forge, &[], "0.1.0");
+    bash_layout(&engine);
+    engine.declare("include = [\"src/\"]\n");
+    engine.commit("chore: lay out the project", &[]);
+    engine.released("v0.1.0", &engine.head());
+    engine.use_real_cliff();
+    let path = engine.dir().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&path).expect("reads");
+    std::fs::write(
+        &path,
+        text.replace(
+            "include = [\"src/\"]",
+            "include = [\"src/\", \"/README.md\"]",
+        ),
+    )
+    .expect("writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(engine.dir())
+        .assert()
+        .success();
+    let commit = engine.commit(subject, &[]);
+    let changed = git_out(engine.dir(), &["show", "--format=", "--name-only", &commit]);
+    assert!(
+        !changed.lines().any(|path| path == "README.md"),
+        "{forge}: the readme is unchanged: {changed}"
+    );
+    engine.ok("request")
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A `fix(packaging):` commit that only widens `include` to an existing,
+/// unchanged readme changes what ships, and its type releases it.
+#[test]
+fn a_fix_packaging_edit_that_ships_an_existing_file_opens_a_request() {
+    for forge in ["github", "gitlab"] {
+        let report = widened_include(forge, "fix(packaging): ship the readme");
+        assert_eq!(report["state"], "opened", "{forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{forge}: {report}");
+    }
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// The same edit of the declaration typed `chore:` states no release, so
+/// no request opens.
+#[test]
+fn a_chore_edit_of_the_declaration_opens_no_request() {
+    for forge in ["github", "gitlab"] {
+        let report = widened_include(forge, "chore: ship the readme");
+        assert_eq!(report["state"], "nothing", "{forge}: {report}");
+        assert_eq!(
+            report["reason"],
+            "none of the 1 commit that touched the packed files since v0.1.0 is a releasing commit: feat, fix, perf, or a breaking change",
+            "{forge}: {report}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// With no release tag, the whole history is read: a project whose every
+/// commit is a `chore:` at an unreleased `0.1.0` opens nothing, and one
+/// `fix:` on a packed file opens the declared version.
+#[test]
+fn an_initial_release_needs_a_releasing_commit() {
+    for tech in ["bash", "python"] {
+        for forge in ["github", "gitlab"] {
+            let engine = Engine::new(tech, forge, &[], "0.1.0");
+            git_in(
+                engine.dir(),
+                &["commit", "-q", "--amend", "-m", "chore: land release-kit"],
+            );
+            git_in(engine.dir(), &["push", "-q", "-f", "origin", "master"]);
+            let report = engine.ok("request");
+            assert_eq!(report["state"], "nothing", "{tech} {forge}: {report}");
+            assert!(
+                report["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.ends_with(
+                        "that touched the packed files in the whole history is a releasing commit: feat, fix, perf, or a breaking change"
+                    )),
+                "{tech} {forge}: {report}"
+            );
+            let (path, text) = if tech == "bash" {
+                ("widget.sh", "echo widget, mended\n".to_owned())
+            } else {
+                let project =
+                    std::fs::read_to_string(engine.dir().join("pyproject.toml")).expect("reads");
+                ("pyproject.toml", format!("{project}description = \"w\"\n"))
+            };
+            engine.commit("fix: mend the widget", &[(path, text.as_str())]);
+            let report = engine.ok("request");
+            assert_eq!(report["state"], "opened", "{tech} {forge}: {report}");
+            assert_eq!(report["proposal"], "0.1.0", "{tech} {forge}: {report}");
+        }
+    }
+}
+
+// ---- rk release eligible ----
+
+/// `rk release eligible --json` at `dir`, with no CI variable and no forge
+/// credential, answering its exit status and its report or diagnostic.
+fn eligible_at(dir: &Path) -> (bool, serde_json::Value) {
+    let mut command = rk();
+    for var in ENGINE_CI_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["release", "eligible", "--json", "--target"])
+        .arg(dir)
+        .output()
+        .expect("rk runs");
+    let ok = out.status.success();
+    let text = if ok { out.stdout } else { out.stderr };
+    let value = serde_json::from_slice(&text).unwrap_or_else(|error| {
+        panic!("{error}: {}", String::from_utf8_lossy(&text));
+    });
+    (ok, value)
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// The verb answers outside CI, with no forge credential and no forge
+/// read, and writes nothing: a `build:` commit on a packed file is not
+/// eligible, and a `fix:` after it is, naming that commit.
+#[test]
+fn rk_release_eligible_answers_without_a_forge() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.commit(
+            "build: rebuild the tool",
+            &[(packed_file(tech), "echo two\n")],
+        );
+        engine.clear_log();
+        let before = git_out(engine.dir(), &["status", "--porcelain", "--ignored"]);
+        let (ok, report) = eligible_at(engine.dir());
+        assert!(ok, "{tech} {forge}: {report}");
+        assert_eq!(report["schema"], "rk.release-eligible/1");
+        assert_eq!(report["driver"], tech);
+        assert_eq!(report["eligible"], false, "{tech} {forge}: {report}");
+        assert_eq!(report["compared"], "v0.1.0", "{tech} {forge}: {report}");
+        assert_eq!(report["commits"][0]["releasing"], false);
+        let fix = engine.commit("fix: mend the tool", &[(packed_file(tech), "echo three\n")]);
+        let (ok, report) = eligible_at(engine.dir());
+        assert!(ok, "{tech} {forge}: {report}");
+        assert_eq!(report["eligible"], true, "{tech} {forge}: {report}");
+        assert_eq!(report["commits"][0]["sha"], fix.as_str());
+        assert_eq!(report["commits"][0]["subject"], "fix: mend the tool");
+        assert!(
+            !engine.log().contains("gh ") && !engine.log().contains("glab "),
+            "{tech} {forge}: {}",
+            engine.log()
+        );
+        let after = git_out(engine.dir(), &["status", "--porcelain", "--ignored"]);
+        assert_eq!(before, after, "{tech} {forge}: the verb writes nothing");
+        let human = rk()
+            .args(["release", "eligible", "--target"])
+            .arg(engine.dir())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let human = String::from_utf8_lossy(&human);
+        assert!(human.starts_with("eligible: "), "{tech} {forge}: {human}");
+    }
+}
+
+/// The release-plz configuration of a crate that publishes to no
+/// registry, as the landing renders it.
+const RELEASE_PLZ_GIT_ONLY: &str = "[workspace]\nchangelog_update = true\nrelease_always = false\npublish = false\ngit_only = true\ngit_tag_name = \"v{{ version }}\"\ngit_release_enable = false\nsemver_check = false\n";
+
+/// The release-plz configuration of a crate that publishes to crates.io.
+const RELEASE_PLZ_REGISTRY: &str = "[workspace]\nchangelog_update = true\nrelease_always = false\npublish = true\ngit_tag_name = \"v{{ version }}\"\ngit_release_enable = false\nsemver_check = false\n";
+
+/// A landed rust target released at `v0.1.0`, beside a dependency it
+/// reaches by path outside the checkout, so its lock changes offline.
+struct Crate {
+    work: tempfile::TempDir,
+    outside: tempfile::TempDir,
+}
+
+impl Crate {
+    /// Land rust on GitHub over the `files` given, with `config` as its
+    /// release-plz configuration, commit it as a feature, and tag it
+    /// `v0.1.0`.
+    fn new(files: &[(&str, String)], config: &str) -> Self {
+        let work = tempfile::tempdir().expect("a scratch checkout exists");
+        let outside = tempfile::tempdir().expect("a scratch dependency exists");
+        let crate_at = |root: &Path, name: &str, version: &str, deps: &str| {
+            std::fs::create_dir_all(root.join(name).join("src")).expect("creates");
+            std::fs::write(
+                root.join(name).join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\nedition = \"2021\"\n\n[dependencies]\n{deps}"),
+            )
+            .expect("writes");
+            std::fs::write(root.join(name).join("src/lib.rs"), "pub fn f() {}\n").expect("writes");
+        };
+        crate_at(outside.path(), "dep", "1.0.0", "");
+        crate_at(outside.path(), "leaf", "1.0.0", "");
+        let dir = work.path();
+        for (path, text) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("creates");
+            let text = text.replace(
+                "DEP_PATH",
+                &outside.path().join("dep").display().to_string(),
+            );
+            std::fs::write(path, text).expect("writes");
+        }
+        std::fs::write(dir.join(".gitignore"), "target/\n").expect("writes");
+        cargo_in(dir, &["generate-lockfile", "--offline"]);
+        rk().args(["init", "--tech", "rust", "--forge", "github"])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(dir)
+            .arg("--apply")
+            .assert()
+            .success();
+        std::fs::write(dir.join("release-plz.toml"), config).expect("writes");
+        git_in(dir, &["init", "-q", "-b", "master"]);
+        git_in(dir, &["config", "user.email", "rk@example.invalid"]);
+        git_in(dir, &["config", "user.name", "rk test"]);
+        git_in(dir, &["add", "-A"]);
+        git_in(dir, &["commit", "-qm", "feat: land the widget"]);
+        git_in(dir, &["tag", "v0.1.0"]);
+        Self { work, outside }
+    }
+
+    fn dir(&self) -> &Path {
+        self.work.path()
+    }
+
+    /// Write `files` and commit them all as `message`.
+    fn commit(&self, message: &str, files: &[(&str, &str)]) {
+        for (path, text) in files {
+            std::fs::write(self.dir().join(path), text).expect("writes");
+        }
+        git_in(self.dir(), &["add", "-A"]);
+        git_in(
+            self.dir(),
+            &["commit", "-q", "--allow-empty", "-m", message],
+        );
+    }
+
+    /// Move the dependency the last release already had to `version`, and
+    /// lock it: a commit that changes `Cargo.lock` alone.
+    fn bump_dependency(&self, version: &str) {
+        let manifest = self.outside.path().join("dep/Cargo.toml");
+        let text = std::fs::read_to_string(&manifest).expect("reads");
+        std::fs::write(
+            &manifest,
+            text.replace("version = \"1.0.0\"", &format!("version = \"{version}\"")),
+        )
+        .expect("writes");
+        cargo_in(self.dir(), &["update", "--offline", "-p", "dep"]);
+    }
+
+    /// Give the dependency a dependency of its own at an unchanged
+    /// version: the lock gains an entry, and no released entry moves.
+    fn add_lock_entry(&self) {
+        let manifest = self.outside.path().join("dep/Cargo.toml");
+        let text = std::fs::read_to_string(&manifest).expect("reads");
+        let leaf = self.outside.path().join("leaf").display().to_string();
+        std::fs::write(&manifest, format!("{text}leaf = {{ path = \"{leaf}\" }}\n"))
+            .expect("writes");
+        cargo_in(self.dir(), &["update", "--offline", "-p", "dep"]);
+    }
+
+    /// Run release-plz 0.4.3 from the devshell's update, and answer the
+    /// version it writes into `manifest`, or `None` where it opens nothing.
+    fn release_plz(&self, manifest: &str) -> Option<String> {
+        let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join("release-plz"))
+            .find(|path| path.is_file())
+            .expect("release-plz is in the devshell, which flake.nix owns");
+        let version = std::process::Command::new(&real)
+            .arg("--version")
+            .output()
+            .expect("release-plz runs");
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            format!("release-plz {}", pinned("release-plz")),
+            "the proof runs at the pin the pipelines install"
+        );
+        let mut command = std::process::Command::new(&real);
+        for var in GIT_HOOK_VARS {
+            command.env_remove(var);
+        }
+        let out = command
+            .arg("update")
+            .current_dir(self.dir())
+            .output()
+            .expect("release-plz runs");
+        assert!(
+            out.status.success(),
+            "release-plz update: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = std::fs::read_to_string(self.dir().join(manifest)).expect("reads");
+        let version = text
+            .lines()
+            .find_map(|line| line.strip_prefix("version = \""))
+            .map(|rest| rest.trim_end_matches('"').to_owned());
+        version.filter(|version| version != "0.1.0")
+    }
+
+    fn changelog(&self) -> String {
+        std::fs::read_to_string(self.dir().join("CHANGELOG.md")).unwrap_or_default()
+    }
+}
+
+/// One cargo call in `dir` that must succeed.
+fn cargo_in(dir: &Path, args: &[&str]) {
+    let mut command = std::process::Command::new("cargo");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("cargo runs");
+    assert!(
+        out.status.success(),
+        "cargo {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The files of a single binary crate, `widget`, that publishes nowhere.
+fn binary_crate() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "Cargo.toml",
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = []\nlicense = \"MIT\"\ndescription = \"a widget\"\n\n[dependencies]\ndep = { path = \"DEP_PATH\", version = \"1\" }\n".to_owned(),
+        ),
+        ("src/main.rs", "fn main() { dep::f(); }\n".to_owned()),
+    ]
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// A `fix(deps):` commit that moves a dependency the last release already
+/// had changes only `Cargo.lock`, which a binary's build ships: rk reads
+/// that real commit from git and answers eligible, and release-plz opens
+/// the patch.
+#[test]
+fn a_lock_only_fix_deps_opens_a_request() {
+    let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+    target.bump_dependency("1.0.1");
+    target.commit("fix(deps): move dep to 1.0.1", &[]);
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["package"], "widget", "{report}");
+    assert_eq!(report["eligible"], true, "{report}");
+    assert_eq!(
+        report["commits"][0]["subject"],
+        "fix(deps): move dep to 1.0.1"
+    );
+    assert_eq!(target.release_plz("Cargo.toml").as_deref(), Some("0.1.1"));
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// A lock entry that joins without moving any entry the last release
+/// had is a packed change rk counts, so a `fix(deps):` is eligible, and
+/// release-plz, which counts only a moved released entry, opens nothing.
+#[test]
+fn an_added_lock_entry_is_eligible_but_opens_nothing() {
+    let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+    target.add_lock_entry();
+    target.commit("fix(deps): lock the leaf", &[]);
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["eligible"], true, "{report}");
+    assert_eq!(target.release_plz("Cargo.toml"), None);
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// A security update names its advisory in the body of a `fix(deps):`
+/// commit that changes the lock alone, and it releases.
+#[test]
+fn a_lock_only_fix_deps_with_an_advisory_opens_a_request() {
+    let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+    target.bump_dependency("1.0.1");
+    target.commit(
+        "fix(deps): move dep past its advisory\n\nRUSTSEC-2026-0001",
+        &[],
+    );
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["eligible"], true, "{report}");
+    assert_eq!(target.release_plz("Cargo.toml").as_deref(), Some("0.1.1"));
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// The same lock-only move typed `chore(deps):` states no release, so the
+/// job skips release-plz's request.
+#[test]
+fn a_lock_only_chore_deps_opens_no_request() {
+    let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+    target.bump_dependency("1.0.1");
+    target.commit("chore(deps): move dep to 1.0.1", &[]);
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["eligible"], false, "{report}");
+    assert_eq!(
+        report["reason"],
+        "none of the 1 commit that touched the packed files since v0.1.0 is a releasing commit: feat, fix, perf, or a breaking change"
+    );
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// An eligible request keeps every counted commit: a `build:` commit on a
+/// packed file rides along in release-plz's changelog beside the fix.
+#[test]
+fn a_build_commit_rides_along_in_the_changelog() {
+    let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+    target.commit(
+        "build: name the binary's edition",
+        &[("src/main.rs", "// edition 2021\nfn main() { dep::f(); }\n")],
+    );
+    target.commit(
+        "fix: mend the widget",
+        &[(
+            "src/main.rs",
+            "// edition 2021, mended\nfn main() { dep::f(); }\n",
+        )],
+    );
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["eligible"], true, "{report}");
+    assert_eq!(target.release_plz("Cargo.toml").as_deref(), Some("0.1.1"));
+    let changelog = target.changelog();
+    assert!(changelog.contains("mend the widget"), "{changelog}");
+    assert!(
+        changelog.contains("name the binary's edition"),
+        "{changelog}"
+    );
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// A workspace whose release-plz releases two packages refuses, naming
+/// the one-package limit the tag shape assumes.
+#[test]
+fn a_workspace_with_two_released_packages_refuses() {
+    let member = |name: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\nlicense = \"MIT\"\ndescription = \"{name}\"\n"
+        )
+    };
+    let files = vec![
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"alpha\", \"beta\"]\nresolver = \"2\"\n".to_owned(),
+        ),
+        ("alpha/Cargo.toml", member("alpha")),
+        ("alpha/src/lib.rs", "pub fn a() {}\n".to_owned()),
+        ("beta/Cargo.toml", member("beta")),
+        ("beta/src/lib.rs", "pub fn b() {}\n".to_owned()),
+    ];
+    let target = Crate::new(&files, RELEASE_PLZ_REGISTRY);
+    let (ok, diagnostic) = eligible_at(target.dir());
+    assert!(!ok, "{diagnostic}");
+    let message = diagnostic.to_string();
+    assert!(
+        message.contains("release-plz releases 2 packages of this workspace, alpha, beta"),
+        "{message}"
+    );
+    assert!(message.contains("v{{ version }}"), "{message}");
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// The shape of a crate with an `xtask` helper that sets
+/// `publish = false`: release-plz releases the crate alone, so the verb
+/// judges it, and a fix in the helper is no packed change.
+#[test]
+fn a_helper_member_with_publish_empty_is_skipped() {
+    let mut files = binary_crate();
+    files[0].1 =
+        files[0].1.replace("publish = []\n", "") + "\n[workspace]\nmembers = [\".\", \"xtask\"]\n";
+    files.push((
+        "xtask/Cargo.toml",
+        "[package]\nname = \"xtask\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n"
+            .to_owned(),
+    ));
+    files.push(("xtask/src/main.rs", "fn main() {}\n".to_owned()));
+    let target = Crate::new(&files, RELEASE_PLZ_REGISTRY);
+    target.commit(
+        "fix: mend the helper",
+        &[("xtask/src/main.rs", "fn main() { }\n")],
+    );
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["package"], "widget", "{report}");
+    assert_eq!(report["eligible"], false, "{report}");
+    assert_eq!(report["reason"], "no packed file changed since v0.1.0");
+    target.commit(
+        "fix: mend the widget",
+        &[("src/main.rs", "fn main() { dep::f() }\n")],
+    );
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["eligible"], true, "{report}");
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// The shape of a single package under `crates/` that sets
+/// `publish = []` and releases through its tags: release-plz releases it
+/// in git-only mode, so the verb judges it rather than refusing.
+#[test]
+fn a_single_package_with_publish_empty_is_judged() {
+    let crate_files = binary_crate();
+    let files = vec![
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n".to_owned(),
+        ),
+        ("crates/widget/Cargo.toml", crate_files[0].1.clone()),
+        ("crates/widget/src/main.rs", crate_files[1].1.clone()),
+        ("README.md", "# widget\n".to_owned()),
+    ];
+    let target = Crate::new(&files, RELEASE_PLZ_GIT_ONLY);
+    target.commit("fix: reword the readme", &[("README.md", "# the widget\n")]);
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["package"], "widget", "{report}");
+    assert_eq!(report["eligible"], false, "{report}");
+    assert_eq!(report["reason"], "no packed file changed since v0.1.0");
+    target.commit(
+        "fix: mend the widget",
+        &[("crates/widget/src/main.rs", "fn main() { dep::f() }\n")],
+    );
+    let (ok, report) = eligible_at(target.dir());
+    assert!(ok, "{report}");
+    assert_eq!(report["eligible"], true, "{report}");
+    assert_eq!(report["commits"][0]["subject"], "fix: mend the widget");
+}
+
+/// A PATH with the built `rk` and a stand-in `release-plz` that logs its
+/// arguments into `log` first.
+fn job_path(stubs: &Path, log: &Path) -> String {
+    let release_plz = stubs.join("release-plz");
+    std::fs::write(
+        &release_plz,
+        format!(
+            "#!/bin/sh\nprintf 'release-plz %s\\n' \"$*\" >> '{}'\n",
+            log.display()
+        ),
+    )
+    .expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&release_plz, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+    }
+    let rk = assert_cmd::cargo::cargo_bin("rk");
+    let dirs = [
+        stubs.to_path_buf(),
+        rk.parent().expect("rk has a directory").to_path_buf(),
+    ];
+    std::env::join_paths(dirs.into_iter().chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("the PATH joins")
+    .to_string_lossy()
+    .into_owned()
+}
+
+/// The judging item and the request item of the rendered rust GitLab
+/// request job, in order, as one script; and, under a recorded
+/// environment with no rk, the check that the request job installs it
+/// before it judges, as the candidate job does.
+fn rust_gitlab_request_script() -> String {
+    use release_kit::landing::{CheckoutMode, Integration, Style};
+    let params = projection_params(
+        "rust",
+        "gitlab",
+        CheckoutMode::LinkedWorktree,
+        Integration::Local,
+        Style::Trunk,
+        false,
+    );
+    let source = release_kit::embedded::SNIPPETS
+        .get_file("rust/gitlab/.gitlab-ci.yml")
+        .expect("the binary embeds the snippet");
+    let pipeline = String::from_utf8(release_kit::projection::render(source.contents(), &params))
+        .expect("the pipeline is text");
+    let parsed: serde_json::Value = yaml_serde::from_str(&pipeline).expect("the pipeline parses");
+    let items: Vec<String> = parsed["release-request"]["script"]
+        .as_array()
+        .expect("a script")
+        .iter()
+        .filter_map(|item| item.as_str().map(str::to_owned))
+        .collect();
+    let judge = items
+        .iter()
+        .position(|item| item.contains("rk release eligible"))
+        .expect("the job judges");
+    let request = items
+        .iter()
+        .position(|item| item.starts_with("release-plz release-pr"))
+        .expect("the job requests");
+    assert!(judge < request, "{items:?}");
+    let gitlab = format!("{}\n{}\n", items[judge], items[request]);
+    // Under a recorded environment with no rk, the request job installs
+    // it before it judges, as the candidate job does.
+    let (_, installed) = pipeline_under(
+        "rust",
+        "gitlab",
+        &dev_environment_answer_with("gitlab", "rk = \"installer\""),
+    );
+    let parsed: serde_json::Value = yaml_serde::from_str(&installed).expect("the pipeline parses");
+    for (job, first) in [
+        ("release-request", "rk release eligible"),
+        ("release-candidate", "rk lines mint"),
+    ] {
+        let script = parsed[job]["script"].to_string();
+        let install = script
+            .find("release-kit-installer.sh")
+            .expect("the job installs rk");
+        assert!(
+            install < script.find(first).expect("the job runs rk"),
+            "{job}: {script}"
+        );
+    }
+    gitlab
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// Both rust pipelines run `rk release eligible` before release-plz's
+/// request, with or without a recorded development environment. Run
+/// against a crate whose only commit since its release is a `build:`, the
+/// GitHub step reports the skip and the GitLab job ends before the
+/// stand-in release-plz is called; after a `fix:` both go on to it.
+#[test]
+fn the_rust_request_job_skips_release_pr_when_not_eligible() {
+    use release_kit::landing::Integration;
+    let step = "judge whether a releasing commit changed the package";
+    let workflow = release_workflow("rust", Integration::Local);
+    let job = workflow_job(&workflow, "release-plz-pr");
+    let judged = job.find(&format!("- name: {step}")).expect("the step");
+    let requested = job.find("id: release-pr").expect("the request step");
+    assert!(judged < requested, "{job}");
+    assert!(
+        job.contains("if: steps.candidate.outputs.held != 'true' && steps.eligible.outputs.eligible == 'true'\n"),
+        "{job}"
+    );
+    let block = std::fs::read_to_string(repo_path("blocks/dev-environment-request.yaml.in"))
+        .expect("the block reads");
+    assert!(
+        block.find("RK_DEV_RUN rk release eligible")
+            < block.find("RK_DEV_RUN release-plz release-pr"),
+        "{block}"
+    );
+    let gitlab = rust_gitlab_request_script();
+    let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+    let stubs = tempfile::tempdir().expect("a stub dir");
+    let log = stubs.path().join("log");
+    std::fs::write(&log, "").expect("writes");
+    let path = job_path(stubs.path(), &log);
+    let github = step_script(job, step);
+    let output = stubs.path().join("github-output");
+    for (subject, text, eligible) in [
+        (
+            "build: name the edition",
+            "// 2021\nfn main() { dep::f(); }\n",
+            false,
+        ),
+        (
+            "fix: mend the widget",
+            "// mended\nfn main() { dep::f(); }\n",
+            true,
+        ),
+    ] {
+        target.commit(subject, &[("src/main.rs", text)]);
+        std::fs::write(&output, "").expect("writes");
+        let ran = run_step(
+            &github,
+            target.dir(),
+            &[
+                ("PATH", path.as_str()),
+                ("GITHUB_OUTPUT", output.to_str().expect("utf-8")),
+            ],
+        );
+        assert!(ran.status.success(), "{subject}: {ran:?}");
+        let stdout = String::from_utf8_lossy(&ran.stdout);
+        let written = std::fs::read_to_string(&output).expect("reads");
+        assert!(
+            written.contains(&format!("eligible={eligible}")),
+            "{subject}: {written} {stdout}"
+        );
+        assert_eq!(
+            stdout.contains("release-pr skipped: none of the"),
+            !eligible,
+            "{subject}: {stdout}"
+        );
+        std::fs::write(&log, "").expect("writes");
+        let ran = run_step(
+            &gitlab,
+            target.dir(),
+            &[("PATH", path.as_str()), ("RELEASE_BOT_TOKEN", "bot-token")],
+        );
+        assert!(ran.status.success(), "{subject}: {ran:?}");
+        let called = std::fs::read_to_string(&log).expect("reads");
+        assert_eq!(
+            called.contains("release-plz release-pr --forge gitlab"),
+            eligible,
+            "{subject}: {called} {}",
+            String::from_utf8_lossy(&ran.stdout)
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A version set by hand past the last release is judged against that
+/// release: a commit that only sets the version, then a `build:` on a
+/// packed file, leave the verb and the request with nothing, and a `fix:`
+/// on a packed file then opens the declared version.
+#[test]
+fn a_hand_bumped_version_needs_a_releasing_packed_change() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        let (file, text) = if tech == "bash" {
+            ("VERSION", "0.1.1\n".to_owned())
+        } else {
+            let project =
+                std::fs::read_to_string(engine.dir().join("pyproject.toml")).expect("reads");
+            (
+                "pyproject.toml",
+                project.replace("version = \"0.1.0\"", "version = \"0.1.1\""),
+            )
+        };
+        engine.commit("chore: set the version to 0.1.1", &[(file, text.as_str())]);
+        for subject in ["", "build: rebuild the tool"] {
+            if !subject.is_empty() {
+                engine.commit(subject, &[(packed_file(tech), "echo two\n")]);
+            }
+            let (ok, verdict) = eligible_at(engine.dir());
+            assert!(ok, "{tech} {forge} {subject}: {verdict}");
+            assert_eq!(
+                verdict["eligible"], false,
+                "{tech} {forge} {subject}: {verdict}"
+            );
+            assert_eq!(
+                verdict["compared"], "v0.1.0",
+                "{tech} {forge} {subject}: {verdict}"
+            );
+            let report = engine.ok("request");
+            assert_eq!(
+                report["state"], "nothing",
+                "{tech} {forge} {subject}: {report}"
+            );
+            assert_eq!(
+                report["compared"], "v0.1.0",
+                "{tech} {forge} {subject}: {report}"
+            );
+        }
+        engine.commit("fix: mend the tool", &[(packed_file(tech), "echo three\n")]);
+        let (ok, verdict) = eligible_at(engine.dir());
+        assert!(
+            ok && verdict["eligible"] == true,
+            "{tech} {forge}: {verdict}"
+        );
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{tech} {forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{tech} {forge}: {report}");
+    }
+}
+
+/// Whether the rendered GitHub judging step answers eligible at `dir`,
+/// and whether the rendered GitLab request job goes on to the stand-in
+/// release-plz there.
+fn rust_gates_at(dir: &Path) -> (bool, bool) {
+    use release_kit::landing::Integration;
+    let step = "judge whether a releasing commit changed the package";
+    let workflow = release_workflow("rust", Integration::Local);
+    let github = step_script(workflow_job(&workflow, "release-plz-pr"), step);
+    let gitlab = rust_gitlab_request_script();
+    let stubs = tempfile::tempdir().expect("a stub dir");
+    let log = stubs.path().join("log");
+    std::fs::write(&log, "").expect("writes");
+    let path = job_path(stubs.path(), &log);
+    let output = stubs.path().join("github-output");
+    std::fs::write(&output, "").expect("writes");
+    let ran = run_step(
+        &github,
+        dir,
+        &[
+            ("PATH", path.as_str()),
+            ("GITHUB_OUTPUT", output.to_str().expect("utf-8")),
+        ],
+    );
+    assert!(ran.status.success(), "{ran:?}");
+    let written = std::fs::read_to_string(&output).expect("reads");
+    let ran = run_step(
+        &gitlab,
+        dir,
+        &[("PATH", path.as_str()), ("RELEASE_BOT_TOKEN", "bot-token")],
+    );
+    assert!(ran.status.success(), "{ran:?}");
+    let called = std::fs::read_to_string(&log).expect("reads");
+    (
+        written.contains("eligible=true"),
+        called.contains("release-plz release-pr --forge gitlab"),
+    )
+}
+
+/// SATISFIES release-engine:a-request-needs-a-releasing-commit
+///
+/// A release candidate's tag never bounds the judgment: after a fix, its
+/// candidate, and the promotion to the stable version, the bash verb and
+/// the rust verb and both rendered rust request gates judge since the last
+/// stable release and count the fix behind the candidate.
+#[test]
+fn a_promoted_candidate_is_eligible_for_its_stable_request() {
+    let engine = packed_engine("bash", "github", "uv_build");
+    engine.commit("fix: mend the tool", &[(packed_file("bash"), "echo two\n")]);
+    engine.commit(
+        "chore(release): v0.1.1-rc.1",
+        &[("VERSION", "0.1.1-rc.1\n")],
+    );
+    git_in(engine.dir(), &["tag", "v0.1.1-rc.1"]);
+    engine.commit("chore(release): v0.1.1", &[("VERSION", "0.1.1\n")]);
+    let (ok, verdict) = eligible_at(engine.dir());
+    assert!(ok, "{verdict}");
+    assert_eq!(verdict["eligible"], true, "{verdict}");
+    assert_eq!(verdict["compared"], "v0.1.0", "{verdict}");
+
+    let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+    target.commit(
+        "fix: mend the widget",
+        &[("src/main.rs", "fn main() { dep::f() }\n")],
+    );
+    let manifest = target.dir().join("Cargo.toml");
+    for (version, tag) in [("0.1.1-rc.1", true), ("0.1.1", false)] {
+        let text = std::fs::read_to_string(&manifest).expect("reads");
+        let text = text.replacen(
+            &format!("version = \"{}\"", if tag { "0.1.0" } else { "0.1.1-rc.1" }),
+            &format!("version = \"{version}\""),
+            1,
+        );
+        std::fs::write(&manifest, text).expect("writes");
+        cargo_in(target.dir(), &["generate-lockfile", "--offline"]);
+        target.commit(&format!("chore(release): v{version}"), &[]);
+        if tag {
+            git_in(target.dir(), &["tag", &format!("v{version}")]);
+        }
+    }
+    let (ok, verdict) = eligible_at(target.dir());
+    assert!(ok, "{verdict}");
+    assert_eq!(verdict["eligible"], true, "{verdict}");
+    assert_eq!(verdict["compared"], "v0.1.0", "{verdict}");
+    assert_eq!(rust_gates_at(target.dir()), (true, true));
+}
+
+/// SATISFIES release-engine:a-rust-target-releases-one-package
+///
+/// The released package is resolved at each revision: a root package
+/// moved into `crates/` after its release is judged by its listing at the
+/// tag and at `HEAD`, so a `fix(packaging):` move is eligible and a
+/// `chore:` move is not.
+#[test]
+fn a_released_package_moved_into_a_workspace_is_judged() {
+    for (subject, eligible) in [
+        ("fix(packaging): move the widget into a workspace", true),
+        ("chore: move the widget into a workspace", false),
+    ] {
+        let target = Crate::new(&binary_crate(), RELEASE_PLZ_GIT_ONLY);
+        let dir = target.dir();
+        std::fs::create_dir_all(dir.join("crates/widget")).expect("creates");
+        git_in(dir, &["mv", "src", "crates/widget/src"]);
+        git_in(dir, &["mv", "Cargo.toml", "crates/widget/Cargo.toml"]);
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n",
+        )
+        .expect("writes");
+        cargo_in(dir, &["generate-lockfile", "--offline"]);
+        target.commit(subject, &[]);
+        let (ok, verdict) = eligible_at(dir);
+        assert!(ok, "{subject}: {verdict}");
+        assert_eq!(verdict["package"], "widget", "{subject}: {verdict}");
+        assert_eq!(verdict["eligible"], eligible, "{subject}: {verdict}");
+    }
+}
+
+// ---- an advisory takes a releasing type ----
+
+/// `rk message --check --json` over `text` at `dir`: whether it passed,
+/// and the classes of its findings.
+fn message_classes(dir: &Path, text: &str) -> (bool, Vec<String>) {
+    let out = rk()
+        .args(["message", "--check", "--json", "--target"])
+        .arg(dir)
+        .write_stdin(text.to_owned())
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("one JSON object on stdout");
+    let classes = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter_map(|finding| finding["class"].as_str().map(str::to_owned))
+        .collect();
+    (out.status.success(), classes)
+}
+
+/// SATISFIES release-engine:an-advisory-takes-a-releasing-type
+///
+/// The `rk-message` hook refuses a message that names a security advisory
+/// under a type that releases nothing, and passes it under a releasing
+/// type or a breaking marker; a target that names no release judges no
+/// type.
+#[test]
+fn rk_message_refuses_an_advisory_without_a_releasing_type() {
+    let dir = message_fixture();
+    write_release_config(dir.path(), "mode = \"automatic\"\ndriver = \"rust\"\n");
+    let body = "\n\nMoves foo past RUSTSEC-2026-0001.\n";
+    let (ok, classes) = message_classes(dir.path(), &format!("chore(deps): bump foo{body}"));
+    assert!(!ok, "{classes:?}");
+    assert_eq!(classes, vec!["advisory-type"]);
+    for clean in [
+        format!("fix(deps): bump foo{body}"),
+        format!("chore(deps)!: bump foo{body}"),
+        "chore(deps): bump foo\n\nNo advisory: CVE-shaped text alone, CVE-20.\n".to_owned(),
+    ] {
+        let (ok, classes) = message_classes(dir.path(), &clean);
+        assert!(ok, "{clean}: {classes:?}");
+    }
+    for advisory in ["GHSA-abcd-23fg-h45j", "CVE-2026-12345"] {
+        let (ok, classes) = message_classes(
+            dir.path(),
+            &format!("build(deps): bump foo\n\nFixes {advisory}.\n"),
+        );
+        assert!(
+            !ok && classes == ["advisory-type"],
+            "{advisory}: {classes:?}"
+        );
+    }
+    let release_less = message_fixture();
+    let (ok, classes) =
+        message_classes(release_less.path(), &format!("chore(deps): bump foo{body}"));
+    assert!(ok, "{classes:?}");
+}
+
+/// SATISFIES release-engine:an-advisory-takes-a-releasing-type
+///
+/// The title check each forge runs holds the same rule over the title and
+/// the description, exempts the release bot's request, and is absent from
+/// a release-less landing.
+#[test]
+fn the_title_check_refuses_an_advisory_without_a_releasing_type() {
+    use release_kit::landing::MergeForm;
+    let gate = |path: &str, forge: &str, release: bool, title: &str, body: &str| -> bool {
+        let text = if release {
+            rendered_gate(path, MergeForm::Squash)
+        } else {
+            render_gate(path, &release_less_gate_params(forge, MergeForm::Squash))
+        };
+        let (marker, indent, vars) = if forge == "github" {
+            ("run: |", 10, ["TITLE", "BODY"])
+        } else {
+            (
+                "  script:\n    - |",
+                6,
+                ["CI_MERGE_REQUEST_TITLE", "CI_MERGE_REQUEST_DESCRIPTION"],
+            )
+        };
+        let script = gate_script(&text, marker, indent);
+        std::process::Command::new("bash")
+            .args(["-c", &script])
+            .env(vars[0], title)
+            .env(vars[1], body)
+            .output()
+            .expect("bash runs the gate")
+            .status
+            .success()
+    };
+    let advisory = "Moves foo past RUSTSEC-2026-0001.";
+    for (forge, path) in [
+        ("github", "_shared/github/.github/workflows/pr-title.yml"),
+        ("gitlab", "_shared/gitlab/.gitlab/ci/mr-title.yml"),
+    ] {
+        assert!(
+            !gate(path, forge, true, "chore(deps): bump foo", advisory),
+            "{forge}"
+        );
+        assert!(
+            !gate(
+                path,
+                forge,
+                true,
+                "chore(deps): bump foo past GHSA-abcd-23fg-h45j",
+                ""
+            ),
+            "{forge}"
+        );
+        assert!(
+            gate(path, forge, true, "fix(deps): bump foo", advisory),
+            "{forge}"
+        );
+        assert!(
+            gate(path, forge, true, "perf(deps): bump foo", advisory),
+            "{forge}"
+        );
+        assert!(
+            gate(path, forge, true, "chore(deps)!: bump foo", advisory),
+            "{forge}"
+        );
+        assert!(
+            gate(
+                path,
+                forge,
+                true,
+                "chore(deps): bump foo",
+                &format!("{advisory}\n\nBREAKING CHANGE: foo 2 drops a flag")
+            ),
+            "{forge}"
+        );
+        assert!(
+            gate(path, forge, true, "chore(deps): bump foo", "plain"),
+            "{forge}"
+        );
+        assert!(
+            gate(path, forge, true, "chore(release): v1.2.0", advisory),
+            "{forge}"
+        );
+        assert!(
+            gate(path, forge, false, "chore(deps): bump foo", advisory),
+            "{forge}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:an-advisory-takes-a-releasing-type
+///
+/// Under the rebase form the GitHub commit gate is the check every
+/// commit reaches the trunk through: it refuses a commit that names an
+/// advisory under `chore(deps)`, and passes the same body under
+/// `fix(deps)`.
+#[test]
+fn the_github_commit_gate_refuses_an_advisory_without_a_releasing_type() {
+    let body = "\n\nMoves foo past RUSTSEC-2026-0001.\n";
+    for (subject, passes) in [
+        ("chore(deps): bump foo", false),
+        ("fix(deps): bump foo", true),
+    ] {
+        let dir = tempfile::tempdir().expect("a scratch dir exists");
+        let _ = github_commit_listing(dir.path());
+        push_github_commit(dir.path(), 1, "aaaa1111", &format!("{subject}{body}"));
+        let (ok, said) = run_github_commit_gate(dir.path(), "fix(deps): bump foo");
+        assert_eq!(ok, passes, "{subject}: {said}");
+        assert_eq!(
+            said.contains("security advisory"),
+            !passes,
+            "{subject}: {said}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:an-advisory-takes-a-releasing-type
+///
+/// The GitLab commit gate holds the same rule over each commit of the
+/// request under the rebase form.
+#[test]
+fn the_gitlab_commit_gate_refuses_an_advisory_without_a_releasing_type() {
+    let body = "\n\nMoves foo past RUSTSEC-2026-0001.";
+    for (subject, passes) in [
+        ("chore(deps): bump foo", false),
+        ("fix(deps): bump foo", true),
+    ] {
+        let message = format!("{subject}{body}");
+        let (repo, base, head) = gitlab_request(&[message.as_str()]);
+        let (ok, said) = run_gitlab_commit_gate(repo.path(), &base, &head, "fix(deps): bump foo");
+        assert_eq!(ok, passes, "{subject}: {said}");
+        assert_eq!(
+            said.contains("security advisory"),
+            !passes,
+            "{subject}: {said}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// `rk release build` writes notes that hold the packed commits alone,
+/// so they match the request's changelog.
+#[test]
+fn the_release_notes_follow_the_packed_files() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = packed_engine(tech, forge, "uv_build");
+        engine.commit(
+            "docs: describe the guide",
+            &[("docs/guide.md", "# guide, longer\n")],
+        );
+        engine.commit("fix: mend the tool", &[(packed_file(tech), "echo two\n")]);
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "release", "{tech} {forge}: {build}");
+        let notes = std::fs::read_to_string(engine.dir().join(".rk-release/notes.md"))
+            .expect("the notes")
+            .to_lowercase();
+        assert!(notes.contains("mend the tool"), "{tech} {forge}: {notes}");
+        assert!(
+            !notes.contains("describe the guide"),
+            "{tech} {forge}: {notes}"
+        );
+        assert_eq!(
+            engine.worktrees(),
+            1,
+            "{tech} {forge}: every listing worktree is gone"
+        );
+    }
+}
+
+// ---- the declaration that ships a bash release ----
+
+impl Engine {
+    /// Record `keys` under `[profile.release.build]` in the configuration
+    /// and take them into the record with `rk upgrade --apply`.
+    fn declare(&self, keys: &str) {
+        let path = self.dir().join(".release-kit/config.toml");
+        let text = std::fs::read_to_string(&path).expect("reads");
+        let text = if text.contains("\n[profile.release.build]\n") {
+            text.replace(
+                "\n[profile.release.build]\n",
+                &format!("\n[profile.release.build]\n{keys}"),
+            )
+        } else {
+            format!("{text}\n[profile.release.build]\n{keys}")
+        };
+        std::fs::write(&path, text).expect("writes");
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(self.dir())
+            .assert()
+            .success();
+    }
+
+    /// `rk release build --list`, with the stand-ins first, in text or in
+    /// JSON.
+    fn list(&self, json: bool) -> std::process::Output {
+        let mut command = rk();
+        for var in ENGINE_CI_VARS {
+            command.env_remove(var);
+        }
+        command
+            .env("RK_GH_BIN", self.stubs.path().join("gh"))
+            .env("RK_GLAB_BIN", self.stubs.path().join("glab"))
+            .env("RK_GIT_CLIFF_BIN", self.stubs.path().join("git-cliff"))
+            .env("RK_UV_BIN", self.stubs.path().join("uv"))
+            .env("RK_CURL_BIN", self.stubs.path().join("curl"))
+            .args(["release", "build", "--list"]);
+        if json {
+            command.arg("--json");
+        }
+        command
+            .arg("--target")
+            .arg(self.dir())
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    }
+
+    /// Answer that `sha` merges the release request `number` of `master`,
+    /// as the merge of a request the forge opened would.
+    fn merges(&self, sha: &str, number: u64) {
+        self.merged_at(sha, number, "rk-release/master", "master", sha);
+    }
+}
+
+/// The bash layout the declaration tests ship from: an executable tool, a
+/// library, a symlink, a readme, and files a declaration leaves out, with
+/// an ignored file beside them.
+fn bash_layout(engine: &Engine) {
+    let dir = engine.dir();
+    for sub in ["src/lib", "docs", "tests", "bin", "out"] {
+        std::fs::create_dir_all(dir.join(sub)).expect("the layout creates");
+    }
+    for (path, text) in [
+        ("README.md", "# widget\n"),
+        ("Makefile", "check:\n\tsh tests/check.sh\n"),
+        ("src/tool.sh", "#!/bin/sh\necho one\n"),
+        ("src/lib/util.sh", "util() { :; }\n"),
+        ("docs/guide.md", "# guide\n"),
+        ("tests/check.sh", "exit 0\n"),
+        (".gitignore", "out/\n"),
+        ("out/built", "ignored\n"),
+    ] {
+        std::fs::write(dir.join(path), text).expect("writes");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            dir.join("src/tool.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("the tool is executable");
+        std::os::unix::fs::symlink("../src/tool.sh", dir.join("bin/tool")).expect("links");
+    }
+    git_in(
+        dir,
+        &[
+            "add",
+            "--",
+            "README.md",
+            "Makefile",
+            "src",
+            "docs",
+            "tests",
+            "bin",
+            ".gitignore",
+        ],
+    );
+}
+
+/// One member of a release archive: its path, kind, mode, owner, names,
+/// time, and link target.
+#[derive(Debug, PartialEq, Eq)]
+struct Member {
+    path: String,
+    symlink: bool,
+    mode: u32,
+    ids: (u64, u64),
+    names: (String, String),
+    mtime: u64,
+    link: Option<String>,
+}
+
+/// Every member of a gzip tarball, in archive order.
+fn archive_members(path: &Path) -> Vec<Member> {
+    let file = std::fs::File::open(path).expect("the archive opens");
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let mut out = Vec::new();
+    for entry in archive.entries().expect("a tarball") {
+        let entry = entry.expect("an entry");
+        let header = entry.header();
+        out.push(Member {
+            path: entry.path().expect("a path").to_string_lossy().into_owned(),
+            symlink: header.entry_type().is_symlink(),
+            mode: header.mode().expect("a mode"),
+            ids: (header.uid().expect("a uid"), header.gid().expect("a gid")),
+            names: (
+                header
+                    .username()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .to_owned(),
+                header
+                    .groupname()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ),
+            mtime: header.mtime().expect("a time"),
+            link: entry
+                .link_name()
+                .ok()
+                .flatten()
+                .map(|link| link.to_string_lossy().into_owned()),
+        });
+    }
+    out
+}
+
+/// The files a bash release ships at `HEAD` under a declaration that
+/// leaves out `excluded`: every tracked file outside it, without the
+/// destinations the record names and `.release-kit/`, and `VERSION`.
+fn declared_set(engine: &Engine, excluded: &[&str]) -> Vec<String> {
+    let recorded: std::collections::BTreeSet<String> = read_manifest(engine.dir())["files"]
+        .as_array()
+        .expect("a file list")
+        .iter()
+        .filter_map(|file| file["destination"].as_str().map(str::to_owned))
+        .collect();
+    let mut set: std::collections::BTreeSet<String> = git_out(engine.dir(), &["ls-files"])
+        .lines()
+        .filter(|path| !excluded.iter().any(|out| path.starts_with(out)))
+        .filter(|path| !recorded.contains(*path) && !path.starts_with(".release-kit/"))
+        .map(str::to_owned)
+        .collect();
+    set.insert("VERSION".to_owned());
+    set.into_iter().collect()
+}
+
+/// A bash engine released at `v0.1.0` with [`bash_layout`] and a
+/// declaration that leaves out `Makefile`, `docs/`, and `tests/`, whose
+/// fix request is merged: the next `rk release build` releases `0.1.1`.
+fn declared_release(forge: &'static str) -> Engine {
+    let engine = Engine::new("bash", forge, &[], "0.1.0");
+    bash_layout(&engine);
+    engine.declare("exclude = [\"/Makefile\", \"docs/\", \"tests/\"]\n");
+    engine.commit("chore: lay out the project", &[]);
+    engine.released("v0.1.0", &engine.head());
+    engine.commit(
+        "fix: mend the tool",
+        &[("src/tool.sh", "#!/bin/sh\necho two\n")],
+    );
+    let report = engine.ok("request");
+    assert_eq!(report["state"], "opened", "{forge}: {report}");
+    engine.merge(report["request"].as_u64().expect("a request"));
+    engine
+}
+
+/// The keys of the first `[profile.release.build]` example in the
+/// document at `path` that names a verify command, as the document prints
+/// them.
+fn documented_declaration(path: &str) -> String {
+    let text = std::fs::read_to_string(repo_path(path)).expect("the document reads");
+    let mut blocks = text.split("```toml\n").skip(1);
+    let block = blocks
+        .find_map(|rest| {
+            let block = rest.split("```").next().unwrap_or_default();
+            block.contains("verify = ").then_some(block)
+        })
+        .expect("the document carries an example with a verify command");
+    let keys: Vec<&str> = block
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| *line != "[profile.release.build]")
+        .skip(1)
+        .collect();
+    format!("{}\n", keys.join("\n").trim())
+}
+
+/// SATISFIES release-engine:the-bash-release-packs-its-declaration
+///
+/// The declaration the bash binding and the 0.9.15 guidance print as
+/// their example builds a release whose verify command passes from the
+/// declared files alone, so the example an adopter copies ships what its
+/// own check reads.
+#[test]
+fn the_documented_declaration_builds_and_verifies() {
+    for document in ["bindings/bash.md", "guidance/0.9.15.md"] {
+        let keys = documented_declaration(document);
+        for forge in ["github", "gitlab"] {
+            let label = format!("{document} {forge}");
+            let engine = Engine::new("bash", forge, &[], "0.1.0");
+            bash_layout(&engine);
+            std::fs::write(
+                engine.dir().join("tests/check.sh"),
+                "test -f src/tool.sh && printf 'checked %s\\n' \"$PWD\" >> \"$RK_TEST_BUILD_LOG\"\n",
+            )
+            .expect("writes");
+            engine.declare(&keys);
+            engine.commit("chore: lay out the project", &[]);
+            engine.released("v0.1.0", &engine.head());
+            engine.commit(
+                "fix: mend the tool",
+                &[("src/tool.sh", "#!/bin/sh\necho two\n")],
+            );
+            let report = engine.ok("request");
+            assert_eq!(report["state"], "opened", "{label}: {report}");
+            engine.merge(report["request"].as_u64().expect("a request"));
+            engine.clear_log();
+            let out = engine.run("build").output().expect("rk runs");
+            assert!(
+                out.status.success(),
+                "{label}: {keys}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let checked: Vec<String> = engine
+                .log()
+                .lines()
+                .filter(|line| line.starts_with("checked "))
+                .map(str::to_owned)
+                .collect();
+            assert_eq!(checked.len(), 1, "{label}: {}", engine.log());
+            assert!(
+                checked[0].ends_with("/widget-0.1.1"),
+                "{label}: the check runs in the unpacked archive: {checked:?}"
+            );
+        }
+    }
+}
+
+/// SATISFIES release-engine:the-bash-release-packs-its-declaration
+///
+/// `rk release build` packs the declared tracked files of `HEAD` under
+/// `widget-0.1.1/`: each file and symlink with its git mode, owner and
+/// group 0 with empty names, and the commit time, sorted, and nothing an
+/// exclude pattern names, nothing untracked or ignored, and none of rk's
+/// own files. A second build on another working-tree state writes the same
+/// bytes and the same `.sha256`.
+#[test]
+fn the_bash_archive_is_the_declared_set() {
+    for forge in ["github", "gitlab"] {
+        let engine = declared_release(forge);
+        std::fs::write(engine.dir().join("notes.txt"), "untracked\n").expect("writes");
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "release", "{forge}: {build}");
+        let tarball = engine.dir().join("dist/widget-0.1.1.tar.gz");
+        let artifacts: Vec<&str> = build["artifacts"]
+            .as_array()
+            .expect("artifacts")
+            .iter()
+            .filter_map(|artifact| artifact["path"].as_str())
+            .collect();
+        assert_eq!(
+            artifacts,
+            [
+                "dist/widget-0.1.1.tar.gz",
+                "dist/widget-0.1.1.tar.gz.sha256"
+            ],
+            "{forge}: {build}"
+        );
+        let members = archive_members(&tarball);
+        let paths: Vec<String> = members
+            .iter()
+            .map(|member| {
+                member
+                    .path
+                    .strip_prefix("widget-0.1.1/")
+                    .unwrap_or_else(|| panic!("{forge}: {member:?} is outside the top directory"))
+                    .to_owned()
+            })
+            .collect();
+        let expected = declared_set(&engine, &["Makefile", "docs/", "tests/"]);
+        assert_eq!(paths, expected, "{forge}");
+        for absent in [
+            "Makefile",
+            "docs/guide.md",
+            "tests/check.sh",
+            "notes.txt",
+            "out/built",
+        ] {
+            assert!(
+                !paths.iter().any(|path| path == absent),
+                "{forge}: {absent}"
+            );
+        }
+        for present in [
+            "README.md",
+            "VERSION",
+            "bin/tool",
+            "src/tool.sh",
+            "src/lib/util.sh",
+        ] {
+            assert!(
+                paths.iter().any(|path| path == present),
+                "{forge}: {present}"
+            );
+        }
+        let time: u64 = git_out(engine.dir(), &["log", "-1", "--format=%ct"])
+            .parse()
+            .expect("a commit time");
+        for member in &members {
+            assert_eq!(member.ids, (0, 0), "{forge}: {member:?}");
+            assert_eq!(
+                member.names,
+                (String::new(), String::new()),
+                "{forge}: {member:?}"
+            );
+            assert_eq!(member.mtime, time, "{forge}: {member:?}");
+            let (mode, link) = match member.path.as_str() {
+                "widget-0.1.1/src/tool.sh" => (0o755, None),
+                "widget-0.1.1/bin/tool" => (0o777, Some("../src/tool.sh".to_owned())),
+                _ => (0o644, None),
+            };
+            assert_eq!(member.mode & 0o7777, mode, "{forge}: {member:?}");
+            assert_eq!(member.link, link, "{forge}: {member:?}");
+            assert_eq!(member.symlink, link.is_some(), "{forge}: {member:?}");
+        }
+        let checksum =
+            std::fs::read_to_string(engine.dir().join("dist/widget-0.1.1.tar.gz.sha256"))
+                .expect("the checksum");
+        assert_eq!(
+            checksum,
+            format!("{}  widget-0.1.1.tar.gz\n", file_digest(&tarball)),
+            "{forge}"
+        );
+        let first = std::fs::read(&tarball).expect("reads");
+        engine.fresh();
+        std::fs::write(engine.dir().join("src/tool.sh"), "#!/bin/sh\necho dirty\n")
+            .expect("writes");
+        std::fs::write(engine.dir().join("extra.txt"), "untracked\n").expect("writes");
+        assert_eq!(engine.ok("build")["state"], "release", "{forge}");
+        assert_eq!(std::fs::read(&tarball).expect("reads"), first, "{forge}");
+        assert_eq!(
+            std::fs::read_to_string(engine.dir().join("dist/widget-0.1.1.tar.gz.sha256"))
+                .expect("the checksum"),
+            checksum,
+            "{forge}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:the-bash-release-packs-its-declaration
+///
+/// Two `rk release build` runs of one commit write the same archive bytes
+/// and the same `.sha256`, and the gzip header carries no file name and a
+/// zero time.
+#[test]
+fn the_bash_archive_builds_byte_for_byte_twice() {
+    for forge in ["github", "gitlab"] {
+        let engine = declared_release(forge);
+        let tarball = engine.dir().join("dist/widget-0.1.1.tar.gz");
+        let checksum = engine.dir().join("dist/widget-0.1.1.tar.gz.sha256");
+        assert_eq!(engine.ok("build")["state"], "release", "{forge}");
+        let (first, first_sum) = (
+            std::fs::read(&tarball).expect("reads"),
+            std::fs::read(&checksum).expect("reads"),
+        );
+        engine.fresh();
+        assert_eq!(engine.ok("build")["state"], "release", "{forge}");
+        assert_eq!(std::fs::read(&tarball).expect("reads"), first, "{forge}");
+        assert_eq!(
+            std::fs::read(&checksum).expect("reads"),
+            first_sum,
+            "{forge}"
+        );
+        assert_eq!(&first[..3], &[0x1f, 0x8b, 0x08], "{forge}: a gzip stream");
+        assert_eq!(first[3] & 0x08, 0, "{forge}: the header names no file");
+        assert_eq!(
+            &first[4..8],
+            &[0, 0, 0, 0],
+            "{forge}: the header time is zero"
+        );
+    }
+}
+
+/// SATISFIES release-engine:the-bash-release-packs-its-declaration
+///
+/// The verify command runs in the unpacked archive, outside the checkout,
+/// with `SOURCE_DATE_EPOCH` set to the commit time. A failing one refuses
+/// before any report, upload, tag, or release.
+#[test]
+fn a_failing_verify_command_refuses_before_any_write() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        bash_layout(&engine);
+        std::fs::write(
+            engine.dir().join("src/check.sh"),
+            "printf 'verify %s %s\\n' \"$PWD\" \"$SOURCE_DATE_EPOCH\" >> \"$RK_TEST_BUILD_LOG\"\ntest -f src/tool.sh && test -f VERSION && ! test -e Makefile\n",
+        )
+        .expect("writes");
+        engine.declare(
+            "exclude = [\"/Makefile\", \"docs/\", \"tests/\"]\nverify = \"sh src/check.sh\"\n",
+        );
+        engine.commit("chore: lay out the project", &[]);
+        engine.released("v0.1.0", &engine.head());
+        engine.commit(
+            "fix: mend the tool",
+            &[("src/tool.sh", "#!/bin/sh\necho two\n")],
+        );
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        engine.clear_log();
+        assert_eq!(engine.ok("build")["state"], "release", "{forge}");
+        let time = git_out(engine.dir(), &["log", "-1", "--format=%ct"]);
+        let ran: Vec<String> = engine
+            .log()
+            .lines()
+            .filter(|line| line.starts_with("verify "))
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(ran.len(), 1, "{forge}: {}", engine.log());
+        let words: Vec<&str> = ran[0].split(' ').collect();
+        assert!(words[1].ends_with("/widget-0.1.1"), "{forge}: {ran:?}");
+        assert!(
+            !Path::new(words[1]).starts_with(engine.dir()),
+            "{forge}: the command runs outside the checkout: {ran:?}"
+        );
+        assert_eq!(words[2], time, "{forge}: {ran:?}");
+
+        // A failing verify command.
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        bash_layout(&engine);
+        engine.declare(
+            "exclude = [\"/Makefile\", \"docs/\", \"tests/\"]\nverify = \"test -f Makefile\"\n",
+        );
+        engine.commit("chore: lay out the project", &[]);
+        engine.released("v0.1.0", &engine.head());
+        engine.commit(
+            "fix: mend the tool",
+            &[("src/tool.sh", "#!/bin/sh\necho two\n")],
+        );
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        engine.clear_log();
+        let diagnostic = engine.refused("build", 1);
+        let text = diagnostic.to_string();
+        assert!(
+            text.contains("profile.release.build.verify"),
+            "{forge}: {text}"
+        );
+        assert!(text.contains("test -f Makefile"), "{forge}: {text}");
+        assert!(
+            !engine.dir().join(".rk-release/build.json").exists(),
+            "{forge}: no report"
+        );
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+        assert_eq!(engine.tag("v0.1.1"), None, "{forge}");
+        assert!(engine.release("v0.1.1").is_none(), "{forge}");
+        engine.run("publish").assert().failure();
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+        assert_eq!(engine.tag("v0.1.1"), None, "{forge}");
+    }
+}
+
+/// The diagnostic of `rk <args> --target <dir>`, which must refuse with
+/// `code`.
+fn verb_refusal(dir: &Path, args: &[&str], code: i32) -> serde_json::Value {
+    let out = rk()
+        .args(args)
+        .arg("--target")
+        .arg(dir)
+        .assert()
+        .code(code)
+        .get_output()
+        .stderr
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON diagnostic")
+}
+
+/// A bash engine released at `v0.1.0` with a `fix:` commit since, whose
+/// retired `profile.release.build.command` sits in the configuration
+/// alone where `in_config`, and in the record alone otherwise.
+fn retired_command_engine(forge: &'static str, in_config: bool) -> Engine {
+    let engine = Engine::new("bash", forge, &[], "0.1.0");
+    if in_config {
+        append_target_config(
+            engine.dir(),
+            "\n[profile.release.build]\ncommand = \"make dist\"\n",
+        );
+    } else {
+        let mut manifest = read_manifest(engine.dir());
+        manifest["profile"]["release"]["build"]["command"] = serde_json::json!("make dist");
+        std::fs::write(
+            engine.dir().join(".release-kit/manifest.json"),
+            serde_json::to_string_pretty(&manifest).expect("serializes"),
+        )
+        .expect("writes");
+    }
+    engine.commit("chore: keep the old build command", &[]);
+    engine.released("v0.1.0", &engine.head());
+    engine.commit("fix: mend the tool", &[("a.sh", "echo a\n")]);
+    engine.clear_log();
+    engine
+}
+
+/// SATISFIES project-profile:release-intent-has-three-modes
+///
+/// A configuration or a record that still carries
+/// `profile.release.build.command`, each on its own, makes
+/// `rk release request`, `rk release build`, and `rk status --check`
+/// refuse before any write, each with the one diagnostic that names
+/// `include`, `exclude`, `verify`, and the guidance step. Where the
+/// configuration carries it, `rk upgrade --apply` refuses too. Where only
+/// the record carries it, `rk upgrade --apply` drops it, and the request
+/// then opens.
+#[test]
+fn a_recorded_build_command_refuses_with_its_replacement() {
+    let mut first: Option<serde_json::Value> = None;
+    for forge in ["github", "gitlab"] {
+        for in_config in [true, false] {
+            let label = format!("{forge} in_config={in_config}");
+            let engine = retired_command_engine(forge, in_config);
+            let before = tree_digests(engine.dir());
+            let mut seen = Vec::new();
+            for verb in ["request", "build"] {
+                seen.push((verb.to_owned(), engine.refused(verb, 73)));
+            }
+            seen.push((
+                "status".to_owned(),
+                verb_refusal(engine.dir(), &["status", "--check", "--json"], 73),
+            ));
+            if in_config {
+                seen.push((
+                    "upgrade".to_owned(),
+                    verb_refusal(engine.dir(), &["upgrade", "--apply", "--json"], 73),
+                ));
+            }
+            assert_eq!(
+                tree_digests(engine.dir()),
+                before,
+                "{label}: nothing was written"
+            );
+            assert!(
+                engine_writes(&engine.log()).is_empty(),
+                "{label}: {}",
+                engine.log()
+            );
+            assert_eq!(engine.remote_branch("rk-release/master"), None, "{label}");
+            let first = first.get_or_insert_with(|| seen[0].1.clone()).clone();
+            let message = first["message"].as_str().unwrap_or_default();
+            let action = first["action"].as_str().unwrap_or_default();
+            for word in [
+                "profile.release.build.command",
+                "profile.release.build.include",
+                "profile.release.build.exclude",
+                "profile.release.build.verify",
+            ] {
+                assert!(
+                    message.contains(word) || action.contains(word),
+                    "{label}: {word}: {first}"
+                );
+            }
+            assert!(action.contains("guidance/0.9.15.md"), "{label}: {first}");
+            for (verb, diagnostic) in &seen {
+                assert_eq!(diagnostic["message"], first["message"], "{label} {verb}");
+                assert_eq!(diagnostic["action"], first["action"], "{label} {verb}");
+                assert_eq!(diagnostic["reason"], first["reason"], "{label} {verb}");
+            }
+            if !in_config {
+                rk().args(["upgrade", "--apply", "--target"])
+                    .arg(engine.dir())
+                    .assert()
+                    .success();
+                let manifest = read_manifest(engine.dir());
+                assert!(
+                    manifest["profile"]["release"]["build"]
+                        .get("command")
+                        .is_none(),
+                    "{label}: {manifest}"
+                );
+                engine.commit("ci(release): drop the old build command", &[]);
+                let report = engine.ok("request");
+                assert_eq!(report["state"], "opened", "{label}: {report}");
+            }
+        }
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// Each side reads its own declaration: a `docs:` commit on a readme the
+/// release left out opens nothing, and the commit that widens `include`
+/// to that readme opens a request, because the readme joins the `HEAD`
+/// side and differs from the tag, typed as the change to what ships that
+/// it is. A commit that narrows `include` past a readme the tag shipped
+/// opens a request on its own, with no other change, and the changelog
+/// carries it.
+#[test]
+fn a_declaration_change_counts_on_its_own_side() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        bash_layout(&engine);
+        engine.declare("include = [\"src/\", \"/README.md\"]\n");
+        engine.commit("chore: lay out the project", &[]);
+        engine.released("v0.1.0", &engine.head());
+        engine.use_real_cliff();
+        let path = engine.dir().join(".release-kit/config.toml");
+        let text = std::fs::read_to_string(&path).expect("reads");
+        std::fs::write(
+            &path,
+            text.replace(
+                "include = [\"src/\", \"/README.md\"]",
+                "include = [\"src/\"]",
+            ),
+        )
+        .expect("writes");
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(engine.dir())
+            .assert()
+            .success();
+        engine.commit("fix: drop the readme from the package", &[]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{forge} narrowed: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{forge} narrowed: {report}");
+        let changelog = engine.request_file("master", "CHANGELOG.md").to_lowercase();
+        assert!(
+            changelog.contains("drop the readme from the package"),
+            "{forge} narrowed: {changelog}"
+        );
+    }
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        bash_layout(&engine);
+        engine.declare("include = [\"src/\"]\n");
+        engine.commit("chore: lay out the project", &[]);
+        engine.released("v0.1.0", &engine.head());
+        engine.use_real_cliff();
+        engine.commit(
+            "docs: describe the tool",
+            &[("README.md", "# widget, longer\n")],
+        );
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "nothing", "{forge}: {report}");
+        assert_eq!(
+            report["reason"], "no packed file changed since v0.1.0",
+            "{forge}: {report}"
+        );
+        let path = engine.dir().join(".release-kit/config.toml");
+        let text = std::fs::read_to_string(&path).expect("reads");
+        std::fs::write(
+            &path,
+            text.replace(
+                "include = [\"src/\"]",
+                "include = [\"src/\", \"/README.md\"]",
+            ),
+        )
+        .expect("writes");
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(engine.dir())
+            .assert()
+            .success();
+        engine.commit("fix(packaging): ship the readme", &[]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{forge}: {report}");
+        let changelog = engine.request_file("master", "CHANGELOG.md").to_lowercase();
+        assert!(
+            changelog.contains("describe the tool"),
+            "{forge}: {changelog}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// The packed set counts as a set, as Cargo counts `include` and
+/// `exclude` in `Cargo.toml`: a commit that widens `include` to a file
+/// unchanged since the tag opens a request, and the changelog carries that
+/// commit. A commit that restates the declaration in another form, which
+/// packs the same set, opens nothing. After a release whose tag sits on a
+/// commit that changes `VERSION` alone, a commit that narrows `include`
+/// proposes the next patch, and its section lists that commit alone.
+#[test]
+fn the_packed_set_counts_as_a_set() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        bash_layout(&engine);
+        engine.declare("include = [\"src/\"]\n");
+        engine.commit("chore: lay out the project", &[]);
+        engine.released("v0.1.0", &engine.head());
+        engine.use_real_cliff();
+        let path = engine.dir().join(".release-kit/config.toml");
+        let text = std::fs::read_to_string(&path).expect("reads");
+        std::fs::write(
+            &path,
+            text.replace(
+                "include = [\"src/\"]",
+                "include = [\n    \"src/\",\n    \"src/lib/\",\n]",
+            ),
+        )
+        .expect("writes");
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(engine.dir())
+            .assert()
+            .success();
+        engine.commit("fix: restate the package declaration", &[]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "nothing", "{forge} restated: {report}");
+        assert_eq!(
+            report["reason"], "no packed file changed since v0.1.0",
+            "{forge} restated: {report}"
+        );
+        let text = std::fs::read_to_string(&path).expect("reads");
+        std::fs::write(
+            &path,
+            text.replace("    \"src/lib/\",\n", "    \"/README.md\",\n"),
+        )
+        .expect("writes");
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(engine.dir())
+            .assert()
+            .success();
+        engine.commit("fix: ship the readme", &[]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{forge} widened: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{forge} widened: {report}");
+        let changelog = engine.request_file("master", "CHANGELOG.md").to_lowercase();
+        assert!(
+            changelog.contains("ship the readme"),
+            "{forge} widened: {changelog}"
+        );
+        engine.commit("chore(release): v0.1.1", &[("VERSION", "0.1.1\n")]);
+        engine.released("v0.1.1", &engine.head());
+        let text = std::fs::read_to_string(&path).expect("reads");
+        std::fs::write(&path, text.replace("    \"/README.md\",\n", "")).expect("writes");
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(engine.dir())
+            .assert()
+            .success();
+        engine.commit("fix: stop shipping the readme", &[]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "refreshed", "{forge} narrowed: {report}");
+        assert_eq!(report["proposal"], "0.1.2", "{forge} narrowed: {report}");
+        let changelog = engine.request_file("master", "CHANGELOG.md").to_lowercase();
+        assert!(
+            changelog.contains("stop shipping the readme"),
+            "{forge} narrowed: {changelog}"
+        );
+        assert!(
+            !changelog.contains("ship the readme\n"),
+            "{forge} narrowed: {changelog}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// A declaration whose patterns match no tracked file yet is valid: the
+/// request opens nothing, closes the stale request, and names the key,
+/// and `rk release build` refuses the empty package by the same key.
+#[test]
+fn a_declaration_that_matches_nothing_yet_opens_no_request() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        bash_layout(&engine);
+        engine.declare("include = [\"/lib/\"]\n");
+        engine.commit("chore: lay out the project", &[]);
+        engine.released("v0.1.0", &engine.head());
+        engine.stale_request(5);
+        engine.commit(
+            "fix: mend the tool",
+            &[("src/tool.sh", "#!/bin/sh\necho two\n")],
+        );
+        let out = engine
+            .run("request")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["state"], "closed", "{forge}: {report}");
+        assert_eq!(
+            report["reason"],
+            "no packed file exists yet: profile.release.build.include matches no tracked file",
+            "{forge}: {report}"
+        );
+        assert_eq!(engine.pull(5)["state"], "closed", "{forge}");
+        let mut human = rk();
+        for var in ENGINE_CI_VARS {
+            human.env_remove(var);
+        }
+        let token = if forge == "github" {
+            "GH_TOKEN"
+        } else {
+            "GITLAB_TOKEN"
+        };
+        let shown = human
+            .env("RK_GH_BIN", engine.stubs.path().join("gh"))
+            .env("RK_GLAB_BIN", engine.stubs.path().join("glab"))
+            .env("RK_GIT_CLIFF_BIN", engine.stubs.path().join("git-cliff"))
+            .env(token, "bot-token")
+            .args(["release", "request", "--target"])
+            .arg(engine.dir())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let shown = String::from_utf8_lossy(&shown);
+        assert_eq!(
+            shown
+                .lines()
+                .filter(|line| line.contains(
+                    "no packed file exists yet: profile.release.build.include matches no tracked file"
+                ))
+                .count(),
+            1,
+            "{forge}: {shown}"
+        );
+        let release = engine.commit("chore(release): v0.1.1 (#9)", &[("VERSION", "0.1.1\n")]);
+        engine.merges(&release, 9);
+        engine.clear_log();
+        let diagnostic = engine.refused("build", 73);
+        let text = diagnostic.to_string();
+        assert!(
+            text.contains("profile.release.build.include"),
+            "{forge}: {text}"
+        );
+        assert!(
+            !engine.dir().join("dist/widget-0.1.1.tar.gz").exists(),
+            "{forge}"
+        );
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+    }
+}
+
+/// SATISFIES release-engine:the-bash-release-packs-its-declaration
+///
+/// `rk release build --list` prints the files the package holds at `HEAD`,
+/// one path per line and in the build report's schema, on each driver, and
+/// leaves the tree, `dist/`, `.rk-release/`, and the forge untouched.
+#[test]
+fn the_list_prints_the_package_and_writes_nothing() {
+    for (tech, forge) in PACKED_PAIRS {
+        let engine = if tech == "bash" {
+            let engine = Engine::new(tech, forge, &[], "0.1.0");
+            bash_layout(&engine);
+            engine.declare("exclude = [\"/Makefile\", \"docs/\", \"tests/\"]\n");
+            engine.commit("chore: lay out the project", &[]);
+            std::fs::write(engine.dir().join("notes.txt"), "untracked\n").expect("writes");
+            engine
+        } else {
+            packed_engine(tech, forge, "uv_build")
+        };
+        let expected: Vec<String> = if tech == "bash" {
+            declared_set(&engine, &["Makefile", "docs/", "tests/"])
+        } else {
+            git_out(
+                engine.dir(),
+                &["ls-files", "--", "pyproject.toml", "README.md", "src"],
+            )
+            .lines()
+            .map(str::to_owned)
+            .collect()
+        };
+        let status = git_out(engine.dir(), &["status", "--porcelain", "--ignored"]);
+        let before = tree_digests(engine.dir());
+        engine.clear_log();
+        let text = engine.list(false);
+        let printed: Vec<String> = String::from_utf8_lossy(&text.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(printed, expected, "{tech} {forge}");
+        let json: serde_json::Value =
+            serde_json::from_slice(&engine.list(true).stdout).expect("one JSON object");
+        assert_eq!(
+            json["schema"], "rk.release-build/2",
+            "{tech} {forge}: {json}"
+        );
+        assert_eq!(json["state"], "list", "{tech} {forge}: {json}");
+        assert_eq!(
+            json["files"],
+            serde_json::json!(expected),
+            "{tech} {forge}: {json}"
+        );
+        assert_eq!(
+            json["artifacts"],
+            serde_json::json!([]),
+            "{tech} {forge}: {json}"
+        );
+        assert_eq!(tree_digests(engine.dir()), before, "{tech} {forge}");
+        assert_eq!(
+            git_out(engine.dir(), &["status", "--porcelain", "--ignored"]),
+            status,
+            "{tech} {forge}"
+        );
+        for dir in ["dist", ".rk-release"] {
+            assert!(!engine.dir().join(dir).exists(), "{tech} {forge}: {dir}");
+        }
+        let log = engine.log();
+        assert!(
+            !log.lines()
+                .any(|line| line.starts_with("gh ") || line.starts_with("glab ")),
+            "{tech} {forge}: {log}"
+        );
+        assert_eq!(engine.worktrees(), 1, "{tech} {forge}");
+    }
+}
+
+/// SATISFIES release-engine:a-request-follows-the-packed-files
+///
+/// A bash request reads git trees alone, so no request job installs the
+/// build packages: on GitHub the release job installs them before the
+/// build that runs the verify command, and on GitLab the build job does,
+/// while the base every job extends installs only its own tools. Under a
+/// recorded development environment the GitLab build job installs none.
+#[test]
+fn the_bash_request_jobs_install_no_build_packages() {
+    for (label, workflow) in engine_github_workflows() {
+        let request = workflow_job(&workflow, "release-request");
+        assert!(
+            !request.contains("install the build packages"),
+            "{label}: {request}"
+        );
+        assert!(!request.contains("apt-get"), "{label}: {request}");
+        if label.starts_with("bash") {
+            let release = workflow_job(&workflow, "release");
+            let step = workflow_step(release, "install the build packages");
+            assert!(
+                step.contains("apt-get install -y --no-install-recommends make"),
+                "{label}: {release}"
+            );
+            assert!(
+                release.find("install the build packages") < release.find("- name: build\n"),
+                "{label}: {release}"
+            );
+        } else {
+            assert!(
+                request.contains("astral-sh/setup-uv@"),
+                "{label}: {request}"
+            );
+        }
+    }
+    let pipeline = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
+    let tooling = gitlab_job(&pipeline, ".tooling");
+    assert!(
+        tooling.contains(
+            "apt-get install -y --no-install-recommends ca-certificates curl git xz-utils\n"
+        ),
+        "{tooling}"
+    );
+    let request = gitlab_job(&pipeline, "release-request");
+    assert!(!request.contains("apt-get"), "{request}");
+    let build = gitlab_job(&pipeline, "build");
+    let install = build
+        .find("apt-get install -y --no-install-recommends make")
+        .unwrap_or_else(|| panic!("{build}"));
+    assert!(
+        install < build.find("rk release build").expect("the build"),
+        "{build}"
+    );
+    let recorded = bash_pipeline_with_environment("gitlab");
+    assert!(
+        !gitlab_job(&recorded, "build").contains("apt-get"),
+        "{recorded}"
     );
 }
 
@@ -54311,13 +57220,21 @@ impl Engine {
 }
 
 /// An engine pair released at `v1.4.2`, with the line `release/1.4` cut
-/// from it and `count` candidates minted through the verb, each released
-/// by its own mint push and tagged at it.
+/// from it, a fix on a packed file, and `count` candidates minted through
+/// the verb, each released by its own mint push and tagged at it.
 fn engine_line_with_candidates(tech: &str, forge: &'static str, count: u32) -> Engine {
     let engine = Engine::new(tech, forge, &[], "1.4.2");
     engine.released("v1.4.2", &engine.head());
     git_in(engine.dir(), &["push", "-q", "origin", "v1.4.2"]);
     engine.line("1.4");
+    // The candidates test a fix, which the stable request then releases.
+    let (path, text) = if tech == "bash" {
+        ("widget.sh", "echo widget, mended\n".to_owned())
+    } else {
+        let project = std::fs::read_to_string(engine.dir().join("pyproject.toml")).expect("reads");
+        ("pyproject.toml", format!("{project}description = \"w\"\n"))
+    };
+    engine.commit("fix: mend the widget", &[(path, text.as_str())]);
     for n in 1..=count {
         let tip = engine.head();
         let minted = engine.mint(&["1.4", "--expect", &tip, "--apply"]);

@@ -13,8 +13,10 @@
 pub mod adapter;
 pub mod build;
 pub mod cliff;
+pub mod eligible;
 pub mod forge;
 pub mod guard;
+pub mod packed;
 pub mod publish;
 pub mod request;
 
@@ -25,7 +27,7 @@ use crate::detect::Forge;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::landing::manifest::{self, Integration, MergeForm, Style};
-use crate::profile::{BuildAnswer, ReleaseMode};
+use crate::profile::ReleaseMode;
 use crate::release_state::{self, Registry};
 
 use self::adapter::DriverAdapter;
@@ -165,6 +167,11 @@ impl Context {
                 .expected("the checkout the release job runs in"),
             ));
         }
+        // SATISFIES project-profile:release-intent-has-three-modes
+        // The configuration loads through the path status and upgrade
+        // read, so a retired build command it still carries refuses here,
+        // before any processing, with the diagnostic every verb reports.
+        crate::config::load(target.as_std_path())?;
         let record = manifest::load(target)?.ok_or_else(|| {
             refuse(
                 format!("no landing at {target}"),
@@ -178,13 +185,28 @@ impl Context {
                 "profile.release.mode = \"automatic\"",
             ));
         }
-        let driver = release.driver.clone().unwrap_or_default();
-        let command = release
+        // A record that still carries the retired build command refuses
+        // with the same diagnostic.
+        if release
             .build
             .as_ref()
-            .and_then(|build| build.command.clone())
-            .unwrap_or_else(|| BuildAnswer::COMMAND.to_owned());
-        let adapter = adapter::for_driver(&driver, &command).ok_or_else(|| {
+            .is_some_and(|build| build.command.is_some())
+        {
+            return Err(crate::profile::retired_build_command());
+        }
+        let driver = release.driver.clone().unwrap_or_default();
+        let verify = release
+            .build
+            .as_ref()
+            .and_then(|build| build.verify.as_deref());
+        let name = record
+            .parameters
+            .repo
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let adapter = adapter::for_driver(&driver, &name, verify).ok_or_else(|| {
             refuse(
                 format!("the release driver {driver:?} does not release through the rk engine"),
                 "a bash or python release driver; a rust release runs release-plz",
@@ -502,6 +524,8 @@ mod tests {
             reason: None,
             base: Some("master".into()),
             version: Some("0.1.0".into()),
+            compared: Some("v0.1.0".into()),
+            packed: Some(12),
             proposal: Some("0.1.1".into()),
             tag: Some("v0.1.1".into()),
             request: Some(7),
@@ -510,7 +534,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&request).expect("serializes"),
-            r#"{"schema":"rk.release-request/1","state":"opened","base":"master","version":"0.1.0","proposal":"0.1.1","tag":"v0.1.1","request":7,"armed":true,"files":["VERSION","CHANGELOG.md"]}"#
+            r#"{"schema":"rk.release-request/2","state":"opened","base":"master","version":"0.1.0","compared":"v0.1.0","packed":12,"proposal":"0.1.1","tag":"v0.1.1","request":7,"armed":true,"files":["VERSION","CHANGELOG.md"]}"#
         );
         let build = BuildReport {
             schema: super::build::SCHEMA.into(),
@@ -526,10 +550,28 @@ mod tests {
             }],
             checksums: Some(".rk-release/SHA256SUMS".into()),
             notes: Some(".rk-release/notes.md".into()),
+            files: None,
         };
         assert_eq!(
             serde_json::to_string(&build).expect("serializes"),
-            r#"{"schema":"rk.release-build/1","state":"release","version":"1.4.3rc2","tag":"v1.4.3-rc.2","candidate":true,"commit":"aaa","artifacts":[{"path":"dist/acme-1.4.3rc2.tar.gz","sha256":"00"}],"checksums":".rk-release/SHA256SUMS","notes":".rk-release/notes.md"}"#
+            r#"{"schema":"rk.release-build/2","state":"release","version":"1.4.3rc2","tag":"v1.4.3-rc.2","candidate":true,"commit":"aaa","artifacts":[{"path":"dist/acme-1.4.3rc2.tar.gz","sha256":"00"}],"checksums":".rk-release/SHA256SUMS","notes":".rk-release/notes.md"}"#
+        );
+        let listed = BuildReport {
+            schema: super::build::SCHEMA.into(),
+            state: "list".into(),
+            reason: None,
+            version: "0.1.1".into(),
+            tag: "v0.1.1".into(),
+            candidate: false,
+            commit: "bbb".into(),
+            artifacts: Vec::new(),
+            checksums: None,
+            notes: None,
+            files: Some(vec!["README.md".into(), "VERSION".into()]),
+        };
+        assert_eq!(
+            serde_json::to_string(&listed).expect("serializes"),
+            r#"{"schema":"rk.release-build/2","state":"list","version":"0.1.1","tag":"v0.1.1","candidate":false,"commit":"bbb","artifacts":[],"files":["README.md","VERSION"]}"#
         );
         let publish = PublishReport {
             schema: super::publish::SCHEMA,

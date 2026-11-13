@@ -161,36 +161,51 @@ pub fn observe(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkE
 /// one `uv build` run supplies no listing contract across both outputs.
 const PYTHON_LIMITATION: &str = "sdist and wheel policy inclusion is unproved: PEP 517 leaves the file set to the build backend and the two outputs can differ; inspect both before publishing";
 
-/// What Bash's check cannot answer. Its binding builds the tarball with
-/// `git archive`, where an `export-ignore` attribute drops a tracked file.
-/// The output contract a bash release's build command owes the pipeline.
-const BUILD_CONTRACT: &str = "dist/<name>.tar.gz and dist/<name>.tar.gz.sha256";
+/// What no setup step proves about a bash release's package: `rk release
+/// build` packs it from `HEAD` at the release, and only `--list` reads it
+/// before then.
+const BASH_LIMITATION: &str = "the package is not listed here: its contents, SECURITY.md inclusion among them, are unproved; run rk release build --list before the first release, and name SECURITY.md in profile.release.build.include to ship it";
 
-/// What no setup step proves about a bash release's tarball.
-fn bash_limitation(command: &str) -> String {
-    format!(
-        "the {command} tarball is not inspected: its contents, SECURITY.md inclusion among them, are unproved; run {command} and list the tarball before the first release"
-    )
-}
-
-/// Whether a bash release's build command can run before the first
+/// Whether a bash release's verify command can run before the first
 /// release: a make command needs a makefile in the target, and a make
 /// target that resolves where make is on this host; another command needs
-/// its first word to resolve where this host can tell. The tarball itself
-/// is never inspected, so the limitation names the command every time.
+/// its first word to resolve where this host can tell. A command with
+/// shell syntax reads ok with its resolution unproved, because only a
+/// plain command passes its words to the program unchanged. With no verify
+/// command the step has nothing to resolve. The package itself is never
+/// listed here, so the limitation names `rk release build --list` every
+/// time.
 ///
 /// SATISFIES forge-setup:a-package-check-states-policy-reach
 fn bash_build_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
-    let command = ctx
+    const KEY: &str = "profile.release.build.verify";
+    let Some(command) = ctx
         .profile
         .release
         .build
         .as_ref()
-        .and_then(|build| build.command.as_deref())
-        .unwrap_or(crate::profile::BuildAnswer::COMMAND);
+        .and_then(|build| build.verify.as_deref())
+    else {
+        return Ok(StepState::ok_with_limitation(
+            format!(
+                "rk release build packs the declared tracked files of HEAD, and {KEY} names no command that proves the package builds"
+            ),
+            BASH_LIMITATION.to_owned(),
+        ));
+    };
+    let limitation = BASH_LIMITATION.to_owned();
+    // The build runs the command through sh -c. Only a command whose words
+    // the shell passes on unchanged can be judged word by word here.
+    if !plain_command(command) {
+        return Ok(StepState::ok_with_limitation(
+            format!(
+                "{command} carries shell syntax, so its resolution is not proved here. The build runs it through sh -c in the unpacked package"
+            ),
+            limitation,
+        ));
+    }
     let mut words = command.split_whitespace();
     let program = words.next().unwrap_or_default();
-    let limitation = bash_limitation(command);
     let env = ctx.child_env("package-check");
     // A file this host would run: present, and executable by someone.
     let runnable = |path: &std::path::Path| {
@@ -211,7 +226,7 @@ fn bash_build_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
             .any(|name| ctx.target.join(name).is_file());
         if !makefile {
             return Ok(StepState::not(format!(
-                "the build command is {command}, and the target holds no Makefile, GNUmakefile, or makefile; write one whose target produces {BUILD_CONTRACT}, or set profile.release.build.command to the command that does"
+                "the verify command is {command}, from {KEY}, and the target holds no Makefile, GNUmakefile, or makefile; ship one in the package, or set {KEY} to the command that proves it"
             )));
         }
         if !on_path("make") {
@@ -227,7 +242,7 @@ fn bash_build_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
         let outcome = run(&cargo_exec(ctx, "make", &args))?;
         if !outcome.success() {
             return Ok(StepState::not(format!(
-                "make -n does not resolve the build command {command}: {}; give the makefile the target that produces {BUILD_CONTRACT}, or set profile.release.build.command",
+                "make -n does not resolve the verify command {command}: {}; give the makefile that target, or correct {KEY}",
                 last_line(&outcome.stderr)
             )));
         }
@@ -241,12 +256,12 @@ fn bash_build_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     if program.contains('/') {
         if !runnable(ctx.target.join(program).as_std_path()) {
             return Ok(StepState::not(format!(
-                "the build command is {command}, and {program} is not an executable file in the target; make it one that produces {BUILD_CONTRACT}, or set profile.release.build.command"
+                "the verify command is {command}, from {KEY}, and {program} is not an executable file in the target; make it one, or correct {KEY}"
             )));
         }
         return Ok(StepState::ok_with_limitation(
             format!(
-                "{command} is the project's own build command, and {program} is executable here; it owes {BUILD_CONTRACT}"
+                "{command} is the project's own verify command, and {program} is executable here; it runs in the unpacked package"
             ),
             limitation,
         ));
@@ -255,15 +270,30 @@ fn bash_build_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     Ok(StepState::ok_with_limitation(
         if resolves {
             format!(
-                "{command} is the project's own build command, and {program} resolves here; it owes {BUILD_CONTRACT}"
+                "{command} is the project's own verify command, and {program} resolves here; it runs in the unpacked package"
             )
         } else {
             format!(
-                "{command} is the project's own build command, and {program} does not resolve on this host, where profile.release.build.packages need not be installed; it owes {BUILD_CONTRACT}"
+                "{command} is the project's own verify command, and {program} does not resolve on this host, where profile.release.build.packages need not be installed; it runs in the unpacked package"
             )
         },
         limitation,
     ))
+}
+
+/// Whether `sh -c` runs `command` as one program with its words as they
+/// stand: no quoting, escape, operator, redirection, substitution, glob,
+/// comment, or leading assignment.
+fn plain_command(command: &str) -> bool {
+    const SHELL: &[char] = &[
+        '\u{27}', '\u{22}', '\u{60}', '\\', '$', ';', '&', '|', '<', '>', '(', ')', '{', '}', '*',
+        '?', '[', ']', '~', '#', '!', '\n',
+    ];
+    !command.contains(SHELL)
+        && command
+            .split_whitespace()
+            .next()
+            .is_some_and(|program| !program.contains('='))
 }
 
 /// §0: the technology's own no-credential packaging check; the one step that

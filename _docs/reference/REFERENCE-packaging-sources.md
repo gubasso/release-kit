@@ -124,4 +124,4 @@ Bearing: `forge-setup:a-package-check-states-policy-reach` — the binding has n
 - <https://git-scm.com/docs/git-archive>
 - <https://git-scm.com/docs/gitattributes#_creating_an_archive>
 
-Bearing: `forge-setup:a-package-check-states-policy-reach` — a tracked file can be absent from the Bash binding's tarball, so the check names the tarball as uninspected instead of implying the policy travels.
+Bearing: none since release-kit 0.9.15. The Bash binding packs its archive from its own `include` and `exclude` declaration, and `export-ignore` plays no part, as `REFERENCE-release-engine-sources.md` records.

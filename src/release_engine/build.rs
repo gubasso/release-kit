@@ -19,10 +19,11 @@ use crate::release_state::Registry;
 use super::adapter::{self, Version};
 use super::forge::Client;
 use super::guard::{self, Existing, Outcome, Parent, Push};
+use super::packed;
 use super::{BUILD_REPORT, CHECKSUMS, Context, Done, NOTES, OUT_DIR, cliff};
 
 /// The report's shape version.
-pub const SCHEMA: &str = "rk.release-build/1";
+pub const SCHEMA: &str = "rk.release-build/2";
 
 /// One artifact the build produced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +40,7 @@ pub struct Artifact {
 pub struct BuildReport {
     /// The shape version of this document.
     pub schema: String,
-    /// `release`, `resume`, or `skip`.
+    /// `release`, `resume`, or `skip`, or `list` for `--list`.
     pub state: String,
     /// Why the push skips, where it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,6 +61,9 @@ pub struct BuildReport {
     /// The notes file, under a release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// The files the package holds at `HEAD`, under `list`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
 }
 
 /// Decide, build, and report.
@@ -86,6 +90,7 @@ pub fn run(target: &Utf8Path) -> Result<Done<BuildReport>, RkError> {
         artifacts: Vec::new(),
         checksums: None,
         notes: None,
+        files: None,
     };
     let outcome = decide(&context, &head, version, &tag)?;
     match outcome {
@@ -128,7 +133,15 @@ pub fn run(target: &Utf8Path) -> Result<Done<BuildReport>, RkError> {
     }
     std::fs::create_dir_all(&out).map_err(RkError::Io)?;
     let notes = Utf8PathBuf::from(format!("{OUT_DIR}/{NOTES}"));
-    cliff::notes(target, &tag, &target.join(&notes))?;
+    // SATISFIES release-engine:a-request-follows-the-packed-files
+    // The notes take the request changelog's paths: the files the release
+    // packs here or at the previous release, and the configuration where
+    // its declaration changed the packed set.
+    let paths = match packed::previous_tag(target, &tag)? {
+        Some(previous) => packed::compare(&context, &previous)?.history,
+        None => Vec::new(),
+    };
+    cliff::notes(target, &tag, &target.join(&notes), &paths)?;
     let checksums = Utf8PathBuf::from(format!("{OUT_DIR}/{CHECKSUMS}"));
     let mut sums = String::new();
     for artifact in &artifacts {
@@ -161,6 +174,46 @@ pub fn run(target: &Utf8Path) -> Result<Done<BuildReport>, RkError> {
         report,
         lines,
         next: vec!["attest the artifacts, then rk release publish".to_owned()],
+    })
+}
+
+/// List the files the package holds at `HEAD`, as `cargo package --list`
+/// does.
+///
+/// A bash release lists its declared set, and a python release the
+/// tracked members of its sdist, built into a temporary directory. It
+/// writes nothing, reads no forge, and decides no release.
+///
+/// SATISFIES release-engine:the-bash-release-packs-its-declaration
+///
+/// # Errors
+///
+/// A refusal of the record, or the listing's failure.
+pub fn list(target: &Utf8Path) -> Result<Done<BuildReport>, RkError> {
+    let context = Context::load(target)?;
+    let head = context.head()?;
+    let version = context.adapter.read_version(target)?;
+    let files: Vec<String> = context
+        .adapter
+        .packed(target, "HEAD")?
+        .into_iter()
+        .collect();
+    Ok(Done {
+        lines: files.clone(),
+        report: BuildReport {
+            schema: SCHEMA.to_owned(),
+            state: "list".to_owned(),
+            reason: None,
+            version: version.spelled(context.driver()),
+            tag: context.adapter.tag_of(version),
+            candidate: version.is_candidate(),
+            commit: head,
+            artifacts: Vec::new(),
+            checksums: None,
+            notes: None,
+            files: Some(files),
+        },
+        next: Vec::new(),
     })
 }
 

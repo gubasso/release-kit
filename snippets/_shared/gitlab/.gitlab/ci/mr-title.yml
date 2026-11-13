@@ -21,6 +21,13 @@ mr-title:
   # the release automation authors, not an operator.
   script:
     - |
+      #RK_IF_RELEASE_ A request that names a security advisory releases: its title takes
+      #RK_IF_RELEASE_ feat, fix, or perf, or marks a breaking change, and a security update
+      #RK_IF_RELEASE_ is fix(deps). The release bot's own request is exempt.
+      RK_IF_RELEASE_printf '%s\n%s\n' "$CI_MERGE_REQUEST_TITLE" "${CI_MERGE_REQUEST_DESCRIPTION:-}" | grep -Eq '(^|[^A-Za-z0-9])(RUSTSEC-[0-9]{4}-[0-9]{4}|CVE-[0-9]{4}-[0-9]{4,}|GHSA(-[0-9a-z]{4}){3})' && advisory=yes
+      RK_IF_RELEASE_printf '%s' "$CI_MERGE_REQUEST_TITLE" | grep -Eq '^((feat|fix|perf)(\([^)]*\)){0,1}!{0,1}|[a-z]+(\([^)]*\)){0,1}!): |^chore(\((release|master|main)\))?: (release|v)' && advisory=
+      RK_IF_RELEASE_printf '%s\n' "${CI_MERGE_REQUEST_DESCRIPTION:-}" | grep -Eq '^BREAKING[ -]CHANGE:' && advisory=
+      RK_IF_RELEASE_test -z "${advisory:-}" || { echo "the request names a security advisory, so its title takes a releasing type: feat, fix, or perf, or a breaking change; a security update is fix(deps)"; exit 1; }
       printf '%s' "$CI_MERGE_REQUEST_TITLE" | grep -Eq \
         '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)RK_SCOPE_OPEN\((RK_SCOPE_SHAPE)\)RK_SCOPE_CLOSE!?: .+|chore(\((release|master|main)\))?: (release|v).+)$' \
         && exit 0

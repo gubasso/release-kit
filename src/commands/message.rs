@@ -22,6 +22,13 @@
 //! record names a release, because the changelog reads the scope. Under
 //! `release.mode = "none"` a scope is preferred and not required, so a
 //! Conventional Commit header with none passes.
+//!
+//! A fifth class, also judged only where the record names a release, is
+//! a security advisory under a type that releases nothing: a message that
+//! names a `RUSTSEC-`, `GHSA-`, or `CVE-` identifier must carry a
+//! releasing type, `feat`, `fix`, or `perf`, or mark a breaking change,
+//! because a security update always releases. The classifier is
+//! [`crate::integrate::release_intent`], the one the release engine reads.
 
 use std::io::Read as _;
 use std::io::Write as _;
@@ -41,7 +48,8 @@ static GUARDS: &str = include_str!("../../blocks/message-guards");
 /// One finding.
 #[derive(Debug, Serialize)]
 pub(crate) struct Finding {
-    /// `attribution`, `internal-path`, `scope-shape`, or `scope-missing`.
+    /// `attribution`, `internal-path`, `scope-shape`, `scope-missing`, or
+    /// `advisory-type`.
     pub(crate) class: &'static str,
     /// The 1-based line the finding sits on.
     pub(crate) line: usize,
@@ -106,7 +114,7 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
     }
     let count = findings.len();
     out.emit(&Report {
-        schema: "rk.message/3",
+        schema: "rk.message/4",
         kind: args.kind.as_str(),
         exempt,
         findings,
@@ -213,6 +221,26 @@ pub(crate) fn judge(
                 "the subject names no scope after '{kind}', and this target names a release, so every subject reads <type>(<scope>): <description>"
             ),
         });
+    }
+    // SATISFIES release-engine:an-advisory-takes-a-releasing-type
+    if !exempt
+        && judgment.scope_required
+        && let Some((line, id)) = advisory(text, kind, title)
+    {
+        // A body is judged under its title, which carries its type.
+        let message = match kind {
+            MessageKind::Body => [title, text].join("\n"),
+            MessageKind::Commit | MessageKind::Title => text.to_owned(),
+        };
+        if !title.is_empty() && crate::integrate::release_intent(&message).is_none() {
+            findings.push(Finding {
+                class: "advisory-type",
+                line,
+                detail: format!(
+                    "the message names the security advisory {id}, so its type must release: feat, fix, or perf, or a breaking change; a security update is fix(deps)"
+                ),
+            });
+        }
     }
     let mut seen: std::collections::BTreeSet<(usize, String)> = std::collections::BTreeSet::new();
     match ignored_paths(target, text) {
@@ -323,6 +351,70 @@ fn unscoped_type(title: &str) -> Option<&str> {
     let (head, _) = title.split_once(':')?;
     let kind = head.strip_suffix('!').unwrap_or(head);
     (!kind.is_empty() && kind.chars().all(|c| c.is_ascii_alphabetic())).then_some(kind)
+}
+
+/// The first security advisory identifier the text names, as its 1-based
+/// line and the identifier: `RUSTSEC-<year>-<four digits>`,
+/// `CVE-<year>-<four or more digits>`, or `GHSA-` and three groups of four
+/// lowercase letters or digits, each after no ASCII letter or digit. A
+/// body's title is judged too, as line 0.
+fn advisory(text: &str, kind: MessageKind, title: &str) -> Option<(usize, String)> {
+    let titled = matches!(kind, MessageKind::Body)
+        .then(|| advisory_in(title).map(|id| (0, id)))
+        .flatten();
+    titled.or_else(|| {
+        text.lines()
+            .enumerate()
+            .find_map(|(index, line)| advisory_in(line).map(|id| (index + 1, id)))
+    })
+}
+
+/// The first advisory identifier on one line, as the title checks match
+/// it: `(^|[^A-Za-z0-9])(RUSTSEC-[0-9]{4}-[0-9]{4}|CVE-[0-9]{4}-[0-9]{4,}|GHSA(-[0-9a-z]{4}){3})`,
+/// implemented by hand.
+fn advisory_in(line: &str) -> Option<String> {
+    line.char_indices()
+        .filter(|(at, _)| {
+            !line[..*at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+        })
+        .find_map(|(at, _)| {
+            let rest = &line[at..];
+            numbered(rest, "RUSTSEC-")
+                .or_else(|| numbered(rest, "CVE-"))
+                .or_else(|| ghsa(rest))
+        })
+}
+
+/// `<prefix><four digits>-<four or more digits>` at the start of `rest`.
+fn numbered(rest: &str, prefix: &str) -> Option<String> {
+    let tail = rest.strip_prefix(prefix)?;
+    let year = tail.get(..4)?;
+    let serial: String = tail
+        .get(4..)?
+        .strip_prefix('-')?
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    (year.bytes().all(|byte| byte.is_ascii_digit()) && serial.len() >= 4)
+        .then(|| format!("{prefix}{year}-{serial}"))
+}
+
+/// `GHSA-` and three groups of four lowercase letters or digits at the
+/// start of `rest`.
+fn ghsa(rest: &str) -> Option<String> {
+    let id = rest.strip_prefix("GHSA-")?.get(..14)?;
+    let groups: Vec<&str> = id.split('-').collect();
+    (groups.len() == 3
+        && groups.iter().all(|group| {
+            group.len() == 4
+                && group
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase())
+        }))
+    .then(|| format!("GHSA-{id}"))
 }
 
 /// Every attribution match on one line, as the matched fragment.
@@ -526,14 +618,14 @@ mod tests {
         judge, path_token, unscoped_type,
     };
 
-    /// The complete `rk.message/3` shape, held by snapshot: the class
+    /// The complete `rk.message/4` shape, held by snapshot: the class
     /// vocabulary is part of the contract, so the third class moved the
     /// version rather than arriving unannounced, and the fourth,
     /// `scope-missing`, moved it again.
     #[test]
     fn the_message_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.message/3",
+            schema: "rk.message/4",
             kind: "commit",
             exempt: false,
             findings: vec![
@@ -551,7 +643,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.message/3","kind":"commit","exempt":false,"findings":[{"class":"scope-shape","line":1,"detail":"the scope 'Specs Ugly' is outside [a-z0-9._/-]+: lowercase letters, digits, and _ . / -"},{"class":"internal-path","line":3,"detail":".draft/plan.md is git-ignored in ."}]}"#
+            r#"{"schema":"rk.message/4","kind":"commit","exempt":false,"findings":[{"class":"scope-shape","line":1,"detail":"the scope 'Specs Ugly' is outside [a-z0-9._/-]+: lowercase letters, digits, and _ . / -"},{"class":"internal-path","line":3,"detail":".draft/plan.md is git-ignored in ."}]}"#
         );
     }
 

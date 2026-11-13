@@ -1622,13 +1622,15 @@ pub const DEV_ENVIRONMENT_ENGINE: &str = "blocks/dev-environment-engine.yaml.in"
 pub const DEV_ENVIRONMENT_ENGINE_CANDIDATE: &str =
     "blocks/dev-environment-engine-candidate.yaml.in";
 
-/// The six replaceable spans a recorded development environment answers.
+/// The seven replaceable spans a recorded development environment answers.
 ///
 /// Each is an ordered begin and end marker: the GitHub release half's
 /// tool steps, the GitHub request half's tool steps, the GitLab release
 /// template's image, its tool download, the GitHub release-candidate
-/// job's tool steps, and the GitLab `rk` install, which a recorded
-/// environment drops because the environment carries `rk`. The pipelines
+/// job's tool steps, the GitLab `rk` install, which a recorded
+/// environment drops because the environment carries `rk`, and the bash
+/// GitLab build job's install of the build packages, which a recorded
+/// environment drops because the environment carries the build's tools. The pipelines
 /// of the drivers the `rk` engine releases carry the same markers around
 /// their own tool steps, and [`dev_environment_replacements`] answers them
 /// by driver.
@@ -1636,7 +1638,7 @@ pub const DEV_ENVIRONMENT_ENGINE_CANDIDATE: &str =
 /// The markers are YAML comments at column zero carrying the newline in
 /// front of them, so a landing with no answer strips the pairs and leaves
 /// the authored bytes exactly.
-pub const DEV_ENVIRONMENT_SPANS: [(&[u8], &[u8]); 6] = [
+pub const DEV_ENVIRONMENT_SPANS: [(&[u8], &[u8]); 7] = [
     (
         b"\n# RK_DEV_ENV_RELEASE_BEGIN",
         b"\n# RK_DEV_ENV_RELEASE_END",
@@ -1652,6 +1654,10 @@ pub const DEV_ENVIRONMENT_SPANS: [(&[u8], &[u8]); 6] = [
         b"\n# RK_DEV_ENV_CANDIDATE_END",
     ),
     (b"\n# RK_DEV_ENV_RK_BEGIN", b"\n# RK_DEV_ENV_RK_END"),
+    (
+        b"\n# RK_DEV_ENV_PACKAGES_BEGIN",
+        b"\n# RK_DEV_ENV_PACKAGES_END",
+    ),
 ];
 
 /// One recorded action step as workflow lines, each ending in a newline,
@@ -1688,9 +1694,9 @@ fn action_step_lines(step: &crate::config::dev_environment::ActionStep) -> Strin
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
-fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6], RkError> {
+fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 7], RkError> {
     let Some(answer) = params.dev_environment() else {
-        return Ok([None, None, None, None, None, None]);
+        return Ok([None, None, None, None, None, None, None]);
     };
     let git_user = embedded_block(DEV_ENVIRONMENT_GIT_USER)?.trim_end_matches('\n');
     // Where the environment carries no `rk`, each job that runs it takes
@@ -1754,6 +1760,7 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6],
             Some(items.into_bytes()),
             Some(half(DEV_ENVIRONMENT_ENGINE_CANDIDATE, &release, true)?),
             (!installer).then(Vec::new),
+            Some(Vec::new()),
         ]);
     }
     let script = if items.is_empty() {
@@ -1774,13 +1781,15 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6],
     };
     Ok([
         Some(half(DEV_ENVIRONMENT_RELEASE, &release, false)?),
-        Some(half(DEV_ENVIRONMENT_REQUEST, &request, false)?),
+        // The request half runs `rk release eligible` before release-plz.
+        Some(half(DEV_ENVIRONMENT_REQUEST, &request, true)?),
         image,
         Some(script),
         // The candidate job publishes, so like the release half it takes
         // the setup steps and never the cache.
         Some(half(DEV_ENVIRONMENT_CANDIDATE, &release, true)?),
         Some(gitlab_rk),
+        None,
     ])
 }
 
@@ -1935,8 +1944,17 @@ pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
     // The development environment's spans resolve in the same place. A
     // block this binary cannot read leaves the authored steps standing.
     let environment = dev_environment_replacements(params).unwrap_or_default();
+    // A span may stand more than once in a file, as the rust GitLab
+    // pipeline's `rk` install does in its request and its candidate jobs,
+    // and each occurrence takes the same answer.
     for ((begin, end), value) in DEV_ENVIRONMENT_SPANS.iter().zip(environment) {
-        out = replace_span(&out, begin, end, value.as_deref());
+        loop {
+            let next = replace_span(&out, begin, end, value.as_deref());
+            if next == out {
+                break;
+            }
+            out = next;
+        }
     }
     for ((begin, end), value) in SECURITY_SPANS.iter().zip(security_replacements(params)) {
         out = replace_span(&out, begin, end, value.as_deref());

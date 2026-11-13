@@ -672,7 +672,6 @@ mod tests {
                 // GitLab refuses both answers, because it names no check.
                 required_check: (resolved.forge == "github").then_some("gate"),
                 required_workflow: (resolved.forge == "github").then_some("ci"),
-                build_command: None,
                 build_packages: None,
                 trunk: None,
                 checkout_mode: Some(checkout_mode),

@@ -63,6 +63,28 @@ pub enum ReleaseAction {
         #[arg(long, default_value = ".")]
         target: Utf8PathBuf,
 
+        /// Print the files the package holds at `HEAD`, one path per line,
+        /// as `cargo package --list` does, and write nothing: no build
+        /// output, no report, and no forge read.
+        #[arg(long)]
+        list: bool,
+
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Answer whether the change since the last release is worth a
+    /// release: a file the package ships changed, and a commit that touched
+    /// the packed files is a feat, fix, or perf commit or marks a breaking
+    /// change. Writes nothing and reads no forge; the last release is the
+    /// release tag git holds. A rust target's request job runs it before
+    /// release-plz.
+    Eligible {
+        /// The checkout to judge.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
+
         /// Emit one JSON object on stdout instead of the human report.
         #[arg(long)]
         json: bool,

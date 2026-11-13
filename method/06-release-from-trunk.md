@@ -111,6 +111,12 @@ master:  A──B──C──D──E──F──G──H──I
 
 Branch lifetime: under an hour.
 
+## What asks for a release
+
+The release request opens only where two things hold. A file the package ships changed since the last release, because a change outside the package changes nothing a user receives. And a commit that made that change is typed `feat`, `fix`, or `perf`, or marks a breaking change, because the type says whether the change is worth a release. A `build:` or `chore:` commit on a shipped file waits, and rides in the changelog of the next request that a releasing commit opens. The fix above is a `fix:` on shipped code, so it asks for one.
+
+Dependencies follow the same rule. An update that changes what ships is `fix(deps)`, and one for development only is `chore(deps-dev)` or `build(deps-dev)`. A security update always releases: it is `fix(deps)`, also where it changes only a shipped lock file, and its body names the advisory ID, `RUSTSEC-`, `GHSA-`, or `CVE-`, which the landed commit-message hook and title check hold to a releasing type.
+
 ## Release
 
 The bot has been maintaining the release request all along, and it has stood armed since it was opened: the moment the fix's merge refreshes it and its own check goes green, the forge merges it. Nobody clicks anything, and nobody waits for whoever would have. That merge is the release: automation tags the push that lands the bump and publishes.

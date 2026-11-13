@@ -657,18 +657,18 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             Some("rust") => "would run: cargo publish --dry-run --allow-dirty, then cargo metadata --no-deps --format-version 1, then cargo package --list --allow-dirty for a single default package rooted at the target, asserting it ships none of release-kit's own files; another workspace shape reports that as unproved".to_owned(),
             Some("python") if ctx.reporting_policy() => "would run: uv build, then list the sdist and the wheel in dist/; sdist and wheel SECURITY.md inclusion stays unproved".to_owned(),
             Some("python") => "would run: uv build, then list the sdist and the wheel in dist/".to_owned(),
-            Some("bash") => {
-                let command = ctx
-                    .profile
-                    .release
-                    .build
-                    .as_ref()
-                    .and_then(|build| build.command.as_deref())
-                    .unwrap_or(crate::profile::BuildAnswer::COMMAND);
-                format!(
-                    "would judge the build command {command}, from profile.release.build.command: a make command needs a makefile and runs make -n; the tarball is not inspected"
-                )
-            }
+            Some("bash") => ctx
+                .profile
+                .release
+                .build
+                .as_ref()
+                .and_then(|build| build.verify.as_deref())
+                .map_or_else(
+                    || "would judge nothing: profile.release.build.verify names no command, and the package is not listed".to_owned(),
+                    |command| format!(
+                        "would judge the verify command {command}, from profile.release.build.verify: a make command needs a makefile and runs make -n; the package is not listed"
+                    ),
+                ),
             _ => "needs: a version file naming the technology".to_owned(),
         },
         "forge-version" => {

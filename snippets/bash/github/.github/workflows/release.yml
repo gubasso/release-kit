@@ -85,6 +85,10 @@ jobs:
       - name: install git-cliff
         run: pipx install git-cliff==2.14.2
 # RK_DEV_ENV_REQUEST_END
+      # The request reads the declared files of this commit and of the last
+      # release tag from their git trees, and opens only where one changed
+      # (release-engine:a-request-follows-the-packed-files). It builds
+      # nothing, so it installs no build package.
       # The token is the release app's, never GITHUB_TOKEN: a push made with
       # the default token starts no workflow, and rk refuses it
       # (release-engine:the-request-pushes-as-the-bot).
@@ -95,8 +99,9 @@ jobs:
 
   # The release itself. rk release build decides from the commit and the
   # forge whether this push releases, and skips every push that does not.
-  # Where it releases, it builds the tarball with the project's build command
-  # and reports the artifacts. The attestation follows, and only then does rk
+  # Where it releases, it packs the declared files of the commit into the
+  # tarball, runs the project's verify command in it, and reports the
+  # artifacts. The attestation follows, and only then does rk
   # release publish create the release and its tag, so nothing publicly
   # reachable exists before its attestation does.
   release:
@@ -138,6 +143,7 @@ jobs:
       - name: install git-cliff
         run: pipx install git-cliff==2.14.2
 # RK_DEV_ENV_RELEASE_END
+      # The verify command runs with the build packages installed.
       - name: install the build packages
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends RK_BUILD_PACKAGES
       # The build writes its state, release, resume, or skip, and the

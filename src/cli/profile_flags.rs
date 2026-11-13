@@ -92,15 +92,9 @@ pub struct ProfileFlags {
     #[arg(long, value_name = "NAME")]
     pub required_workflow: Option<String>,
 
-    /// The command an automatic bash release runs to produce
-    /// `dist/*.tar.gz` and its `.sha256`. Recorded as a release parameter.
-    /// Defaults to `make dist`.
-    #[arg(long, value_name = "COMMAND")]
-    pub build_command: Option<String>,
-
-    /// The packages the release image installs before it runs the build
-    /// command, separated by spaces. Recorded as a release parameter.
-    /// Defaults to `make`.
+    /// The packages the release job of an automatic bash release installs
+    /// before it runs the verify command, separated by spaces. Recorded as
+    /// a release parameter. Defaults to `make`.
     #[arg(long, value_name = "PACKAGES")]
     pub build_packages: Option<String>,
 }
@@ -121,7 +115,6 @@ impl ProfileFlags {
             && self.merge_form.is_none()
             && self.required_check.is_none()
             && self.required_workflow.is_none()
-            && self.build_command.is_none()
             && self.build_packages.is_none()
     }
 
@@ -167,7 +160,6 @@ impl ProfileFlags {
                 .transpose()?,
             required_check: self.required_check.as_deref(),
             required_workflow: self.required_workflow.as_deref(),
-            build_command: self.build_command.as_deref(),
             build_packages: self.build_packages.as_deref(),
             ..crate::profile::Inputs::default()
         })
@@ -211,11 +203,6 @@ pub fn workflow_only(
     if let Some(driver) = inputs.release_driver {
         contradicting.push(format!(
             "--release-driver {driver} (an automatic release alone takes a driver)"
-        ));
-    }
-    if let Some(command) = inputs.build_command {
-        contradicting.push(format!(
-            "--build-command {command} (an automatic bash release alone builds)"
         ));
     }
     if let Some(packages) = inputs.build_packages {

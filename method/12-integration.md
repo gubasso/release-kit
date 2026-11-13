@@ -33,7 +33,7 @@ The form decides which messages the trunk keeps, so it decides which messages a 
 
 An implementation reaches the trunk through a short-lived branch. The branch is validated and merged in the recorded merge form, and the trunk stays releasable at every commit. The recorded integration mode chooses the authority that performs that integration. A pull request is one integration mechanism, and it is not the definition of trunk-based development. [The model](./00-model.md) carries the branch forms. [The invariants](./01-invariants.md) carries the two rules this chapter splits.
 
-The release request always integrates at the forge. Its bot branch carries the computed version and the rewritten changelog. Merging it is the only event that authorizes the tag, the registry publish, the provenance, and the artifacts. Local implementation integration removes the forge from nothing in the release path.
+The release request always integrates at the forge. Its bot branch carries the computed version and the new changelog entry. Merging it is the only event that authorizes the tag, the registry publish, the provenance, and the artifacts. Local implementation integration removes the forge from nothing in the release path.
 
 So the trunk carries ordinary commits in either mode. It carries one per implementation under `squash`, and every commit of the branch under `rebase`. A later push can carry several of them at once. The release bot reads the release intent of each one separately. It counts only a commit that [its binding](../bindings/README.md) attributes to the package. So a batch of local integrations produces the changelog that a sequence of forge merges would produce.
 

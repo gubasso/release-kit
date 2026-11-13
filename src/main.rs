@@ -202,6 +202,7 @@ const fn wants_json(command: &Commands) -> bool {
             ReleaseAction::Status { json, .. }
             | ReleaseAction::Request { json, .. }
             | ReleaseAction::Build { json, .. }
+            | ReleaseAction::Eligible { json, .. }
             | ReleaseAction::Publish { json, .. } => *json,
         },
         Commands::Integrate(args) => args.json,

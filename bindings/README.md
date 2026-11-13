@@ -2,11 +2,11 @@
 
 One document per release driver: the four [diff-surface](../method/05-diff-surface.md) answers, the concrete commands, and the registry facts the spine cannot state. A binding is the `release.automation` capability at one driver and one forge, selected where the project profile's release is automatic and that driver is among its technologies. Each binding assumes the whole [method](../method/README.md); nothing here repeats it.
 
-| Binding               | Version file     | Bot               | Registry                | Artifacts                   |
-| --------------------- | ---------------- | ----------------- | ----------------------- | --------------------------- |
-| [Rust](./rust.md)     | `Cargo.toml`     | release-plz       | crates.io over OIDC     | cargo-dist                  |
-| [Python](./python.md) | `pyproject.toml` | rk with git-cliff | PyPI over OIDC, or none | the sdist and the wheel     |
-| [Bash](./bash.md)     | `VERSION`        | rk with git-cliff | none                    | the build command's tarball |
+| Binding               | Version file     | Bot               | Registry                | Artifacts                         |
+| --------------------- | ---------------- | ----------------- | ----------------------- | --------------------------------- |
+| [Rust](./rust.md)     | `Cargo.toml`     | release-plz       | crates.io over OIDC     | cargo-dist                        |
+| [Python](./python.md) | `pyproject.toml` | rk with git-cliff | PyPI over OIDC, or none | the sdist and the wheel           |
+| [Bash](./bash.md)     | `VERSION`        | rk with git-cliff | none                    | the tarball of the declared files |
 
 Rust releases through release-plz. Python and bash release through the release engine in `rk` on both forges: `rk release request` keeps one request per base on the branch `rk-release/<base>`, and the release job runs `rk release build`, then the provenance and the registry upload that stay in CI, then `rk release publish`, which creates the release page and the tag last.
 

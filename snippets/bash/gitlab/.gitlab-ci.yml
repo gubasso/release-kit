@@ -69,10 +69,11 @@ project-jobs:
     strategy: mirror
 
 # The base of the rk jobs. The rk archive targets x86_64-unknown-linux-gnu,
-# so the image is a glibc one, pinned by digest. It installs the build
-# packages with apt, then git-cliff and glab at their pins, each download
-# checked against the SHA-256 authored beside its version, then rk at the
-# version of the release that landed this file.
+# so the image is a glibc one, pinned by digest. It installs its own tools
+# with apt, then git-cliff and glab at their pins, each download checked
+# against the SHA-256 authored beside its version, then rk at the version
+# of the release that landed this file. The build packages are the build
+# job's alone, because only its verify command needs them.
 .tooling:
   stage: release
 # RK_DEV_ENV_IMAGE_BEGIN
@@ -94,7 +95,7 @@ project-jobs:
     # no fetched binary lands in the tree rk commits from.
     - RELEASE_TOOLS="${TMPDIR:-/tmp}/rk-tools" && mkdir -p "$RELEASE_TOOLS/bin" && export PATH="$RELEASE_TOOLS/bin:$PATH"
 # RK_DEV_ENV_SCRIPT_BEGIN
-    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl git xz-utils RK_BUILD_PACKAGES
+    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl git xz-utils
     - curl -fsSL -o "$RELEASE_TOOLS/git-cliff.tar.gz" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-musl.tar.gz"
     - echo "${GIT_CLIFF_SHA256}  $RELEASE_TOOLS/git-cliff.tar.gz" | sha256sum -c -
     - tar -xzf "$RELEASE_TOOLS/git-cliff.tar.gz" --strip-components 1 -C "$RELEASE_TOOLS/bin" "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
@@ -121,7 +122,9 @@ release-request:
 
 # The release build. rk decides from the commit and the forge whether this
 # push releases, and skips every push that does not. Where it releases, it
-# builds the tarball with the project's build command and creates no tag.
+# packs the declared files of the commit into the tarball, runs the
+# project's verify command in it with the build packages installed, and
+# creates no tag.
 # RUNNER_GENERATE_ARTIFACTS_METADATA makes the runner emit its SLSA v1
 # provenance statement beside the exported artifacts, which is what the
 # provenance job signs. The build report in .rk-release/ tells the jobs after
@@ -134,6 +137,9 @@ build:
   variables:
     RUNNER_GENERATE_ARTIFACTS_METADATA: "true"
   script:
+# RK_DEV_ENV_PACKAGES_BEGIN
+    - apt-get install -y --no-install-recommends RK_BUILD_PACKAGES
+# RK_DEV_ENV_PACKAGES_END
     - RK_DEV_RUN rk release build
   artifacts:
     paths:

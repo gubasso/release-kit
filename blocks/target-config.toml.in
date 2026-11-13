@@ -20,8 +20,10 @@ line_prefix = RK_CONFIG_PROFILE_RELEASE_LINE_PREFIX # P: release-line branch pre
 registry = RK_CONFIG_PROFILE_RELEASE_REGISTRY # P: where the release publishes, crates-io or none for rust, pypi or none for python
 
 [profile.release.build]
-command = RK_CONFIG_PROFILE_RELEASE_BUILD_COMMAND # P: the command that produces dist/*.tar.gz and its .sha256; bash driver alone
-packages = RK_CONFIG_PROFILE_RELEASE_BUILD_PACKAGES # P: the apt packages the release image installs before it runs the command; bash driver alone
+packages = RK_CONFIG_PROFILE_RELEASE_BUILD_PACKAGES # P: the apt packages the release job installs before it runs the verify command; bash driver alone
+include = RK_CONFIG_PROFILE_RELEASE_BUILD_INCLUDE # P: gitignore-style patterns of the tracked files the release ships, overriding exclude, as Cargo's include; bash driver alone
+exclude = RK_CONFIG_PROFILE_RELEASE_BUILD_EXCLUDE # P: gitignore-style patterns of the tracked files the release leaves out, as Cargo's exclude; neither key ships every tracked file; bash driver alone
+verify = RK_CONFIG_PROFILE_RELEASE_BUILD_VERIFY # P: the command run in the unpacked archive before anything publishes, such as make check; bash driver alone
 
 [git]
 trunk = RK_CONFIG_GIT_TRUNK # P: the one permanent branch, rendered into every artifact naming it

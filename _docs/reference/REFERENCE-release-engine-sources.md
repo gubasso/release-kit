@@ -336,3 +336,81 @@ On Docker Hub, the tags `debian:13.7-slim`, `debian:13-slim`, and `debian:trixie
 - https://hub.docker.com/v2/namespaces/library/repositories/debian/tags?page_size=100&name=.
 
 Bearing: the GitLab rk jobs pin glab and git-cliff by version and SHA-256, and check each archive before they unpack it. They set `GITLAB_HOST` to the instance, because glab sends `GITLAB_TOKEN` to no other host, and they leave CI auto-login off, because it would sign in with the job token. They run on the Debian image pinned by digest, because the `rk` archive targets glibc. `rk versions --check` reads every page of the numbered tags and takes the greatest.
+
+## Cargo, on the include and exclude fields
+
+Verified: 2026-11-12
+
+The Cargo book's manifest reference states that `exclude` and `include` "can be used to explicitly specify which files are included when packaging a project to be published". The patterns "should be gitignore-style patterns":
+
+- `foo` matches a file or a directory of that name anywhere in the package, the same as `**/foo`, and `/foo` matches it only at the root.
+- `foo/` matches a directory, `*` and `?` match within one segment, and `[]` matches a range of characters.
+- `**/` matches in any directory, `/**` matches everything inside, and `/**/` matches zero or more directories.
+- A `!` prefix negates a pattern.
+
+"The options are mutually exclusive; setting `include` will override an `exclude`. If you need to have exclusions to a set of `include` files, use the `!` operator." With neither field, the package holds every file from its root, without the files gitignore rules ignore. `Cargo.toml` "is always included, it does not need to be listed in `include`". The reference names `cargo package --list` as the way to verify which files a package holds. Cargo builds both lists with the gitignore matcher of the `ignore` crate, `GitignoreBuilder`, in `src/sources/path.rs`, and judges each file and every directory above it.
+
+- https://doc.rust-lang.org/cargo/reference/manifest.html#the-exclude-and-include-fields
+- https://doc.rust-lang.org/cargo/commands/cargo-package.html
+- https://github.com/rust-lang/cargo/blob/master/src/sources/path.rs
+- https://docs.rs/ignore/latest/ignore/gitignore/struct.GitignoreBuilder.html
+
+Bearing: `release-engine:the-bash-release-packs-its-declaration` takes these semantics for `profile.release.build.include` and `exclude`, through the same matcher. `VERSION` stands where Cargo's `Cargo.toml` stands, and the files `rk` lands stay out unless `include` names one, which is the one addition.
+
+## release-plz, git-cliff, uv, and git archive, on the files a release packs
+
+Verified: 2026-11-12
+
+release-plz `release-plz-v0.4.3` decides per package in `crates/release_plz_core/src/command/update/updater.rs`, `get_package_diff`. It walks the commits since the release. At each one, `are_packages_equal_cached` (lines 766 to 799) compares the packaged files with the released package, and an equal snapshot ends the walk on that lineage. It counts a commit only where `are_changed_files_in_package` returns `!package_files.is_disjoint(&changed_files)` (lines 800 to 811 and 950 to 970). The comment there reads "only count commits that touch files Cargo would package for this package." The package list is `cargo package --list` (`get_cargo_package_files`, `package_compare.rs` line 147), and the comparison skips generated files and `Cargo.lock` (lines 103 to 132). The next version comes from the messages of the counted commits alone. The usage page states only that release-plz downloads the published packages and compares them with the local ones.
+
+Measured in throwaway repositories with git-cliff 2.14.2, uv 0.13.7, and the landed `cliff.toml`, one commit after `v0.1.0`:
+
+| Commit                                                               | `--bumped-version`           |
+| -------------------------------------------------------------------- | ---------------------------- |
+| `build:`, `ci:`, `docs:`, `chore(deps):`, `test:`, `style:`, `feat:` | `v0.1.1`                     |
+| `feat!:`                                                             | `v0.2.0`                     |
+| none, or `chore(release):` alone                                     | `v0.1.0`, nothing to release |
+
+- With the packed files `src/tool.sh`, `README.md`, and `VERSION` as `--include-path`, a `fix:` on `.gitlab-ci.yml`, a `docs:` on `docs/`, and a `build:` on `Makefile` give `v0.1.0`. Without the paths they give `v0.1.1`. A `fix:` on `src/tool.sh` gives `v0.1.1`.
+- `--unreleased --tag v0.1.1` with the same paths writes the packed commits alone.
+- A path filter can hide a release. After `v0.1.1` sits on a `chore(release)` commit that changes `VERSION` alone, a `fix:` on a packed file gives `v0.1.1` with the packed files as paths, and `v0.1.2` with `VERSION` added or with no path. git-cliff filters the commits by path before it matches the tags to them (`git-cliff/src/lib.rs` lines 332 to 370), so a tag on a filtered commit bounds no release. `--unreleased --context` with the same paths still names `v0.1.1` as the previous release. A range `v0.1.1..HEAD` gives `v0.1.2` too, but over a past range git-cliff took the newest tag of the repository as the base.
+- After a commit that reverts both packed commits, git-cliff still gives `v0.1.1`, while `git diff --quiet v0.1.0 HEAD -- <paths>` finds no change.
+- With no tag and a `0.0.0` baseline, git-cliff proposes the `initial_tag`, `v0.1.0`, whatever the paths.
+- With 5000 tracked files passed as 10000 `--include-path` arguments, 203893 bytes against an `ARG_MAX` of 2097152, `--bumped-version` answered `v0.1.1` in 0.36 s and the changelog wrote in 0.34 s. The same paths took `git diff --quiet` 0.17 s.
+- `uv build --list` names each packed file with its source path, but only with the `uv_build` backend. With hatchling it fails with "Can only use `--list` with a compatible uv build backend", and it writes `dist/` anyway.
+- `uv build --sdist --out-dir <dir>` works with every backend and took 0.37 s on a fresh hatchling project. Its members sit under `<name>-<version>/`, and `PKG-INFO`, and `pyproject.toml.orig` under `uv_build`, are generated.
+- The default hatchling sdist packs every tracked file, `.gitlab-ci.yml`, `.github/workflows/release.yml`, `.release-kit/config.toml`, `cliff.toml`, `uv.lock`, and `.python-version` included. The default `uv_build` sdist packs `pyproject.toml`, `README.md`, and `src/`.
+- A `git archive` tarball packs every tracked file without the `export-ignore` attribute, under one top directory.
+
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/command/update/updater.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/package_compare.rs
+- https://release-plz.dev/docs/usage/update
+- https://github.com/orhun/git-cliff/blob/v2.14.2/git-cliff/src/lib.rs
+- https://git-scm.com/docs/git-archive
+
+Bearing: the engine opens a request only where a packed file differs from the release tag, and passes the packed files to git-cliff as paths, with the version file, which every release commit changes, so the last release still bounds the history. The path filter alone misses a revert, so the equality check stands beside it. A hatchling project packs the files `rk` lands, so the engine drops them, and an operator keeps any other python file out through the backend's own exclude. A bash release no longer builds through `git archive`, so `export-ignore` plays no part in it.
+
+## release-plz, on the packages it releases, the lock check, and `release_commits`
+
+Verified: 2026-11-12
+
+Read at tag `release-plz-v0.4.3`. Paths are below `crates/`.
+
+- Configuration files. Without `--config`, release-plz reads the first of `release-plz.toml`, `.release-plz.toml`, and `.config/release-plz.toml` (`release_plz/src/args/config_path.rs` lines 14 to 18).
+- The `release` key. `Project::new` keeps a workspace member only where `get_release_metadata` answers (`release_plz_core/src/project.rs` lines 64 to 76), and that answer exists only where the package's `release` is true (`release_plz_core/src/next_ver.rs` lines 55 to 63). An unset `release` is true: `release: config.release != Some(false)` (`release_plz/src/config.rs` line 502). A `[[package]]` entry's key overrides the `[workspace]` key of the same name (`PackageConfig::merge`, lines 524 to 560).
+- Cargo's `publish` field and `git_only`. A package "can be published" where `publish` is unset and the package is not example-only, or where it names at least one registry: `publish = false` and `publish = []` read as an empty list (`next_ver.rs` lines 449 to 465). A member takes part where it can be published, or where it is `git_only` and is not an example-only package that leaves `publish` unset (`takes_part_in_release`, lines 467 to 485). `packages_to_process` filters the members by that rule (`release_plz_core/src/command/update/updater.rs` lines 376 to 382), and `git_only` is read per package (`release_plz_core/src/command/update/update_request.rs` lines 258 to 261).
+- release-plz's own `publish` key selects nothing. It only decides whether `cargo publish` runs: `config.publish.enabled && !config.git_only` (`release_plz_core/src/command/release.rs` lines 154 to 157). `git_only = true` with `publish = true` is refused as mutually exclusive (`release_plz/src/config.rs` lines 164 to 172).
+- The lock. For a package with a binary target, release-plz adds the synthetic commit `chore: update Cargo.lock dependencies` to the package's diff where the lock changed by meaning (`updater.rs` lines 864 to 876, `contains_executable` at line 1022). The meaning counts only a version change of a dependency the released lock already had (`release_plz_core/src/lock_compare.rs` lines 72 to 74 and 279 to 300). The real commit that changed `Cargo.lock` is not in the diff, because the package comparison skips the lock.
+- `release_commits`. The regex filters a package whose diff holds no matching commit message (`updater.rs` lines 120 to 127, `release_plz_core/src/diff.rs` lines 117 to 120). A lock-only change carries only the synthetic `chore:` message there.
+
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz/src/args/config_path.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/project.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/next_ver.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz/src/config.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/command/update/updater.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/command/update/update_request.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/command/release.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/lock_compare.rs
+- https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/diff.rs
+
+Bearing: `release-engine:a-rust-target-releases-one-package` selects the member release-plz releases by the same three facts, so an `xtask` helper with `publish = false` beside a registry crate is skipped and a single `git_only` crate with `publish = false` is judged. A `release_commits` regex would read only the synthetic `chore:` line for a lock-only security update and never release it, so rk reads the real commit from git and release-plz takes no such key.

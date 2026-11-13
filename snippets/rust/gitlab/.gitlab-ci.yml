@@ -116,6 +116,26 @@ release-request:
           esac
           ;;
       esac
+# RK_DEV_ENV_RK_BEGIN
+    - curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/vRK_SELF_VERSION/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL=/usr/local/bin sh
+# RK_DEV_ENV_RK_END
+    - |
+      set -eu
+      # release-plz opens a request for any change to a file the crate
+      # ships. A release also needs a releasing commit among the commits
+      # that made that change: feat, fix, or perf, or a breaking change.
+      # Where none is, release-pr is skipped and the reason logged; the
+      # request opens on the first push that carries one, and its changelog
+      # keeps every commit.
+      answer="$(RK_DEV_RUN rk release eligible)"
+      printf '%s\n' "$answer"
+      case "$answer" in
+        eligible:*) ;;
+        *)
+          echo "release-pr skipped: ${answer#not eligible: }"
+          exit 0
+          ;;
+      esac
     - RK_DEV_RUN release-plz release-pr --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
     - |
       set -eu

@@ -140,9 +140,37 @@ jobs:
               echo "held=false" >> "$GITHUB_OUTPUT"
               ;;
           esac
+      - name: install rk
+        env:
+          RK_VERSION: "RK_SELF_VERSION"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
+      # release-plz opens a request for any change to a file the crate ships.
+      # A release also needs a releasing commit among the commits that made
+      # that change: feat, fix, or perf, or a breaking change. Where none is,
+      # release-pr is skipped and the reason logged; the request opens on the
+      # first push that carries one, and its changelog keeps every commit.
+      - name: judge whether a releasing commit changed the package
+        id: eligible
+        if: steps.candidate.outputs.held != 'true'
+        run: |
+          set -eu
+          answer="$(rk release eligible)"
+          printf '%s\n' "$answer"
+          case "$answer" in
+            eligible:*)
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "release-pr skipped: ${answer#not eligible: }"
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
       - uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5
         id: release-pr
-        if: steps.candidate.outputs.held != 'true'
+        if: steps.candidate.outputs.held != 'true' && steps.eligible.outputs.eligible == 'true'
         with:
           command: release-pr
           version: "0.4.3"

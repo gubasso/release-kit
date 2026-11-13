@@ -65,12 +65,12 @@
     {
       "destination": ".github/workflows/pr-title.yml",
       "kind": "rendered",
-      "sha256": "972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c"
+      "sha256": "0ee43c01d0036757935e4398d4c793b925ce37cbdef78baee48a8d7f0bd7146e"
     },
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "dccaabe6fb27c6dcb5001cf955b85997d05cb03e28c9d300b3fd18375d5d4c52"
+      "sha256": "b120d16dbb2179c42a634c4b1501a633d0db5bb53c59c53647e2857b812fe8e5"
     },
     {
       "destination": ".github/workflows/scorecard.yml",
@@ -86,7 +86,7 @@
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "68aff6f88f758755ce2d066d6bcbdba5562589bdc7945db4e6e8cab3ef1ae5c3",
+      "sha256": "efb65372771a20c77cba5a4f6c04b89c3464df4ce4843073360eea54345b22db",
       "placement": "region"
     },
     {
