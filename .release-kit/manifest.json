@@ -1,6 +1,6 @@
 {
   "schema_version": 12,
-  "rk_version": "0.9.15",
+  "rk_version": "0.10.0",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -56,6 +56,196 @@
     }
   },
   "files": [
+    {
+      "destination": ".agents/skills/rk-release/SKILL.md",
+      "kind": "rendered",
+      "sha256": "01c18d55ae5042a2607a075fb3f837a24464e1661c182bd371fedc062dac9f25"
+    },
+    {
+      "destination": ".agents/skills/rk-release/references/lines.md",
+      "kind": "rendered",
+      "sha256": "d975645ab28f081ad2adb99343cdf97982146b37dd443d10563909b633006391"
+    },
+    {
+      "destination": ".agents/skills/rk-release/references/plan-gate.md",
+      "kind": "rendered",
+      "sha256": "2627b4271fa80a9994ab36c1c37523b039461a8f8325775dcc60efa3542040a3"
+    },
+    {
+      "destination": ".agents/skills/rk-release/references/pre-flight-gate.md",
+      "kind": "rendered",
+      "sha256": "32f251a0ac0f8d7d058ceed3623771bc081f0af5fb7912d23a154c8e09fb3715"
+    },
+    {
+      "destination": ".agents/skills/rk-release/references/recover.md",
+      "kind": "rendered",
+      "sha256": "1c43327d783410a591853282353eb24a5de9dd299e57b8f89d73cdc3635c49c8"
+    },
+    {
+      "destination": ".agents/skills/rk-release/references/release.md",
+      "kind": "rendered",
+      "sha256": "8eab5339483c5f644a0686722c066b4ce09564e38ce92f21b3a3e62ed58d43d4"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/SKILL.md",
+      "kind": "rendered",
+      "sha256": "a8826ebe3da894f34ef7073792d5e804a069ece3d28b9d42cd605d072f99c9cf"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/adopt.md",
+      "kind": "rendered",
+      "sha256": "53f1653a0d0fc7f818e08cd89ab1db58428a0e9ef8d32201f3503262a2aea5a6"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/configure.md",
+      "kind": "rendered",
+      "sha256": "39cd22542e81165cb3e4c742e652c9565cd43f33ec1a476a3f5c281a23207a95"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/forge-settings.md",
+      "kind": "rendered",
+      "sha256": "faf9476b3179f241cbd8d3b24df726be711484b6356bf63e5f1fb7c9963c8ace"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/land.md",
+      "kind": "rendered",
+      "sha256": "5016442274addceacd3f56d710cb8bf16de0efd8cae5b8e2bcf5ede34eb98f21"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/landing.md",
+      "kind": "rendered",
+      "sha256": "933c092b2754bda64053de66d7a46e16dace4931d338ffbf87282d192dc88ff4"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/migrate.md",
+      "kind": "rendered",
+      "sha256": "c424965831b11b30c479ccca125b815dda886109655c81036fe760d8edb938c3"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/plan-gate.md",
+      "kind": "rendered",
+      "sha256": "2627b4271fa80a9994ab36c1c37523b039461a8f8325775dcc60efa3542040a3"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/pre-flight-gate.md",
+      "kind": "rendered",
+      "sha256": "32f251a0ac0f8d7d058ceed3623771bc081f0af5fb7912d23a154c8e09fb3715"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/provision.md",
+      "kind": "rendered",
+      "sha256": "82367bd2bec090d4873163335122a2bb4e902df885208c430e9906b05bc29e19"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/publish.md",
+      "kind": "rendered",
+      "sha256": "020a5f6aa2a51a358954c819b2882006de2b05e14fd3cf837a06e57d6178ae7d"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/repair.md",
+      "kind": "rendered",
+      "sha256": "ff39a0248223584c0837f45fe55d090d848761dfc30c83f26cc74daa118365bd"
+    },
+    {
+      "destination": ".agents/skills/rk-setup/references/upgrade.md",
+      "kind": "rendered",
+      "sha256": "b7ce7599361dd13e8cf076f0500daf7d800692f4b02f0d044a5038360f14b69d"
+    },
+    {
+      "destination": ".claude/skills/rk-release/SKILL.md",
+      "kind": "rendered",
+      "sha256": "01c18d55ae5042a2607a075fb3f837a24464e1661c182bd371fedc062dac9f25"
+    },
+    {
+      "destination": ".claude/skills/rk-release/references/lines.md",
+      "kind": "rendered",
+      "sha256": "d975645ab28f081ad2adb99343cdf97982146b37dd443d10563909b633006391"
+    },
+    {
+      "destination": ".claude/skills/rk-release/references/plan-gate.md",
+      "kind": "rendered",
+      "sha256": "2627b4271fa80a9994ab36c1c37523b039461a8f8325775dcc60efa3542040a3"
+    },
+    {
+      "destination": ".claude/skills/rk-release/references/pre-flight-gate.md",
+      "kind": "rendered",
+      "sha256": "32f251a0ac0f8d7d058ceed3623771bc081f0af5fb7912d23a154c8e09fb3715"
+    },
+    {
+      "destination": ".claude/skills/rk-release/references/recover.md",
+      "kind": "rendered",
+      "sha256": "1c43327d783410a591853282353eb24a5de9dd299e57b8f89d73cdc3635c49c8"
+    },
+    {
+      "destination": ".claude/skills/rk-release/references/release.md",
+      "kind": "rendered",
+      "sha256": "8eab5339483c5f644a0686722c066b4ce09564e38ce92f21b3a3e62ed58d43d4"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/SKILL.md",
+      "kind": "rendered",
+      "sha256": "a8826ebe3da894f34ef7073792d5e804a069ece3d28b9d42cd605d072f99c9cf"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/adopt.md",
+      "kind": "rendered",
+      "sha256": "53f1653a0d0fc7f818e08cd89ab1db58428a0e9ef8d32201f3503262a2aea5a6"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/configure.md",
+      "kind": "rendered",
+      "sha256": "39cd22542e81165cb3e4c742e652c9565cd43f33ec1a476a3f5c281a23207a95"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/forge-settings.md",
+      "kind": "rendered",
+      "sha256": "faf9476b3179f241cbd8d3b24df726be711484b6356bf63e5f1fb7c9963c8ace"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/land.md",
+      "kind": "rendered",
+      "sha256": "5016442274addceacd3f56d710cb8bf16de0efd8cae5b8e2bcf5ede34eb98f21"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/landing.md",
+      "kind": "rendered",
+      "sha256": "933c092b2754bda64053de66d7a46e16dace4931d338ffbf87282d192dc88ff4"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/migrate.md",
+      "kind": "rendered",
+      "sha256": "c424965831b11b30c479ccca125b815dda886109655c81036fe760d8edb938c3"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/plan-gate.md",
+      "kind": "rendered",
+      "sha256": "2627b4271fa80a9994ab36c1c37523b039461a8f8325775dcc60efa3542040a3"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/pre-flight-gate.md",
+      "kind": "rendered",
+      "sha256": "32f251a0ac0f8d7d058ceed3623771bc081f0af5fb7912d23a154c8e09fb3715"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/provision.md",
+      "kind": "rendered",
+      "sha256": "82367bd2bec090d4873163335122a2bb4e902df885208c430e9906b05bc29e19"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/publish.md",
+      "kind": "rendered",
+      "sha256": "020a5f6aa2a51a358954c819b2882006de2b05e14fd3cf837a06e57d6178ae7d"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/repair.md",
+      "kind": "rendered",
+      "sha256": "ff39a0248223584c0837f45fe55d090d848761dfc30c83f26cc74daa118365bd"
+    },
+    {
+      "destination": ".claude/skills/rk-setup/references/upgrade.md",
+      "kind": "rendered",
+      "sha256": "b7ce7599361dd13e8cf076f0500daf7d800692f4b02f0d044a5038360f14b69d"
+    },
     {
       "destination": ".github/workflows/code-scanning-codeql.yml",
       "kind": "rendered",

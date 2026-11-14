@@ -37249,8 +37249,11 @@ fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
 /// architecture: every help page, `rk usage`, and every tracked or
 /// untracked-and-not-ignored text file of the repository, as `git
 /// ls-files` enumerates them. Immutable decision records and the
-/// changelog are history and are not scanned; the ledger's `historical`
-/// and `unrelated` verdicts are the allowlist above, and nothing else is.
+/// changelog are history and are not scanned. The files that sdd lands,
+/// its instance record and its skill packages, are spec-driven-docs's
+/// words, not this repository's, and are not scanned either; the ledger's
+/// `historical` and `unrelated` verdicts are the allowlist above, and
+/// nothing else is.
 #[test]
 fn no_live_surface_names_the_retired_architecture() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -37284,6 +37287,9 @@ fn no_live_surface_names_the_retired_architecture() {
         if relative.is_empty()
             || relative == "CHANGELOG.md"
             || relative.starts_with("_docs/decisions/")
+            || relative.starts_with(".spec-driven-docs/")
+            || relative.starts_with(".claude/skills/sdd-")
+            || relative.starts_with(".agents/skills/sdd-")
         {
             continue;
         }

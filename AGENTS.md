@@ -29,15 +29,13 @@ This repository is the canonical knowledge product for the release-kit workflow.
 ## Authoring
 
 - The markdown shape, the size budgets, and the guide rules are adopted specs: `_docs/specs/SPEC-docs-format.md`, `_docs/specs/SPEC-docs-foundations.md`, and `_docs/specs/SPEC-guides.md`. Read them, not a restatement here.
-- Runbooks and forge documents follow the guide rules instead of the chapter cap, and stay as lean as the procedure allows. Decision records are the only history-bearing document class.
-- Keep exploratory material in `.draft/`. Promotion is a rewrite into the owning zone.
+- Runbooks and forge documents follow the guide rules instead of the chapter cap, and stay as lean as the procedure allows. Decision records are the only history-bearing document class. Keep exploratory material in `.draft/`. Promotion is a rewrite into the owning zone.
 
 ## Text that leaves this machine
 
 - Text posted to a forge or a registry carries no operator particulars. Such text includes an issue, a pull request, a review comment, a commit message, and a release note. The particulars are a local filesystem path, a home directory, and a scratch, run, session, cache, or state directory. They also include a hostname and an account name that identifies the machine. The public guides already follow this rule, and it binds every forge-facing text the same way.
 - A local research record is not a citation. Cite the public source that a reader can open, or restate the finding in the text itself. Keep the path to the local record out of the text entirely.
-- Before posting or editing forge-facing text, scan the whole body for `/home/`, `/tmp/`, `/var/`, `.local/`, `.cache/`, and `~`. Stop on any match. The `no-personal-path` gate holds the files in this repository, and it never sees a body that goes straight to a forge. So this scan is the only check that such text gets.
-- An edit alone does not repair a leak that already posted, because the forge keeps the edit history. Report it to the operator, who decides on deleting the revision.
+- Before posting or editing forge-facing text, scan the whole body for `/home/`, `/tmp/`, `/var/`, `.local/`, `.cache/`, and `~`. Stop on any match. The `no-personal-path` gate holds the files in this repository, and it never sees a body that goes straight to a forge. So this scan is the only check that such text gets. An edit alone does not repair a leak that already posted, because the forge keeps the edit history. Report it to the operator, who decides on deleting the revision.
 
 ## Executable artifacts
 
@@ -87,6 +85,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 <!-- END release-kit -->
 
 <!-- BEGIN spec-driven-docs docs -->
+
 ## Documentation
 
 - Load the affected specs before editing governed content: `_docs/specs/SPEC-<domain>.md`. <!-- markdownlint-disable-line MD013 -->
@@ -97,4 +96,5 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - For a question about this method or about operating `sdd`, run `sdd docs` and read only the topic it names. <!-- markdownlint-disable-line MD013 -->
 - Run `sdd verify` before handoff. <!-- markdownlint-disable-line MD013 -->
 - Keep adopted specs, the tracking registry, and local integration instance-owned. <!-- markdownlint-disable-line MD013 -->
+
 <!-- END spec-driven-docs docs -->

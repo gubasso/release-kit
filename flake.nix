@@ -15,10 +15,13 @@
     # runs. A released tag carries both now, so the pin is a tag and the CI
     # step is gone. Freshness is the manager's own verb: nix flake update
     # spec-driven-docs, with the URL's tag moved to match, followed by sdd
-    # upgrade where the release moves the canon.
+    # upgrade where the release moves the canon. The pinned release carries
+    # a spec-driven-docs input of its own, its previous release; the empty
+    # string points it at this flake, so flake.lock holds one sdd node.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.17.0";
+      url = "github:gubasso/spec-driven-docs/v0.18.0";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.spec-driven-docs.follows = "";
     };
     # The store guard of the canon (exobrain): `exobrain store-guard --daily`
     # in .envrc warns about working-tree copies in the Nix store.
@@ -37,11 +40,12 @@
     # this URL is the version and flake.lock is the content pin, and
     # rk self-depend sync --apply moves the two together.
     #
-    # Once the pinned release carries a release-kit input of its own, add
-    # inputs.release-kit.follows = ""; here. Without it, each pin move nests
-    # the older release in flake.lock, one node per release.
+    # The pinned release carries a release-kit input of its own, its previous
+    # release. The empty string points it at this flake, so a pin move does
+    # not nest the older release in flake.lock, one node per release.
     release-kit = {
-      url = "github:gubasso/release-kit/v0.9.15";
+      url = "github:gubasso/release-kit/v0.10.0";
+      inputs.release-kit.follows = "";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rust-overlay.follows = "rust-overlay";
       inputs.spec-driven-docs.follows = "spec-driven-docs";

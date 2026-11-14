@@ -113,6 +113,7 @@
         "nixpkgs": [
           "nixpkgs"
         ],
+        "release-kit": [],
         "rust-overlay": [
           "rust-overlay"
         ],
@@ -121,16 +122,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1794580099,
-        "narHash": "sha256-Y+jg9f7wo3YzcIc4a5uptd4JKknzWRZsPdjy4cFWZ8I=",
+        "lastModified": 1794670359,
+        "narHash": "sha256-Vj9ZS1cI7iP2k3fJ6AOTdLISMtIIbgr42eBBEoN4ZrM=",
         "owner": "gubasso",
         "repo": "release-kit",
-        "rev": "3fd21b57a6c930ce0c41874dbb40b0b0be26ca99",
+        "rev": "b16bd64f4418cad98ccfd6cf69e345831a9e44c9",
         "type": "github"
       },
       "original": {
         "owner": "gubasso",
-        "ref": "v0.9.15",
+        "ref": "v0.10.0",
         "repo": "release-kit",
         "type": "github"
       }
@@ -148,16 +149,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1794449667,
-        "narHash": "sha256-E8XKUIpdHW7TUVN7ifVRSiwG1obc4uV9tahuQivOzAQ=",
+        "lastModified": 1794580099,
+        "narHash": "sha256-Y+jg9f7wo3YzcIc4a5uptd4JKknzWRZsPdjy4cFWZ8I=",
         "owner": "gubasso",
         "repo": "release-kit",
-        "rev": "9b8d43603d5ca79cbc306904ae329f955919d739",
+        "rev": "3fd21b57a6c930ce0c41874dbb40b0b0be26ca99",
         "type": "github"
       },
       "original": {
         "owner": "gubasso",
-        "ref": "v0.9.12",
+        "ref": "v0.9.15",
         "repo": "release-kit",
         "type": "github"
       }
@@ -307,19 +308,20 @@
           "nixpkgs"
         ],
         "release-kit": "release-kit_2",
-        "rust-overlay": "rust-overlay_6"
+        "rust-overlay": "rust-overlay_6",
+        "spec-driven-docs": []
       },
       "locked": {
-        "lastModified": 1794568820,
-        "narHash": "sha256-6AqB70o+wNLa8iWwrSK2JM0ng5Ksze2kWRIkGtOVvNU=",
+        "lastModified": 1794670398,
+        "narHash": "sha256-L4WqvxRtSvl9bUNkEHAFd8BEpqiBU/N3STedfUhXivQ=",
         "owner": "gubasso",
         "repo": "spec-driven-docs",
-        "rev": "32a91f9ca029771d7f24336024306ed3cd6c2d24",
+        "rev": "ff09685f142d0799596bf960da29a1bd3d840e70",
         "type": "github"
       },
       "original": {
         "owner": "gubasso",
-        "ref": "v0.17.0",
+        "ref": "v0.18.0",
         "repo": "spec-driven-docs",
         "type": "github"
       }

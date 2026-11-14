@@ -1,15 +1,145 @@
 {
   "schema_version": 3,
-  "canon_version": "0.17.0",
+  "canon_version": "0.18.0",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
   "installed_at": "2026-08-28T12:28:47Z",
   "managed_files": [
     {
-      "source": "_docs/.markdownlint-cli2.jsonc",
+      "source": "instance/payload/_docs/.markdownlint-cli2.jsonc",
       "destination": "_docs/.markdownlint-cli2.jsonc",
       "sha256": "d835868ad95d66620162b5b82e98ba4d64963e1f2c10a57c53c9546d306eab11"
+    },
+    {
+      "source": "skills/sdd-setup/SKILL.md",
+      "destination": ".claude/skills/sdd-setup/SKILL.md",
+      "sha256": "fcf6ea7107852c2ca292d6f79e7c00010d679f278548ddaeac3084c0083d8520"
+    },
+    {
+      "source": "skills/sdd-setup/references/land.md",
+      "destination": ".claude/skills/sdd-setup/references/land.md",
+      "sha256": "151b691d3da83165a256fe2dafbde298ba7b8a17e63044de7048e10dd7894e1a"
+    },
+    {
+      "source": "skills/sdd-setup/references/landing.md",
+      "destination": ".claude/skills/sdd-setup/references/landing.md",
+      "sha256": "a34b001fd3bda0bc342c6e5d94ec9ad4c002d7d1b83c4c9840a77339185b960a"
+    },
+    {
+      "source": "skills/sdd-setup/references/migrate.md",
+      "destination": ".claude/skills/sdd-setup/references/migrate.md",
+      "sha256": "6166775965d08bca568bb65fa8e81b90402e6598709203ea0a0053826463ef95"
+    },
+    {
+      "source": "skill-shared/plan-gate.md",
+      "destination": ".claude/skills/sdd-setup/references/plan-gate.md",
+      "sha256": "0c2c27e08b5e254e58d9a289893c53dd48d9a3c3cb29124961d71a931ee08318"
+    },
+    {
+      "source": "skill-shared/pre-flight-gate.md",
+      "destination": ".claude/skills/sdd-setup/references/pre-flight-gate.md",
+      "sha256": "5a8f69431b2b0c965a0e147ca8ea0b5b8b4abbe453d288c1e30dd9fd8193ee22"
+    },
+    {
+      "source": "skills/sdd-setup/references/provision.md",
+      "destination": ".claude/skills/sdd-setup/references/provision.md",
+      "sha256": "9d98da7e3aa96feab1b51ef91460880aedfe49f8a6ac4bfcbcd457bd4442d599"
+    },
+    {
+      "source": "skills/sdd-setup/references/repair.md",
+      "destination": ".claude/skills/sdd-setup/references/repair.md",
+      "sha256": "247c2c73b58bcfb06f630889a0086dbca65cc0c85bbc43209ea29c22257cd280"
+    },
+    {
+      "source": "skills/sdd-setup/references/tune-gates.md",
+      "destination": ".claude/skills/sdd-setup/references/tune-gates.md",
+      "sha256": "501fda9be0a0b60eb67a175342a5003d0bc717fe2f40c38fe80cfd55a0afd327"
+    },
+    {
+      "source": "skills/sdd-setup/references/upgrade.md",
+      "destination": ".claude/skills/sdd-setup/references/upgrade.md",
+      "sha256": "5791559eced75169edb78c903e4f0bef80d6ad7eb3629afda888e6dd80eb8af3"
+    },
+    {
+      "source": "skills/sdd-write-docs/SKILL.md",
+      "destination": ".claude/skills/sdd-write-docs/SKILL.md",
+      "sha256": "eb39b394dc553e3e2a74036d1e6c36a78fa8fdcfffbbea5cc96ac5e434282844"
+    },
+    {
+      "source": "skill-shared/plan-gate.md",
+      "destination": ".claude/skills/sdd-write-docs/references/plan-gate.md",
+      "sha256": "0c2c27e08b5e254e58d9a289893c53dd48d9a3c3cb29124961d71a931ee08318"
+    },
+    {
+      "source": "skill-shared/pre-flight-gate.md",
+      "destination": ".claude/skills/sdd-write-docs/references/pre-flight-gate.md",
+      "sha256": "5a8f69431b2b0c965a0e147ca8ea0b5b8b4abbe453d288c1e30dd9fd8193ee22"
+    },
+    {
+      "source": "skills/sdd-setup/SKILL.md",
+      "destination": ".agents/skills/sdd-setup/SKILL.md",
+      "sha256": "fcf6ea7107852c2ca292d6f79e7c00010d679f278548ddaeac3084c0083d8520"
+    },
+    {
+      "source": "skills/sdd-setup/references/land.md",
+      "destination": ".agents/skills/sdd-setup/references/land.md",
+      "sha256": "151b691d3da83165a256fe2dafbde298ba7b8a17e63044de7048e10dd7894e1a"
+    },
+    {
+      "source": "skills/sdd-setup/references/landing.md",
+      "destination": ".agents/skills/sdd-setup/references/landing.md",
+      "sha256": "a34b001fd3bda0bc342c6e5d94ec9ad4c002d7d1b83c4c9840a77339185b960a"
+    },
+    {
+      "source": "skills/sdd-setup/references/migrate.md",
+      "destination": ".agents/skills/sdd-setup/references/migrate.md",
+      "sha256": "6166775965d08bca568bb65fa8e81b90402e6598709203ea0a0053826463ef95"
+    },
+    {
+      "source": "skill-shared/plan-gate.md",
+      "destination": ".agents/skills/sdd-setup/references/plan-gate.md",
+      "sha256": "0c2c27e08b5e254e58d9a289893c53dd48d9a3c3cb29124961d71a931ee08318"
+    },
+    {
+      "source": "skill-shared/pre-flight-gate.md",
+      "destination": ".agents/skills/sdd-setup/references/pre-flight-gate.md",
+      "sha256": "5a8f69431b2b0c965a0e147ca8ea0b5b8b4abbe453d288c1e30dd9fd8193ee22"
+    },
+    {
+      "source": "skills/sdd-setup/references/provision.md",
+      "destination": ".agents/skills/sdd-setup/references/provision.md",
+      "sha256": "9d98da7e3aa96feab1b51ef91460880aedfe49f8a6ac4bfcbcd457bd4442d599"
+    },
+    {
+      "source": "skills/sdd-setup/references/repair.md",
+      "destination": ".agents/skills/sdd-setup/references/repair.md",
+      "sha256": "247c2c73b58bcfb06f630889a0086dbca65cc0c85bbc43209ea29c22257cd280"
+    },
+    {
+      "source": "skills/sdd-setup/references/tune-gates.md",
+      "destination": ".agents/skills/sdd-setup/references/tune-gates.md",
+      "sha256": "501fda9be0a0b60eb67a175342a5003d0bc717fe2f40c38fe80cfd55a0afd327"
+    },
+    {
+      "source": "skills/sdd-setup/references/upgrade.md",
+      "destination": ".agents/skills/sdd-setup/references/upgrade.md",
+      "sha256": "5791559eced75169edb78c903e4f0bef80d6ad7eb3629afda888e6dd80eb8af3"
+    },
+    {
+      "source": "skills/sdd-write-docs/SKILL.md",
+      "destination": ".agents/skills/sdd-write-docs/SKILL.md",
+      "sha256": "eb39b394dc553e3e2a74036d1e6c36a78fa8fdcfffbbea5cc96ac5e434282844"
+    },
+    {
+      "source": "skill-shared/plan-gate.md",
+      "destination": ".agents/skills/sdd-write-docs/references/plan-gate.md",
+      "sha256": "0c2c27e08b5e254e58d9a289893c53dd48d9a3c3cb29124961d71a931ee08318"
+    },
+    {
+      "source": "skill-shared/pre-flight-gate.md",
+      "destination": ".agents/skills/sdd-write-docs/references/pre-flight-gate.md",
+      "sha256": "5a8f69431b2b0c965a0e147ca8ea0b5b8b4abbe453d288c1e30dd9fd8193ee22"
     }
   ],
   "adopted_files": [
@@ -20,85 +150,85 @@
       "baseline_sha256": "5a597a0ea63ff26e23bf013a1e0e23e58ae1ede0b30d5e54805f23e5e1ff2680"
     },
     {
-      "source": "_docs/specs/SPEC-budget-debt.md",
+      "source": "instance/payload/_docs/specs/SPEC-budget-debt.md",
       "destination": "_docs/specs/SPEC-budget-debt.md",
       "sha256": "9457b1b3a2645b92e34549cc6a28e62c10981b12813c8d1022cc9e519a817e0a",
       "baseline_sha256": "9457b1b3a2645b92e34549cc6a28e62c10981b12813c8d1022cc9e519a817e0a"
     },
     {
-      "source": "_docs/specs/SPEC-writing-policy.md",
+      "source": "instance/payload/_docs/specs/SPEC-writing-policy.md",
       "destination": "_docs/specs/SPEC-writing-policy.md",
       "sha256": "e48af91d103a6a680191f30c6e0e43c7d3610edb4d4ba4ee6a783509670865bf",
       "baseline_sha256": "e48af91d103a6a680191f30c6e0e43c7d3610edb4d4ba4ee6a783509670865bf"
     },
     {
-      "source": "_docs/specs/SPEC-decision-records.md",
+      "source": "instance/payload/_docs/specs/SPEC-decision-records.md",
       "destination": "_docs/specs/SPEC-decision-records.md",
       "sha256": "26a701c060224fcd3d5b3ed2332973dd43b76d3b3b1c9f7741f986bec91217da",
       "baseline_sha256": "26a701c060224fcd3d5b3ed2332973dd43b76d3b3b1c9f7741f986bec91217da"
     },
     {
-      "source": "_docs/specs/SPEC-instance.md",
+      "source": "instance/payload/_docs/specs/SPEC-instance.md",
       "destination": "_docs/specs/SPEC-instance.md",
       "sha256": "0aa1f9d0757984fea229e66c24f8f498bc3cba173a278dbc191842cd39306da1",
       "baseline_sha256": "0aa1f9d0757984fea229e66c24f8f498bc3cba173a278dbc191842cd39306da1"
     },
     {
-      "source": "_docs/specs/SPEC-docs-format.md",
+      "source": "instance/payload/_docs/specs/SPEC-docs-format.md",
       "destination": "_docs/specs/SPEC-docs-format.md",
       "sha256": "79b88d85ecfaaa24b9940045113f7b7665dcfd1f5d8c0333f29f2e43fe9aee3e",
       "baseline_sha256": "79b88d85ecfaaa24b9940045113f7b7665dcfd1f5d8c0333f29f2e43fe9aee3e"
     },
     {
-      "source": "_docs/specs/SPEC-docs-foundations.md",
+      "source": "instance/payload/_docs/specs/SPEC-docs-foundations.md",
       "destination": "_docs/specs/SPEC-docs-foundations.md",
       "sha256": "a9f0d0c64c2db8075203e22ac931b4c42ace6e68c1f4381bd7acf295185aea73",
       "baseline_sha256": "a9f0d0c64c2db8075203e22ac931b4c42ace6e68c1f4381bd7acf295185aea73"
     },
     {
-      "source": "_docs/specs/SPEC-docs-specs.md",
+      "source": "instance/payload/_docs/specs/SPEC-docs-specs.md",
       "destination": "_docs/specs/SPEC-docs-specs.md",
       "sha256": "a17a834d93c7df146bea1a65746923b664deb3c36974c1e29433cbd477ddfd68",
       "baseline_sha256": "a17a834d93c7df146bea1a65746923b664deb3c36974c1e29433cbd477ddfd68"
     },
     {
-      "source": "_docs/specs/SPEC-comparison-docs.md",
+      "source": "instance/payload/_docs/specs/SPEC-comparison-docs.md",
       "destination": "_docs/specs/SPEC-comparison-docs.md",
       "sha256": "e9e3525239db5ad1408ab2b3d9b78624524b36885b7ffa478618a0b65f3de804",
       "baseline_sha256": "e9e3525239db5ad1408ab2b3d9b78624524b36885b7ffa478618a0b65f3de804"
     },
     {
-      "source": "_docs/specs/SPEC-known-issues.md",
+      "source": "instance/payload/_docs/specs/SPEC-known-issues.md",
       "destination": "_docs/specs/SPEC-known-issues.md",
       "sha256": "00f3396494b816eba4904f90567db12729e99aa8e71e21d3018f40728c07336f",
       "baseline_sha256": "00f3396494b816eba4904f90567db12729e99aa8e71e21d3018f40728c07336f"
     },
     {
-      "source": "_docs/specs/SPEC-spec-to-code.md",
+      "source": "instance/payload/_docs/specs/SPEC-spec-to-code.md",
       "destination": "_docs/specs/SPEC-spec-to-code.md",
       "sha256": "9dbc4cf57855073b75832342b85e0fd9865d14492e5af66c76b137199f795e6b",
       "baseline_sha256": "9dbc4cf57855073b75832342b85e0fd9865d14492e5af66c76b137199f795e6b"
     },
     {
-      "source": "_docs/specs/SPEC-guides.md",
+      "source": "instance/payload/_docs/specs/SPEC-guides.md",
       "destination": "_docs/specs/SPEC-guides.md",
       "sha256": "9c1b2fd00fd54d91a087cfd0db49ca6df6e563367b368afffc124deced4e3ecf",
       "baseline_sha256": "9c1b2fd00fd54d91a087cfd0db49ca6df6e563367b368afffc124deced4e3ecf"
     },
     {
-      "source": "_docs/specs/SPEC-writing-style.md",
+      "source": "instance/payload/_docs/specs/SPEC-writing-style.md",
       "destination": "_docs/specs/SPEC-writing-style.md",
       "sha256": "1d5555c5ba405294e2e7bac79f7b5796520e11a63a25ef15975abe14faa4e4a1",
       "baseline_sha256": "1d5555c5ba405294e2e7bac79f7b5796520e11a63a25ef15975abe14faa4e4a1"
     },
     {
-      "source": "_docs/specs/SPEC-tracking.md",
+      "source": "instance/payload/_docs/specs/SPEC-tracking.md",
       "destination": "_docs/specs/SPEC-tracking.md",
       "sha256": "758f350534c061fb6fb36b6385c2c25967c914bab4c169240d8370874e068d9f",
       "baseline_sha256": "758f350534c061fb6fb36b6385c2c25967c914bab4c169240d8370874e068d9f"
     },
     {
-      "source": "_docs/specs/SPEC-tracking/tracking.schema.json",
+      "source": "instance/payload/_docs/specs/SPEC-tracking/tracking.schema.json",
       "destination": "_docs/specs/SPEC-tracking/tracking.schema.json",
       "sha256": "5d07af8f6191b7039ec02d5d5ac674e2dfff0cdcce362c0ba5f81e08e9c43ded",
       "baseline_sha256": "5d07af8f6191b7039ec02d5d5ac674e2dfff0cdcce362c0ba5f81e08e9c43ded"
@@ -147,7 +277,7 @@
     },
     {
       "path": "AGENTS.md",
-      "marker_hash": "e1d883ba0c84969aaa2602f279250fbd86ad671596df0be682a0b0bac2ad6eb1"
+      "marker_hash": "ed193a9e9fe44618bedfd8e83efa29738601b8dd28e2e74846cb1d591df36dc5"
     }
   ]
 }
