@@ -18,14 +18,13 @@ Set up the release-kit convention in a project. Keep a landed project current wi
 1. Before any other action, read `references/pre-flight-gate.md` and run it whatever the request carries. No flag skips it.
 2. Stop on any row below. State the evidence and the operator's step. Write nothing. The evidence comes from `rk status --target . --json` unless the row names another source.
 
-| Stop                                     | Owner       | Evidence                      | Operator's step                  |
-| ---------------------------------------- | ----------- | ----------------------------- | -------------------------------- |
-| A failed `hard` probe                    | shared gate | `rk doctor`                   | its `next` line                  |
-| A failed `skill-gate` or `skill-sources` | shared gate | `rk doctor`                   | its `next` line                  |
-| A failed `skill-roots` probe             | shared gate | `rk doctor`                   | install on the host that owns it |
-| Not the repository the request means     | shared gate | `git remote get-url origin`   | name the repository              |
-| A diagnostic, not a report               | this skill  | the command exits on `reason` | repair the file it names         |
-| Not a non-bare Git work tree             | this skill  | `git_work_tree` is false      | make the target a Git work tree  |
+| Stop                                 | Owner       | Evidence                      | Operator's step                 |
+| ------------------------------------ | ----------- | ----------------------------- | ------------------------------- |
+| A failed `hard` probe                | shared gate | `rk doctor`                   | its `next` line                 |
+| A failed `skill-shadow` probe        | shared gate | `rk doctor`                   | its `next` line                 |
+| Not the repository the request means | shared gate | `git remote get-url origin`   | name the repository             |
+| A diagnostic, not a report           | this skill  | the command exits on `reason` | repair the file it names        |
+| Not a non-bare Git work tree         | this skill  | `git_work_tree` is false      | make the target a Git work tree |
 
 An unreadable record never counts as an absent one, so never land over it.
 
@@ -35,6 +34,7 @@ An unreadable record never counts as an absent one, so never land over it.
 | ------------------------------------------------------ | ----------------------------------------- | --------------------------------------- |
 | No `rk` on PATH                                        | `command -v rk`, by hand                  | `provision`, then this pre-flight again |
 | A record newer than the binary                         | `alignment` `target-newer`                | `provision`                             |
+| A pin behind the latest release                        | `pin.behind` in the status report         | `provision`, then `upgrade`             |
 | No pin and no host decision, at `setup` or `migration` | `rk self-depend status --target . --json` | `provision`, offered first              |
 | A pin with no check line, at `setup` or `migration`    | `wired` and `envrc_check` in that report  | `provision`, offered first              |
 | The state of the target                                | `classification`                          | the gate                                |

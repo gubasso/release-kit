@@ -38,3 +38,4 @@ Fill the pipeline:
 5. Remove each dropped file the operator chose to remove, as a gated step.
 6. Remove each inactive legacy path by its exact path, only under explicit cleanup authorization, as `rk guide landing` 5b carries it. No `rk` verb removes this state.
 7. Route each saved copy as the pipeline says.
+8. Where a formatter, a linter, or a spell checker excludes the landed skills, it excludes only the package folders `rk-setup/` and `rk-release/` under `.claude/skills/` and `.agents/skills/`. The project's own skills in those roots stay under its checks.
