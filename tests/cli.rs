@@ -1844,6 +1844,7 @@ fn doctor_reports_every_probe_and_exits_0() {
             "state-root",
             "skill-shadow",
             "git-remote",
+            "pin-freshness",
             "gh-auth",
             "glab-auth",
             "gh-version",
@@ -9773,7 +9774,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/15");
+    assert_eq!(report["schema"], "rk.status/16");
     assert_eq!(report["landed"], true);
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["profile"]["release"]["style"], "trunk");
@@ -23073,6 +23074,21 @@ impl SelfDependFixture {
     }
 
     fn rk(&self, args: &[&str]) -> Rk {
+        let mut command = self.rk_env();
+        command.args(args).arg("--target").arg(self.target());
+        command
+    }
+
+    /// A run with no `--target`, from inside the target, for a verb that
+    /// reads the working directory.
+    fn rk_inside(&self, args: &[&str]) -> Rk {
+        let mut command = self.rk_env();
+        command.args(args).current_dir(self.target());
+        command
+    }
+
+    /// The scrubbed command with this fixture's environment.
+    fn rk_env(&self) -> Rk {
         let mut command = rk_scrubbed();
         command
             .env("HOME", self.home.path())
@@ -23096,7 +23112,6 @@ impl SelfDependFixture {
         ] {
             command.env_remove(var);
         }
-        command.args(args).arg("--target").arg(self.target());
         command
     }
 
@@ -35637,7 +35652,7 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
     for expected in [
         "rk.init/11",
         "rk.assess/4",
-        "rk.status/15",
+        "rk.status/16",
         "rk.upgrade/12",
         "rk.adopt/11",
     ] {
@@ -37930,6 +37945,30 @@ fn the_gitlab_floor_is_declared_once() {
         .stdout
         .clone();
     assert!(String::from_utf8_lossy(&out).contains(&floor));
+}
+
+/// A preview from a binary newer than the record opens its next lines
+/// with the route through this binary's setup skill, because that is
+/// where a pin move lands the reader.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn an_upgrade_preview_from_a_newer_binary_opens_with_the_route() {
+    let fixture = repo_path("tests/fixtures/v0.4.0-target");
+    let scratch = committed_copy_of(&fixture);
+    let curl = OfflineCurl::new();
+    let out = curl
+        .rk()
+        .args(["upgrade", "--json", "--target"])
+        .arg(scratch.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["mode"], "preview", "{report}");
+    assert_eq!(report["next"][0], ROUTE, "{report}");
 }
 
 /// A target public v0.4.0 landed, kept whole under
@@ -51693,7 +51732,7 @@ fn status_check_reads_clean_on_accepted_drift() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/15");
+    assert_eq!(report["schema"], "rk.status/16");
     assert_eq!(report["accepted_drift"][0]["destination"], ".gitlab-ci.yml");
     assert_eq!(report["drift"]["rendered"], 0, "{report}");
 }
@@ -60549,7 +60588,7 @@ fn an_update_warns_from_the_cache() {
         assert_eq!(report["outcome"], "cached", "{report}");
         assert!(
             stderr.contains(
-                "rk 0.2.16 is out, this project pins 0.2.15. To move: rk self-depend sync --apply"
+                "rk 0.2.16 is out, this project pins 0.2.15. To move: rk self-depend sync --apply, then upgrade through the rk-setup skill of the new rk."
             ),
             "{stderr}"
         );
@@ -60791,6 +60830,113 @@ fn sync_apply_from_a_shell_moves_the_pin() {
     assert_eq!(code, Some(0), "{report}");
     assert_eq!(report["outcome"], "bumped", "{report}");
     assert!(fixture.read("flake.nix").contains("release-kit/v0.2.16"));
+}
+
+/// The route after a pin move: what the sync's preview and apply print.
+const ROUTE: &str = "After the pin move, load the devshell and run the upgrade through the rk-setup skill of the rk in that devshell, and do every migration it names. Before `rk upgrade`, read it with `rk skill show rk-setup`. After it, the project's .claude/skills/rk-setup is that skill. Never use a host copy or an older skill.";
+
+/// Where the cache holds a newer release, `rk self-depend status`,
+/// `rk status`, and `rk doctor` each say the pin is behind, from the
+/// cache alone.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn a_behind_pin_is_reported_by_status_and_doctor_from_the_cache() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(DAY, Some(DAY), Some("v0.2.16"), None);
+    let warning = "rk 0.2.16 is out, this project pins 0.2.15. To move: rk self-depend sync --apply, then upgrade through the rk-setup skill of the new rk.";
+    let (code, report) = fixture.json_with(&["self-depend", "status"], &[]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["next"][0], warning, "{report}");
+    let (code, report) = fixture.json_with(&["status"], &[]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(
+        report["pin"],
+        serde_json::json!({"version": "0.2.15", "latest": "0.2.16", "behind": true}),
+        "{report}"
+    );
+    let out = fixture
+        .rk_inside(&["doctor", "--json"])
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    let probe = report["probes"]
+        .as_array()
+        .expect("probes")
+        .iter()
+        .find(|probe| probe["id"] == "pin-freshness")
+        .expect("the probe reports")
+        .clone();
+    assert_eq!(probe["status"], "failed", "{probe}");
+    assert_eq!(probe["class"], "soft", "{probe}");
+    assert_eq!(probe["remediation"], warning, "{probe}");
+    assert_eq!(fetches(&fixture), 0, "every report reads the cache alone");
+}
+
+/// A pin at the latest known release reads as current everywhere.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn a_current_pin_is_reported_as_current() {
+    let fixture = pinned_fixture();
+    fixture.seed_cache(DAY, Some(DAY), Some("v0.2.15"), None);
+    let (_, report) = fixture.json_with(&["status"], &[]);
+    assert_eq!(report["pin"]["behind"], false, "{report}");
+    let (_, report) = fixture.json_with(&["self-depend", "status"], &[]);
+    assert!(!report["next"].to_string().contains("is out"), "{report}");
+}
+
+/// The sync's preview and its apply both route the reader through the
+/// setup skill of the rk the move brings.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn the_sync_routes_through_the_new_skill() {
+    let fixture = pinned_fixture();
+    for (args, outcome) in [
+        (&["self-depend", "sync"][..], "would-bump"),
+        (&["self-depend", "sync", "--apply"][..], "bumped"),
+    ] {
+        let (code, report) = fixture.sync_json(args);
+        assert_eq!(code, Some(0), "{report}");
+        assert_eq!(report["outcome"], outcome, "{report}");
+        assert!(
+            report["next"]
+                .as_array()
+                .expect("next")
+                .iter()
+                .any(|line| line == ROUTE),
+            "{report}"
+        );
+    }
+}
+
+/// A lock that nests rk's own development inputs is named with the exact
+/// follows lines, and nothing writes them.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[test]
+fn the_missing_follows_lines_are_named_and_never_written() {
+    let fixture = pinned_fixture();
+    std::fs::write(
+        fixture.target().join("flake.lock"),
+        r#"{"nodes":{"root":{"inputs":{"release-kit":"release-kit"}},"release-kit":{"locked":{"rev":"r","ref":"refs/tags/v0.2.15"},"inputs":{"release-kit":"release-kit_2","spec-driven-docs":"spec-driven-docs"}},"release-kit_2":{},"spec-driven-docs":{}},"root":"root","version":7}"#,
+    )
+    .expect("the lock writes");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let (code, report) = fixture.json_with(&["self-depend", "status"], &[]);
+    assert_eq!(code, Some(0), "{report}");
+    let expected = r#"the release-kit input of flake.nix lacks these lines: inputs.release-kit.follows = ""; inputs.spec-driven-docs.follows = ""; Add them beside its url, then run nix flake lock, which drops the nested nodes"#;
+    assert!(
+        report["next"]
+            .as_array()
+            .expect("next")
+            .iter()
+            .any(|line| line == expected),
+        "{report}"
+    );
+    assert_eq!(fixture.read("flake.nix"), flake);
 }
 
 /// Inside an `.envrc` evaluation the sync moves nothing, warns with the

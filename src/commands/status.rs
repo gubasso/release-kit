@@ -298,7 +298,7 @@ const LEGACY_PLANS: &str = "plans";
 const LEGACY_RELEASE_CACHE: &str = "release";
 
 /// The status report's shape version.
-const SCHEMA: &str = "rk.status/15";
+const SCHEMA: &str = "rk.status/16";
 
 /// Configuration is informational, independent of every drift comparison.
 #[derive(Debug, serde::Serialize)]
@@ -357,6 +357,10 @@ struct Report {
     binary_version: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     alignment: Option<Alignment>,
+    /// The rk version the project pins against the latest release the
+    /// check cache knows; absent where no one manager pins rk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pin: Option<PinState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     drift: Option<Drift>,
     /// Recorded destinations absent from the disk.
@@ -411,6 +415,38 @@ struct Report {
     /// The open migration, where the configuration names one.
     #[serde(skip_serializing_if = "Option::is_none")]
     migration: Option<OpenMigration>,
+}
+
+/// The project's rk pin against the latest known release.
+///
+/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+#[derive(Debug, Serialize)]
+struct PinState {
+    /// The pinned version, without a leading `v`.
+    version: String,
+    /// The latest release the check cache records, where it records one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest: Option<String>,
+    /// Whether a newer release is out.
+    behind: bool,
+}
+
+/// Read the pin and the check cache, offline, and print the warning on
+/// a pin that is behind.
+fn pin_state(out: Output, target: &camino::Utf8Path) -> Option<PinState> {
+    let version = crate::self_depend::pinned_version(target)?;
+    let key = crate::self_depend::observe(target).ok()?.key();
+    let latest = crate::self_depend::advice::cached_latest(&key)
+        .map(|latest| latest.trim_start_matches('v').to_owned());
+    let warning = crate::self_depend::advice::pending_from_cache(&key, &version);
+    if let Some(warning) = &warning {
+        out.result_line(warning.clone());
+    }
+    Some(PinState {
+        version,
+        latest,
+        behind: warning.is_some(),
+    })
 }
 
 /// An open migration, as the status reports it.
@@ -482,6 +518,7 @@ fn report_absent(
     out.result_line(format!("classification: {}", classification.as_str()));
     render_migration(out, migration.as_ref());
     render_context(out, git_work_tree, &legacy);
+    let pin = pin_state(out, &args.target);
     out.next(&[
         format!(
             "rk profile --target {} reports what a landing would select",
@@ -510,6 +547,7 @@ fn report_absent(
         rk_version: None,
         binary_version: None,
         alignment: None,
+        pin,
         drift: None,
         missing: None,
         stale_pins: None,
@@ -652,6 +690,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
     observed.setup_proof = setup_proof_of(&args.target, &manifest)?;
     let alignment = manifest::alignment(&manifest.rk_version, env!("CARGO_PKG_VERSION"));
     render_human(out, args, &manifest, alignment, &observed);
+    let pin = pin_state(out, &args.target);
 
     let violations = violations_of(&observed);
     // A record newer than this binary is no state it can judge, an open
@@ -685,6 +724,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         rk_version: Some(manifest.rk_version),
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
+        pin,
         drift: Some(Drift {
             rendered: observed.drift_rendered.len() + observed.parameter_drift.len(),
             seeded: observed.drift_seeded.len(),
@@ -1220,7 +1260,7 @@ fn render_human(
     }
     if alignment == Alignment::TargetNewer {
         out.result_line(format!(
-            "binary {} is older than this landing; install the matching rk",
+            "binary {} is older than this landing; run the rk of the project's own environment, or move its pin with rk self-depend sync --apply",
             env!("CARGO_PKG_VERSION")
         ));
     }
@@ -1415,7 +1455,7 @@ mod tests {
         );
     }
 
-    /// The complete `rk.status/15` shape, held by snapshot in both the
+    /// The complete `rk.status/16` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     #[allow(
@@ -1461,6 +1501,11 @@ mod tests {
             rk_version: Some("0.1.0".into()),
             binary_version: Some("0.2.0"),
             alignment: Some(crate::landing::manifest::Alignment::BinaryNewer),
+            pin: Some(super::PinState {
+                version: "0.1.0".to_owned(),
+                latest: Some("0.2.0".to_owned()),
+                behind: true,
+            }),
             drift: Some(Drift {
                 rendered: 0,
                 seeded: 1,
@@ -1516,7 +1561,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r##"{"schema":"rk.status/15","landed":true,"classification":"upgrade","git_work_tree":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"sentinel_locations":[{"file":"release-plz.toml","line":18,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"setup_proof":{"state":"stale","changed":["target.required_check"]},"pending":2,"accepted_drift":[{"destination":".gitlab-ci.yml","reason":"the image carries a tool"}],"stale_accepted_drift":[],"legacy_state":[{"path":"/state/release-kit/plans/0123456789abcdef","kind":"plan","active":true}],"migration":{"id":"20261009T140205Z","workspace":"/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z","unfinished":2}}"##
+            r##"{"schema":"rk.status/16","landed":true,"classification":"upgrade","git_work_tree":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","pin":{"version":"0.1.0","latest":"0.2.0","behind":true},"drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"sentinel_locations":[{"file":"release-plz.toml","line":18,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"setup_proof":{"state":"stale","changed":["target.required_check"]},"pending":2,"accepted_drift":[{"destination":".gitlab-ci.yml","reason":"the image carries a tool"}],"stale_accepted_drift":[],"legacy_state":[{"path":"/state/release-kit/plans/0123456789abcdef","kind":"plan","active":true}],"migration":{"id":"20261009T140205Z","workspace":"/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z","unfinished":2}}"##
         );
         let absent = Report {
             landed: false,
@@ -1533,6 +1578,7 @@ mod tests {
             rk_version: None,
             binary_version: None,
             alignment: None,
+            pin: None,
             drift: None,
             missing: None,
             stale_pins: None,
@@ -1552,7 +1598,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/15","landed":false,"classification":"setup","git_work_tree":false,"config":{"state":"absent","pending":[]},"legacy_state":[]}"#,
+            r#"{"schema":"rk.status/16","landed":false,"classification":"setup","git_work_tree":false,"config":{"state":"absent","pending":[]},"legacy_state":[]}"#,
             "an absent landing reports the fields a caller can branch on"
         );
         let newer = Report {

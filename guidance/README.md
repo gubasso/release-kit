@@ -10,6 +10,7 @@ One file per release that needs an operator step or an explanation a target must
 - Follow the heading with a list of exactly two fields, in this order, each on one line. `destinations` names every landed path the step concerns, comma separated. `action` is `operator-step` for a step the operator takes or `landing-write` for a change the landing writes on its own.
 - Write the body under two headings, `## What changed` and `## What to do`. State the step as a command or an edit the reader can take.
 - Name every destination the step concerns. A file that names no destination cannot be filtered against a target and is refused by test.
+- A step list that a pin move starts opens with the route of the shared wording, word for word: "After the pin move, load the devshell and run the upgrade through the rk-setup skill of the rk in that devshell, and do every migration it names. Before `rk upgrade`, read it with `rk skill show rk-setup`. After it, the project's .claude/skills/rk-setup is that skill. Never use a host copy or an older skill." `src/self_depend/advice.rs` owns the text.
 - A release that changes a landed destination and needs no step is recorded in `index.toml` under `no_steps`, so the silence is deliberate. `index.toml` also carries `since`, the release above which every release either ships a file here or is recorded there; an agent reading a target recorded below it treats the guidance as partial and investigates the gap itself.
 
 ## Example

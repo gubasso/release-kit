@@ -253,11 +253,7 @@ pub fn warnings(
     if let (Some(pin), Some(latest)) = (pin, cache.latest.as_deref())
         && discover::version_order(latest, pin).is_gt()
     {
-        lines.push(format!(
-            "rk {} is out, this project pins {}. To move: rk self-depend sync --apply",
-            latest.trim_start_matches('v'),
-            pin.trim_start_matches('v')
-        ));
+        lines.push(super::advice::pending(latest, pin));
     }
     if let Some(error) = &cache.error {
         lines.push(format!(

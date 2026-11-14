@@ -1107,10 +1107,14 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         "bumped" => vec![
             format!("git -C {target} diff -- {files} shows the change to review and commit"),
             "the next shell reload takes the new rk; nothing here commits".to_owned(),
+            self_depend::advice::after_move(),
         ],
-        "would-bump" => vec![format!(
-            "rk self-depend sync --apply --target {target} moves the pin, locks it, and proves the build"
-        )],
+        "would-bump" => vec![
+            format!(
+                "rk self-depend sync --apply --target {target} moves the pin, locks it, and proves the build"
+            ),
+            self_depend::advice::after_move(),
+        ],
         "current" => vec![format!(
             "rk self-depend status --target {target} reports the wiring"
         )],
@@ -1154,6 +1158,12 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         ],
         _ => Vec::new(),
     };
+    if matches!(run.outcome, "bumped" | "current")
+        && run.manager == Some(Manager::Flake)
+        && let Some(line) = self_depend::advice::follows_next(&self_depend::missing_follows(target))
+    {
+        next.push(line);
+    }
     if !observed.leftovers.is_empty() {
         next.push(format!(
             "rk self-depend clean --target {target}: the target still carries a predecessor bump mechanism"
@@ -1628,7 +1638,18 @@ const fn probe_word(probe: &probes::ProbeResult) -> &'static str {
 /// What plausibly follows a status.
 fn status_next(observed: &Observed) -> Vec<String> {
     let target = &observed.target;
-    let mut next = status_next_by_state(observed);
+    let mut next = Vec::new();
+    if let Some(warning) = checked_pin(observed)
+        .and_then(|pin| self_depend::advice::pending_from_cache(&observed.key(), &pin))
+    {
+        next.push(warning);
+    }
+    next.extend(status_next_by_state(observed));
+    if observed.wired == Some(Manager::Flake)
+        && let Some(line) = self_depend::advice::follows_next(&self_depend::missing_follows(target))
+    {
+        next.push(line);
+    }
     if observed.envrc_old_sync {
         next.push(format!(
             "the .envrc still runs the retired sync line: rk self-depend clean --target {target} --apply swaps it for the check line, after the pin moves, as guidance/0.9.15.md step 36 states"
@@ -1734,7 +1755,7 @@ mod tests {
     #[test]
     fn the_self_depend_check_schema_snapshot_holds() {
         let warnings = vec![
-            "rk 0.10.0 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"
+            "rk 0.10.0 is out, this project pins 0.9.15. To move: rk self-depend sync --apply, then upgrade through the rk-setup skill of the new rk."
                 .to_owned(),
         ];
         let report = CheckReport {
@@ -1751,7 +1772,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-check/1","target":"/srv/widget","outcome":"cached","pin":"v0.9.15","latest":"v0.10.0","cache":"/srv/cache/release-kit/self-depend/widget-0123456789abcdef.json","fetched":false,"warnings":["rk 0.10.0 is out, this project pins 0.9.15. To move: rk self-depend sync --apply"]}"#
+            r#"{"schema":"rk.self-depend-check/1","target":"/srv/widget","outcome":"cached","pin":"v0.9.15","latest":"v0.10.0","cache":"/srv/cache/release-kit/self-depend/widget-0123456789abcdef.json","fetched":false,"warnings":["rk 0.10.0 is out, this project pins 0.9.15. To move: rk self-depend sync --apply, then upgrade through the rk-setup skill of the new rk."]}"#
         );
         let bare = CheckReport {
             schema: "rk.self-depend-check/1",

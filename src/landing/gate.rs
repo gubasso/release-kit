@@ -322,7 +322,8 @@ fn binary_newer(target: &Utf8Path, recorded: &str, outside: bool) -> RkError {
         )
     } else {
         format!(
-            "run `rk upgrade --target {target} --apply` to move the landing, then run this command again. Where the project pins rk {recorded}, {OWN_RK}"
+            "run `rk upgrade --target {target} --apply` to move the landing, then run this command again. Where the project pins rk {recorded}, {OWN_RK}. {}",
+            crate::self_depend::advice::after_move()
         )
     };
     RkError::refusal(
@@ -353,7 +354,9 @@ fn record_newer(target: &Utf8Path, recorded: &str, pin: Option<&str>) -> RkError
     let binary = env!("CARGO_PKG_VERSION");
     let mut action = OWN_RK.to_owned();
     if let Some(pin) = pin {
-        action = format!("{action}. The pin of {target} names {pin}. Move it to {recorded}");
+        action = format!(
+            "{action}. The pin of {target} names {pin}. Move it to {recorded} with `rk self-depend sync --apply --tag v{recorded}`"
+        );
     }
     RkError::refusal(
         Diagnostic::new(

@@ -13,6 +13,7 @@
 //! gates around it, `venue` where a release is published, and `matrix`
 //! which manager and venue pairs render.
 
+pub mod advice;
 pub mod check;
 pub mod discover;
 pub mod fragments;
@@ -262,6 +263,16 @@ pub fn pinned_version(target: &Utf8Path) -> Option<String> {
         .read
         .version()
         .map(|version| version.trim_start_matches('v').to_owned())
+}
+
+/// The follows lines that the release-kit input of a target's flake
+/// lacks, read from its `flake.lock` as it stands now. A target with no
+/// readable lock lacks none.
+#[must_use]
+pub fn missing_follows(target: &Utf8Path) -> Vec<String> {
+    std::fs::read(target.join("flake.lock"))
+        .map(|bytes| advice::follows_lines(&bytes))
+        .unwrap_or_default()
 }
 
 /// Whether an `.envrc` text carries the retired sync line: a line whose

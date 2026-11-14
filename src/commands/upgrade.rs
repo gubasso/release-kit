@@ -241,7 +241,17 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         }
     }
 
-    let next = next_lines(args, &params, prepared.collisions.is_empty());
+    let mut next = next_lines(args, &params, prepared.collisions.is_empty());
+    // A preview from a newer binary is where a pin move lands the reader,
+    // so it opens with the route through that binary's setup skill.
+    //
+    // SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+    if !args.apply
+        && manifest::alignment(&recorded.rk_version, env!("CARGO_PKG_VERSION"))
+            == manifest::Alignment::BinaryNewer
+    {
+        next.insert(0, crate::self_depend::advice::after_move());
+    }
     out.next(&next);
     out.emit(&Report {
         schema: SCHEMA,

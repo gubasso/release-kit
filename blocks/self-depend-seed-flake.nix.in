@@ -12,6 +12,11 @@
     release-kit = {
       url = "RK_DEVSHELL_PIN";
       inputs.nixpkgs.follows = "nixpkgs";
+      # rk's own flake pins an earlier rk for its development. The empty
+      # string points it at this flake, so flake.lock holds no node for
+      # it. rk self-depend status names any other follows line the lock
+      # needs.
+      inputs.release-kit.follows = "";
     };
   };
 

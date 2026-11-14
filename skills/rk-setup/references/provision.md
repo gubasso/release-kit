@@ -28,7 +28,8 @@ Where `wired` names a manager or `state` reads `host`, and the request does not 
 3. Where `wired` names a manager and `envrc_check` is false, ask with `AskUserQuestion` whether the project lands the freshness line. State what it does: on directory entry it checks at most once a week for a newer release and warns, it writes nothing but its cache, and it never moves the pin; moving it stays a gated step the operator approves. Where `envrc_old_sync` is true, the line is the retired sync line: run `rk self-depend clean --target . --apply`, which swaps it for the check line.
 4. On yes, run `rk self-depend add --manager <wired> --target . --json`. It writes only a file the target lacks, so an existing `.envrc` takes the served line as a gated edit you make. The flake pair's apply seeds an `.envrc` carrying the line where the target has none, so ask this question before that apply rather than after it.
 5. On no, record the answer in the report, so the question reads as asked and answered.
-6. Moving the pin later is `rk self-depend sync --apply`, the one step that reaches the network, run only as a gated step the operator approves.
+6. Moving the pin later is `rk self-depend sync --apply`, the one step that reaches the network, run only as a gated step the operator approves. After the pin move, load the devshell and run the upgrade through the rk-setup skill of the rk in that devshell, and do every migration it names. Before `rk upgrade`, read it with `rk skill show rk-setup`. After it, the project's .claude/skills/rk-setup is that skill. Never use a host copy or an older skill. Then route to the `upgrade` task.
+7. Where `next` of `rk self-depend status --target . --json` names follows lines that the `release-kit` input lacks, add each beside its `url` as a gated edit, then run `nix flake lock`. Each line points a development input of rk at this flake or at the flake's own input of that name, so the lock holds no nested copy.
 
 ## Post-flight
 
