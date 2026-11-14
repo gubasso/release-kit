@@ -6,6 +6,7 @@
 - [Requirements](#requirements)
   - [`version-gate:every-command-has-a-gate-class` — Every command has a gate class](#version-gateevery-command-has-a-gate-class--every-command-has-a-gate-class)
   - [`version-gate:a-gated-command-names-its-fix` — A gated command names its fix](#version-gatea-gated-command-names-its-fix--a-gated-command-names-its-fix)
+  - [`version-gate:integrate-judges-the-branch-record` — Integrate judges the branch record](#version-gateintegrate-judges-the-branch-record--integrate-judges-the-branch-record)
 
 <!--TOC-->
 
@@ -55,3 +56,15 @@ A refusal carries the reason `StateDrift` and exits 73, and under `--json` it re
 - THEN the hook warns once and passes, and `rk integrate` exits 73 naming `rk upgrade` with the target unchanged
 
 Verify: `cargo nextest run -E 'test(a_writing_action_refuses_a_target_with_no_record) or test(an_upgrade_repairs_an_older_landing) or test(a_writing_action_refuses_when_the_binary_is_newer) or test(a_read_only_action_warns_when_the_binary_is_newer) or test(a_record_newer_than_the_binary_names_the_environment) or test(the_warning_never_enters_the_json_body)'`
+
+### `version-gate:integrate-judges-the-branch-record` — Integrate judges the branch record
+
+`rk integrate` MUST judge the `rk_version` of the record at the tip of its branch by the rows above, in place of the record in the target's working tree, because the integration makes the branch record the trunk's. It MUST read that field alone, so a record at a newer schema still names its release, and a branch with no record at its tip MUST fall back to the target's record. A refusal MUST name the branch and the worktree that has it checked out. Where the branch record is newer than the binary, the refusal MUST also name the route from inside the worktree with `--target .`, because a release before this rule judges the trunk record and that route works on every release.
+
+#### Scenario: A pin-move branch integrates from the main checkout
+
+- GIVEN a branch whose pin move and upgrade record a newer rk than the trunk
+- WHEN the rk of the branch runs `rk integrate <branch>` against the main checkout, and then an older rk does
+- THEN the first passes the gate, and the second exits 73 naming the branch, its worktree, and the route from inside it, with the target unchanged
+
+Verify: `cargo nextest run -E 'test(integrate_judges_the_record_of_its_branch) or test(integrate_falls_back_to_the_target_record_without_a_branch_record)'`

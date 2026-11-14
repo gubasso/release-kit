@@ -17399,6 +17399,98 @@ fn a_record_newer_than_the_binary_names_the_environment() {
         .stderr(predicate::str::contains("names 0.1.0. Move it to 999.0.0"));
 }
 
+/// A branch `fix/x` off the trunk whose record names `version`, with the
+/// trunk checked out again.
+fn branch_with_record(repo: &Path, version: Option<&str>) {
+    git_in(repo, &["switch", "-q", "-c", "fix/x"]);
+    if let Some(version) = version {
+        rewrite_gate_record(repo, |record| {
+            record["rk_version"] = serde_json::json!(version);
+        });
+        git_in(repo, &["add", "-A"]);
+        git_in(repo, &["commit", "-qm", "fix(x): move the record"]);
+    } else {
+        forget_gate_record(repo);
+    }
+    git_in(repo, &["switch", "-q", "master"]);
+}
+
+/// VERIFIES version-gate:integrate-judges-the-branch-record
+///
+/// An integration agrees with the record at the tip of its branch: a
+/// binary at that record passes the gate over an older trunk record, and
+/// an older binary refuses naming the branch and the route from inside
+/// its worktree.
+#[test]
+fn integrate_judges_the_record_of_its_branch() {
+    let (_parent, repo) = gated_fixture("0.1.0");
+    branch_with_record(&repo, Some(env!("CARGO_PKG_VERSION")));
+    let out = rk()
+        .args([
+            "integrate",
+            "fix/x",
+            "-m",
+            "fix(x): move the record",
+            "--apply",
+            "--target",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("rk runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("the landing is at rk") && !stderr.contains("records rk"),
+        "the gate judged the trunk record: {stderr}"
+    );
+
+    let (_parent, repo) = worktree_fixture();
+    branch_with_record(&repo, Some("999.0.0"));
+    let before = tree_bytes(&repo);
+    let out = rk()
+        .args([
+            "integrate",
+            "fix/x",
+            "-m",
+            "fix(x): move the record",
+            "--apply",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("branch fix/x records rk 999.0.0") && stderr.contains("which is older"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rk integrate fix/x --target ."), "{stderr}");
+    assert_eq!(tree_bytes(&repo), before, "the target is unchanged");
+}
+
+/// VERIFIES version-gate:integrate-judges-the-branch-record
+///
+/// A branch with no record at its tip leaves the gate on the target's
+/// record.
+#[test]
+fn integrate_falls_back_to_the_target_record_without_a_branch_record() {
+    let (_parent, repo) = gated_fixture("0.1.0");
+    branch_with_record(&repo, None);
+    rk().args([
+        "integrate",
+        "fix/x",
+        "-m",
+        "fix(x): move the record",
+        "--apply",
+        "--target",
+    ])
+    .arg(&repo)
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("the landing is at rk 0.1.0"));
+}
+
 /// VERIFIES version-gate:every-command-has-a-gate-class
 ///
 /// An exempt action runs in a folder with no record and in one whose

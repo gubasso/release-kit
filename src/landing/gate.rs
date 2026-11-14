@@ -262,6 +262,14 @@ pub fn require_aligned(command: &Commands) -> Result<(), RkError> {
     if !gated.target.is_dir() {
         return Ok(());
     }
+    // An integration makes the branch record the trunk's, so it agrees
+    // with the record at the tip of the branch. A branch with no record
+    // there falls through to the target's.
+    if let Commands::Integrate(args) = command
+        && let Some(recorded) = branch_record_version(&gated.target, &args.branch)
+    {
+        return judge_branch(&gated, &args.branch, &recorded);
+    }
     // A record that does not load is the handler's to report, under the
     // record's own taxonomy and after any lock the handler takes first.
     let Ok(loaded) = manifest::load(&gated.target) else {
@@ -293,6 +301,85 @@ pub fn require_aligned(command: &Commands) -> Result<(), RkError> {
                 .filter(|pin| manifest::alignment(recorded, pin) == Alignment::TargetNewer);
             Err(record_newer(&gated.target, recorded, pin.as_deref()))
         }
+    }
+}
+
+/// The `rk_version` of the record at the tip of `branch` in `target`,
+/// where the branch resolves and carries a record. It reads that one
+/// field, so a record at a newer schema still names its release.
+///
+/// SATISFIES version-gate:integrate-judges-the-branch-record
+fn branch_record_version(target: &Utf8Path, branch: &str) -> Option<String> {
+    let out = std::process::Command::new(crate::probes::git_bin())
+        .arg("-C")
+        .arg(target)
+        .args([
+            "show",
+            &format!("refs/heads/{branch}:{}", manifest::MANIFEST_PATH),
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    value["rk_version"].as_str().map(str::to_owned)
+}
+
+/// The worktree that has `branch` checked out, where one does.
+fn seat_of(target: &Utf8Path, branch: &str) -> Option<Utf8PathBuf> {
+    let out = std::process::Command::new(crate::probes::git_bin())
+        .arg("-C")
+        .arg(target)
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .output()
+        .ok()?;
+    crate::worktree::parse_worktrees(&out.stdout)
+        .ok()?
+        .into_iter()
+        .find(|seat| seat.branch.as_deref() == Some(branch))
+        .map(|seat| seat.path)
+}
+
+/// Judge an integration against the record of its branch, by the rows of
+/// `version-gate:a-gated-command-names-its-fix`.
+fn judge_branch(gated: &Gated, branch: &str, recorded: &str) -> Result<(), RkError> {
+    let binary = env!("CARGO_PKG_VERSION");
+    let seat = seat_of(&gated.target, branch)
+        .map_or_else(|| "<worktree>".to_owned(), |seat| seat.to_string());
+    let target = &gated.target;
+    match manifest::alignment(recorded, binary) {
+        Alignment::Aligned => Ok(()),
+        Alignment::BinaryNewer => {
+            let warning = format!(
+                "branch {branch} records rk {recorded} and this rk is {binary}; run `rk upgrade --target {seat} --apply` on the branch and commit it"
+            );
+            if gated.effect == Effect::ReadOnly {
+                crate::output::Output::human().warn(warning);
+                return Ok(());
+            }
+            Err(RkError::refusal(
+                Diagnostic::new(Reason::StateDrift, warning)
+                    .expected("a binary at the rk_version of the branch's record")
+                    .action(format!(
+                        "run `rk upgrade --target {seat} --apply` in the branch's worktree, commit the landing, then run this command again. Where the branch pins rk {recorded}, {OWN_RK}"
+                    ))
+                    .target_state("unchanged"),
+            ))
+        }
+        Alignment::TargetNewer => Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::StateDrift,
+                format!(
+                    "branch {branch} records rk {recorded} and this rk is {binary}, which is older"
+                ),
+            )
+            .expected("a binary at the rk_version of the branch's record")
+            .action(format!(
+                "run the rk of the branch's environment: `direnv exec {seat} rk integrate {branch} --target {target}`. From inside the worktree, `rk integrate {branch} --target .` works on every release, including one before 0.10.1, which judges the trunk record"
+            ))
+            .target_state("unchanged"),
+        )),
     }
 }
 
