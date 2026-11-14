@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/gubasso/release-kit/compare/v0.9.15...v0.10.0) - 2026-11-14
+
+### Added
+
+- *(landing)* [**breaking**] land the agent skills at each project's pin and gate every command
+
+### Fixed
+
+- *(assess)* detect semantic-release's TypeScript configuration files
+- *(self-depend)* read the locked rk through the root input of flake.lock
+
+### Other
+
+- *(assess)* read the GoReleaser configuration names from the migration inventory
+- *(setup)* state that a GITHUB_TOKEN pull request waits for approval
+- *(method)* write the hook and integration pages in the adopted style
+
 ## [0.9.15](https://github.com/gubasso/release-kit/compare/v0.9.14...v0.9.15) - 2026-11-13
 
 ### Added
