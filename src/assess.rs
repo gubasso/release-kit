@@ -25,24 +25,18 @@ use crate::landing::{self, manifest};
 // compiled defaults in `crate::config`.
 
 /// Files that mark a release mechanism, whichever tool owns it, beside
-/// semantic-release's configuration names.
+/// the configuration names of semantic-release and `GoReleaser`.
 ///
 /// release-kit's own destinations are judged separately, as collisions;
-/// this list is what other tools leave behind: every configuration name
-/// `GoReleaser` documents, release-plz's dotted form, the workflow names a
-/// hand-rolled publish commonly takes, and a changelog. semantic-release's
-/// configuration names come from the migration inventory, which owns them,
+/// this list is what other tools leave behind: release-plz's dotted form,
+/// the workflow names a hand-rolled publish commonly takes, and a
+/// changelog. The configuration names of semantic-release and
+/// `GoReleaser` come from the migration inventory, which owns them,
 /// through [`marker_names`]. `package.json` joins the list only when it
 /// carries the top-level `release` key semantic-release reads, judged in
 /// [`gather`].
-pub const RELEASE_MARKERS: [&str; 13] = [
+pub const RELEASE_MARKERS: [&str; 7] = [
     ".release-plz.toml",
-    ".config/goreleaser.yaml",
-    ".config/goreleaser.yml",
-    ".goreleaser.yaml",
-    ".goreleaser.yml",
-    "goreleaser.yaml",
-    "goreleaser.yml",
     ".github/workflows/publish.yml",
     ".github/workflows/publish.yaml",
     ".github/workflows/release.yaml",
@@ -52,12 +46,14 @@ pub const RELEASE_MARKERS: [&str; 13] = [
 ];
 
 /// Every file name that marks a release mechanism: [`RELEASE_MARKERS`]
-/// and the configuration names of semantic-release that the migration
-/// inventory owns.
+/// and the configuration names of semantic-release and `GoReleaser` that
+/// the migration inventory owns.
 pub fn marker_names() -> impl Iterator<Item = &'static str> {
+    use crate::migrate::inventory::{GORELEASER, SEMANTIC_RELEASE, release_configs};
     RELEASE_MARKERS
         .into_iter()
-        .chain(crate::migrate::inventory::semantic_release_configs())
+        .chain(release_configs(SEMANTIC_RELEASE))
+        .chain(release_configs(GORELEASER))
 }
 
 /// Branch names that conventionally outlive a topic.
@@ -589,7 +585,7 @@ mod tests {
         Classification, Evidence, Landing, RELEASE_MARKERS, classify, long_lived_among,
         marker_names,
     };
-    use crate::migrate::inventory::{Kind, PREDECESSORS, SEMANTIC_RELEASE};
+    use crate::migrate::inventory::{GORELEASER, Kind, PREDECESSORS, SEMANTIC_RELEASE};
 
     /// Whether a name has the shape of a semantic-release configuration
     /// file, `.releaserc` with or without an extension, or
@@ -626,6 +622,30 @@ mod tests {
         for name in [".releaserc.ts", "release.config.ts"] {
             assert!(assess.contains(name), "{name}");
         }
+    }
+
+    /// `rk assess` and `rk migrate` name the same `GoReleaser`
+    /// configuration files: the inventory owns them, and the assess list
+    /// holds no second copy.
+    #[test]
+    fn assess_and_the_inventory_name_the_same_goreleaser_files() {
+        let shaped = |name: &str| name.contains("goreleaser.y");
+        let inventory: std::collections::BTreeSet<&str> = PREDECESSORS
+            .iter()
+            .filter(|(path, tool, kind)| {
+                (*tool == GORELEASER && *kind == Kind::ReleaseConfig) || shaped(path)
+            })
+            .filter(|(path, _, _)| !path.starts_with(".github/"))
+            .map(|(path, _, _)| *path)
+            .collect();
+        let assess: std::collections::BTreeSet<&str> =
+            marker_names().filter(|name| shaped(name)).collect();
+        assert_eq!(assess, inventory);
+        assert_eq!(assess.len(), 6, "{assess:?}");
+        assert!(
+            !RELEASE_MARKERS.iter().any(|name| shaped(name)),
+            "the assess list holds a second copy of a GoReleaser name"
+        );
     }
 
     /// The trunk is never evidence against itself; only the remote

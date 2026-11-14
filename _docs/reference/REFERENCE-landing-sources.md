@@ -337,7 +337,7 @@ GoReleaser looks for these files, in this order:
 - <https://semantic-release.org/usage/configuration/#configuration-file>
 - <https://goreleaser.com/customization/>
 
-Bearing: `landing:a-landing-classifies-its-target-first`. The marker catalog that `rk assess` reads carries every documented name. `PREDECESSORS` in `src/migrate/inventory.rs` owns the semantic-release names, and `marker_names` in `src/assess.rs` reads them beside `RELEASE_MARKERS`. So `rk assess` and `rk migrate` name the same files. `package.json` counts only with the `release` key, because an ordinary Node manifest is not a release mechanism.
+Bearing: `landing:a-landing-classifies-its-target-first`. The marker catalog that `rk assess` reads carries every documented name. `PREDECESSORS` in `src/migrate/inventory.rs` owns the names of semantic-release and GoReleaser, and `marker_names` in `src/assess.rs` reads them beside `RELEASE_MARKERS`. So `rk assess` and `rk migrate` name the same files. `package.json` counts only with the `release` key, because an ordinary Node manifest is not a release mechanism.
 
 ## SPDX, on the licence expression the code scanning condition reads
 

@@ -197,14 +197,18 @@ pub const PREDECESSORS: [(&str, &str, Kind); 54] = [
 /// The tool name that semantic-release's rows carry.
 pub const SEMANTIC_RELEASE: &str = "semantic-release";
 
-/// Every configuration file name of semantic-release, in table order.
+/// The tool name that `GoReleaser`'s rows carry.
+pub const GORELEASER: &str = "goreleaser";
+
+/// Every configuration file name of `tool`, in table order.
 ///
 /// [`PREDECESSORS`] owns the names, and `rk assess` reads its markers for
-/// that tool from here, so the two verbs cannot name different files.
-pub fn semantic_release_configs() -> impl Iterator<Item = &'static str> {
+/// semantic-release and `GoReleaser` from here, so the two verbs cannot
+/// name different files.
+pub fn release_configs(tool: &'static str) -> impl Iterator<Item = &'static str> {
     PREDECESSORS
         .iter()
-        .filter(|(_, tool, kind)| *tool == SEMANTIC_RELEASE && *kind == Kind::ReleaseConfig)
+        .filter(move |(_, owner, kind)| *owner == tool && *kind == Kind::ReleaseConfig)
         .map(|(path, _, _)| *path)
 }
 
