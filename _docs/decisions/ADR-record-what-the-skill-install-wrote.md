@@ -32,4 +32,4 @@ Enforced by `distribution:a-stale-skill-is-not-a-conflict`, `distribution:an-ins
 
 ## Status
 
-Superseded by [ADR-land-the-skills-into-each-project-at-its-pin](./ADR-land-the-skills-into-each-project-at-its-pin.md), in part: the install. `rk skill uninstall` still reads the record.
+Superseded by [ADR-land-the-skills-into-each-project-at-its-pin](./ADR-land-the-skills-into-each-project-at-its-pin.md) for the install, and by [ADR-keep-the-skill-install-record-for-the-uninstall](./ADR-keep-the-skill-install-record-for-the-uninstall.md) for the uninstall.

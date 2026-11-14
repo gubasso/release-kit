@@ -37061,11 +37061,6 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
         "a rule id an immutable record cites",
     ),
     (
-        "_docs/reference/REFERENCE-landing-sources.md",
-        "an-install-sweeps-what-the-payload-dropped",
-        "a rule id an immutable record cites",
-    ),
-    (
         "src/setup/branch_reminder.rs",
         "ADR-author-every-host-written-text-as-payload",
         "the immutable record's file name",

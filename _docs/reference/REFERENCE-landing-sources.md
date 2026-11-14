@@ -40,7 +40,7 @@ Generated files carry a magic marker, and projen cleans up any file that carries
 - <https://github.com/projen/projen>
 - <https://projen.io/docs/introduction/the-projen-workflow/>
 
-Bearing: the sweep-on-drop behavior that release-kit already implements for skills as `distribution:an-install-sweeps-what-the-payload-dropped`, which release-kit arrived at independently. It also bears on the argument that a landing record is what makes the same sweep possible for landed files.
+Bearing: the sweep-on-drop behavior, which release-kit arrived at independently. `rk skill uninstall` removes the home copies of earlier releases only where the install record vouches for their bytes, under `distribution:skill-uninstall-removes-only-what-it-wrote`. It also bears on the argument that a landing record is what makes the same sweep possible for landed files.
 
 release-kit does not copy the read-only-file approach. Landed files carry sentinels that the operator must fill, so they are explicitly not read-only. That is also why `landing:a-dropped-file-stays` makes the opposite choice from projen's, on purpose.
 
