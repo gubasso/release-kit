@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/gubasso/release-kit/compare/v0.10.0...v0.10.1) - 2026-11-15
+
+### Added
+
+- *(self-depend)* warn when the rk pin is behind and route a pin move through the new rk-setup skill
+
+### Fixed
+
+- *(integrate)* judge the version gate against the record of the branch
+- *(skills/rk-setup)* name the doctor probes that exist and exclude only the landed skill folders
+
+### Other
+
+- *(guidance)* tell adopters of 0.10.1 that rk integrate judges the record of the branch
+
 ## [0.10.0](https://github.com/gubasso/release-kit/compare/v0.9.15...v0.10.0) - 2026-11-14
 
 ### Added
