@@ -1,6 +1,6 @@
 {
   "schema_version": 12,
-  "rk_version": "0.10.0",
+  "rk_version": "0.10.1",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -89,7 +89,7 @@
     {
       "destination": ".agents/skills/rk-setup/SKILL.md",
       "kind": "rendered",
-      "sha256": "a8826ebe3da894f34ef7073792d5e804a069ece3d28b9d42cd605d072f99c9cf"
+      "sha256": "c3a16b3da71c6ffce5c08f197f7d1d9d9371e7b9883926f8f9d0005d7194fbfb"
     },
     {
       "destination": ".agents/skills/rk-setup/references/adopt.md",
@@ -134,7 +134,7 @@
     {
       "destination": ".agents/skills/rk-setup/references/provision.md",
       "kind": "rendered",
-      "sha256": "82367bd2bec090d4873163335122a2bb4e902df885208c430e9906b05bc29e19"
+      "sha256": "41faf09fdcca97020e533443bd46938fd9b7ddcb1d47fa6783fb5caefa8e9b1d"
     },
     {
       "destination": ".agents/skills/rk-setup/references/publish.md",
@@ -149,7 +149,7 @@
     {
       "destination": ".agents/skills/rk-setup/references/upgrade.md",
       "kind": "rendered",
-      "sha256": "b7ce7599361dd13e8cf076f0500daf7d800692f4b02f0d044a5038360f14b69d"
+      "sha256": "55e57e32dd581cfb0b3f13aab4976e9cd4eb329e5ca673fe6675602ee220afbe"
     },
     {
       "destination": ".claude/skills/rk-release/SKILL.md",
@@ -184,7 +184,7 @@
     {
       "destination": ".claude/skills/rk-setup/SKILL.md",
       "kind": "rendered",
-      "sha256": "a8826ebe3da894f34ef7073792d5e804a069ece3d28b9d42cd605d072f99c9cf"
+      "sha256": "c3a16b3da71c6ffce5c08f197f7d1d9d9371e7b9883926f8f9d0005d7194fbfb"
     },
     {
       "destination": ".claude/skills/rk-setup/references/adopt.md",
@@ -229,7 +229,7 @@
     {
       "destination": ".claude/skills/rk-setup/references/provision.md",
       "kind": "rendered",
-      "sha256": "82367bd2bec090d4873163335122a2bb4e902df885208c430e9906b05bc29e19"
+      "sha256": "41faf09fdcca97020e533443bd46938fd9b7ddcb1d47fa6783fb5caefa8e9b1d"
     },
     {
       "destination": ".claude/skills/rk-setup/references/publish.md",
@@ -244,7 +244,7 @@
     {
       "destination": ".claude/skills/rk-setup/references/upgrade.md",
       "kind": "rendered",
-      "sha256": "b7ce7599361dd13e8cf076f0500daf7d800692f4b02f0d044a5038360f14b69d"
+      "sha256": "55e57e32dd581cfb0b3f13aab4976e9cd4eb329e5ca673fe6675602ee220afbe"
     },
     {
       "destination": ".github/workflows/code-scanning-codeql.yml",
@@ -275,7 +275,7 @@
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "efb65372771a20c77cba5a4f6c04b89c3464df4ce4843073360eea54345b22db",
+      "sha256": "a5967096e747a53372626abd40fcd3371b40b5c2a438ebf69d89b025c5cbae18",
       "placement": "region"
     },
     {

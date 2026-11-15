@@ -85,8 +85,14 @@
     // skill packages whole.
     "CHANGELOG.md",
     "SECURITY.md",
-    ".claude/skills/",
-    ".agents/skills/",
+    ".claude/skills/rk-setup/",
+    ".claude/skills/rk-release/",
+    ".claude/skills/sdd-setup/",
+    ".claude/skills/sdd-write-docs/",
+    ".agents/skills/rk-setup/",
+    ".agents/skills/rk-release/",
+    ".agents/skills/sdd-setup/",
+    ".agents/skills/sdd-write-docs/",
     ".obsidian/",
     ".trash/",
     "draft*"

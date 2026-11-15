@@ -45,7 +45,7 @@ An unreadable record never counts as an absent one, so never land seeds over it.
 5. Keep one instance at the repository root. The instance carries the skills: `sdd init` and `sdd upgrade` land them into its skill roots at the version the project pins, and the project commits them. Never install a skill under the home.
 6. Let the repository record how it obtains `sdd`. The `provision` task proposes the method, the operator picks it, and every install is a gated step. What lands is the `sdd` the recorded method provides.
 7. Keep no state of your own. The target repository, the stage receipt, and Git are the records, and a later run reads the state from `sdd status --target . --json`. The one exception is a migration, which spans many runs: its workspace keeps the archived sources and the registry, and `sdd migrate status` reads them.
-8. Follow the fix a version refusal names. Every command that reads or writes an instance compares the record with the binary first, and names `sdd init`, `sdd upgrade`, or the `sdd` of the project's own environment. Run that command, and never work around the refusal.
+8. Follow the fix a version refusal names. Every command that reads or writes an instance compares the record with the binary first, and names `sdd init`, the upgrade through this skill of the `sdd` in the devshell, or the `sdd` of the project's own environment. Run that fix, and never work around the refusal.
 
 ## Gate
 
@@ -81,7 +81,7 @@ After the gate picks a task, read its file into this context. A task file holds 
 - If the run includes `provision`, read `references/provision.md`.
 - If the run includes `land`, read `references/land.md`.
 - If the run includes `migrate`, read `references/migrate.md`.
-- If the run includes `upgrade`, read `references/upgrade.md`.
+- If the run includes `upgrade`, read `references/upgrade.md` with `sdd skill show sdd-setup --file references/upgrade.md`.
 - If the run includes `repair`, read `references/repair.md`.
 - If the run includes `tune-gates`, `land`, or `migrate`, read `references/tune-gates.md`.
 - If the run includes `land`, `migrate`, `upgrade`, or `repair`, read `references/landing.md`, the pipeline those four share.

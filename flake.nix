@@ -19,9 +19,14 @@
     # a spec-driven-docs input of its own, its previous release; the empty
     # string points it at this flake, so flake.lock holds one sdd node.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.18.0";
+      url = "github:gubasso/spec-driven-docs/v0.18.1";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.spec-driven-docs.follows = "";
+      # Its rk and the store guard serve only its own devShell, so they
+      # follow this flake's inputs, and flake.lock nests neither.
+      inputs.release-kit.follows = "release-kit";
+      inputs.exobrain-tech.follows = "exobrain-tech";
+      inputs.rust-overlay.follows = "rust-overlay";
     };
     # The store guard of the canon (exobrain): `exobrain store-guard --daily`
     # in .envrc warns about working-tree copies in the Nix store.
@@ -44,7 +49,7 @@
     # release. The empty string points it at this flake, so a pin move does
     # not nest the older release in flake.lock, one node per release.
     release-kit = {
-      url = "github:gubasso/release-kit/v0.10.0";
+      url = "github:gubasso/release-kit/v0.10.1";
       inputs.release-kit.follows = "";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rust-overlay.follows = "rust-overlay";

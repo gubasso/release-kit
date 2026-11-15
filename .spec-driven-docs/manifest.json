@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.18.0",
+  "canon_version": "0.18.1",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -14,7 +14,7 @@
     {
       "source": "skills/sdd-setup/SKILL.md",
       "destination": ".claude/skills/sdd-setup/SKILL.md",
-      "sha256": "fcf6ea7107852c2ca292d6f79e7c00010d679f278548ddaeac3084c0083d8520"
+      "sha256": "0f15d01ac8b814e2c79656ed609a9c4bc66313e81fae910265f080e38a9591b8"
     },
     {
       "source": "skills/sdd-setup/references/land.md",
@@ -59,7 +59,7 @@
     {
       "source": "skills/sdd-setup/references/upgrade.md",
       "destination": ".claude/skills/sdd-setup/references/upgrade.md",
-      "sha256": "5791559eced75169edb78c903e4f0bef80d6ad7eb3629afda888e6dd80eb8af3"
+      "sha256": "699e65432da54b91bfae7f386fac27c1296c86c56c2ae71524e2dd400f149aec"
     },
     {
       "source": "skills/sdd-write-docs/SKILL.md",
@@ -79,7 +79,7 @@
     {
       "source": "skills/sdd-setup/SKILL.md",
       "destination": ".agents/skills/sdd-setup/SKILL.md",
-      "sha256": "fcf6ea7107852c2ca292d6f79e7c00010d679f278548ddaeac3084c0083d8520"
+      "sha256": "0f15d01ac8b814e2c79656ed609a9c4bc66313e81fae910265f080e38a9591b8"
     },
     {
       "source": "skills/sdd-setup/references/land.md",
@@ -124,7 +124,7 @@
     {
       "source": "skills/sdd-setup/references/upgrade.md",
       "destination": ".agents/skills/sdd-setup/references/upgrade.md",
-      "sha256": "5791559eced75169edb78c903e4f0bef80d6ad7eb3629afda888e6dd80eb8af3"
+      "sha256": "699e65432da54b91bfae7f386fac27c1296c86c56c2ae71524e2dd400f149aec"
     },
     {
       "source": "skills/sdd-write-docs/SKILL.md",
@@ -277,7 +277,7 @@
     },
     {
       "path": "AGENTS.md",
-      "marker_hash": "ed193a9e9fe44618bedfd8e83efa29738601b8dd28e2e74846cb1d591df36dc5"
+      "marker_hash": "e5f86c3d0c62db6ac37c4e52bd551a035f491ba29b9858014ae6edbf7702b010"
     }
   ]
 }

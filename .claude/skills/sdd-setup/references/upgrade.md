@@ -2,6 +2,19 @@
 
 Move an instance older than the `sdd` on PATH to that version. The gate picks it for the `upgrade` state. Read `sdd docs reconcile` for the reconciliations an upgrade can raise.
 
+## The skill that runs the upgrade
+
+Run the upgrade from this skill as the new release ships it. After a pin move, `sdd` prints:
+
+```text
+After the pin move, load the devshell and run the upgrade through the sdd-setup skill of the sdd in that devshell, and do every migration it names. Before `sdd upgrade`, read it with `sdd skill show sdd-setup`. After it, the project's .claude/skills/sdd-setup is that skill. Never use a host copy or an older skill.
+```
+
+1. Load the devshell, then run `sdd --version`, and compare it with the pin.
+2. Before `sdd upgrade` runs, read each file of this skill with `sdd skill show sdd-setup --file <path>`, because the project's copy holds the older release's skill until the upgrade writes the new one.
+3. After the upgrade, read this skill from the project's copy, which the upgrade wrote.
+4. Never read a copy of this skill under the home.
+
 ## Pre-flight
 
 1. Run `sdd upgrade --target . --dry-run --json`, and hold `retired_citations`: every citation of a rule ID this binary no longer defines, with its path and line.
@@ -23,3 +36,4 @@ Fill the landing pipeline with:
 1. The Prove step passed, and `sdd status --target . --json` reads `classification` `current`.
 2. Route each saved copy by the rule at the end of the landing pipeline.
 3. Offer the removal of each `legacy_state` entry whose `active` is false, by its exact path, as a gated step.
+4. Where a formatter, a linter, or a spell checker excludes the landed skills, it excludes only the package folders `sdd-setup` and `sdd-write-docs` under each skill root that the `paths` section of `sdd status --target . --json` reports. The project's own skills in those roots stay under its checks. Narrow an exclude of a whole skill root to those folders, as a gated edit.

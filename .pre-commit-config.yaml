@@ -102,7 +102,7 @@ repos:
 #   release-plz.yml, and scorecard.yml   rk, rendered whole
 #   .github/workflows/release.yml        cargo-dist
 #   .release-kit/manifest.json and .release-kit/setup-proof.json   rk
-#   .claude/skills/ and .agents/skills/  rk, the skill packages it lands
+#   .claude/skills/ and .agents/skills/, the landed packages only   rk, sdd
 #   .spec-driven-docs/manifest.json and _docs/.markdownlint-cli2.jsonc   sdd
 #   the specs, the tracking schema, and the templates under _docs/ that
 #   sdd ships, which stay equal to its shipped copy   sdd
@@ -119,13 +119,13 @@ repos:
       - id: trailing-whitespace
         stages: [pre-commit, manual, pre-merge-commit]
         args: [--markdown-linebreak-ext=md]
-        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/(rk-setup|rk-release|sdd-setup|sdd-write-docs)/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: end-of-file-fixer
         stages: [pre-commit, manual, pre-merge-commit]
-        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/(rk-setup|rk-release|sdd-setup|sdd-write-docs)/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: mixed-line-ending
         args: [--fix=lf]
-        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/(rk-setup|rk-release|sdd-setup|sdd-write-docs)/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: check-added-large-files
         args: ['--maxkb=16384']
         stages: [pre-commit, manual, pre-merge-commit]
