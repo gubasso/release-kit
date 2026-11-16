@@ -1288,6 +1288,50 @@ mod tests {
         }
     }
 
+    /// The most lines the routing block takes in a target's `AGENTS.md`,
+    /// markers included. The documentation gate of spec-driven-docs fails
+    /// a managed block over this size, whatever tool wrote it.
+    const ROUTING_BLOCK_MAX_LINES: usize = 20;
+
+    /// Every shape the routing block renders from, across every axis that
+    /// `BlockShape` carries, fits in the size a managed block can take.
+    ///
+    /// SATISFIES landing:the-routing-block-bounds-the-agents-initiative
+    #[test]
+    fn routing_block_fits_the_managed_block_size_in_every_shape() {
+        use crate::landing::MergeForm;
+        for checkout_mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
+            for integration in [Integration::Local, Integration::Forge] {
+                for merge_form in [MergeForm::Squash, MergeForm::Rebase] {
+                    for workflow_guards in [true, false] {
+                        for release in [true, false] {
+                            let shape = projection::BlockShape {
+                                checkout_mode,
+                                integration,
+                                merge_form,
+                                workflow_guards,
+                                release,
+                            };
+                            let block = projection::routing_block_of(&shape)
+                                .expect("the binary embeds the block");
+                            let at = format!(
+                                "{checkout_mode:?} {integration:?} {merge_form:?} \
+                                 guards {workflow_guards} release {release}"
+                            );
+                            assert!(block.starts_with(projection::BLOCK_BEGIN), "{at}");
+                            assert!(block.ends_with(projection::BLOCK_END), "{at}");
+                            let lines = block.lines().count();
+                            assert!(
+                                lines <= ROUTING_BLOCK_MAX_LINES,
+                                "{at}: {lines} lines over {ROUTING_BLOCK_MAX_LINES}: {block}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The routing block of a release-less target is the workflow variant:
     /// no `## Releases` heading, no version, changelog, or tag reason, a
     /// scope preferred rather than required, and the two workflow terms. A
