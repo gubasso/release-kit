@@ -760,7 +760,7 @@ pub fn render(manifest: &Manifest) -> Result<Vec<u8>, RkError> {
 /// The current instant in the record's RFC 3339 form.
 #[must_use]
 pub fn now() -> String {
-    humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string()
+    crate::self_depend::check::stamp(std::time::SystemTime::now())
 }
 
 /// How a record's `rk_version` stands against this binary's.

@@ -83,13 +83,17 @@ impl Outcome {
 
 /// A parsed time, or `None` for an absent or unreadable one.
 fn time(text: Option<&str>) -> Option<SystemTime> {
-    humantime::parse_rfc3339(text?).ok()
+    let at: jiff::Timestamp = text?.parse().ok()?;
+    SystemTime::try_from(at).ok()
 }
 
 /// RFC 3339 UTC to the second.
 #[must_use]
 pub fn stamp(at: SystemTime) -> String {
-    humantime::format_rfc3339_seconds(at).to_string()
+    let at = jiff::Timestamp::try_from(at).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+    jiff::Timestamp::from_second(at.as_second())
+        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+        .to_string()
 }
 
 /// How long ago `then` was, zero for a time in the future.
@@ -268,7 +272,7 @@ pub fn warnings(
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use super::{Cache, due, stamp};
+    use super::{Cache, due, stamp, time};
 
     fn ago(secs: u64) -> String {
         stamp(SystemTime::now() - Duration::from_secs(secs))
@@ -330,5 +334,16 @@ mod tests {
             error: None,
         };
         assert!(due(Some(&cache), SystemTime::now()));
+    }
+
+    #[test]
+    fn a_stamp_is_utc_to_the_second_and_reads_back() {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_millis(1_794_874_301_750);
+        let text = stamp(at);
+        assert_eq!(text, "2026-11-17T00:11:41Z");
+        assert_eq!(
+            time(Some(&text)),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_874_301))
+        );
     }
 }

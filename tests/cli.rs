@@ -23020,10 +23020,9 @@ impl SelfDependFixture {
         error: Option<&str>,
     ) {
         let at = |secs: u64| {
-            humantime::format_rfc3339_seconds(
+            release_kit::self_depend::check::stamp(
                 std::time::SystemTime::now() - std::time::Duration::from_secs(secs),
             )
-            .to_string()
         };
         let path = self.cache_file();
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("the cache dir creates");

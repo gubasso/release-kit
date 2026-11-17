@@ -158,7 +158,7 @@ pub fn stamp(now: std::time::SystemTime) -> String {
 /// A history time: UTC to the second, `%Y-%m-%dT%H:%M:%SZ`.
 #[must_use]
 pub fn at(now: std::time::SystemTime) -> String {
-    humantime::format_rfc3339_seconds(now).to_string()
+    crate::self_depend::check::stamp(now)
 }
 
 /// The refusal for a target with no open migration.
