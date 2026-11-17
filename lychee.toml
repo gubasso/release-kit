@@ -26,8 +26,10 @@ exclude = [
   # The devbox docs return 404 since 2026-11-08 while the product page still
   # loads, so the docs moved or are down. The cited claim stays true.
   '^https://www\.jetify\.com/docs/devbox/',
-  # release-plz wrote this compare link into CHANGELOG.md for the first
-  # release, and no v0.1.0 tag exists. The changelog is generated, so the link
-  # stays as written.
-  '^https://github\.com/gubasso/release-kit/compare/v0\.1\.0\.\.\.v0\.2\.0$',
+  # release-plz writes a compare link for each version into CHANGELOG.md. The
+  # link of an open release request names a tag that only the release
+  # creates, so it answers 404 until then, and the one for the first release
+  # names a v0.1.0 tag that never existed. The changelog is generated, so its
+  # links stay as written.
+  '^https://github\.com/gubasso/release-kit/compare/v[0-9A-Za-z.-]+\.\.\.v[0-9A-Za-z.-]+$',
 ]
