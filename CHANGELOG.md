@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2](https://github.com/gubasso/release-kit/compare/v0.10.1...v0.10.2) - 2026-11-17
+
+### Fixed
+
+- *(deps)* replace the unmaintained humantime with jiff
+
+### Other
+
+- *(landing)* hold the routing block to 20 lines in every shape
+- *(release)* run rk 0.10.1 and sdd 0.18.1 and land their skills
+
 ## [0.10.1](https://github.com/gubasso/release-kit/compare/v0.10.0...v0.10.1) - 2026-11-15
 
 ### Added
