@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(deps)* replace the unmaintained humantime with jiff
+- *(deps)* replace the unmaintained humantime with jiff (RUSTSEC-2026-0542)
 
 ### Other
 
