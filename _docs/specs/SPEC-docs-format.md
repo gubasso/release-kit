@@ -41,15 +41,21 @@ Verify: `pre-commit run chapter-size-cap --all-files`
 
 ### `docs-format:author-instructions-stay-within-budget` — Author instructions stay within budget
 
-The author MUST keep the root author-instructions file at or below 100 lines and a subtree one at or below 150.
+The author MUST keep the root author-instructions file at or below 100 lines and a subtree one at or below 150, counting only the lines outside its managed blocks, and MUST keep each managed block at or below 20 lines, its markers included.
 
-A ceiling the project records for an inherited file under `SPEC-budget-debt.md` is judged instead of the budget, and it only comes down.
+A managed block runs from a whole-line `<!-- BEGIN <label> -->` to the `<!-- END <label> -->` of the same label. A tool rewrites its block at each upgrade, so the project cannot shorten it, and the budget judges only the text the project writes. A marker inside a fenced code block opens nothing. A BEGIN with no END, a block inside another, and an END with no BEGIN fail on their line, and every line then counts as the project's, so no marker hides the rest of the file. A failure names the lines that the blocks hold beside the project's count, because a session loads the whole file. A ceiling the project records for an inherited file under `SPEC-budget-debt.md` is judged against the project's count instead of the budget, and it only comes down.
 
 #### Scenario: A root file accumulates a subtree's rules
 
 - GIVEN a rule that binds one subtree only
 - WHEN it is written into the root file and pushes it past the cap
 - THEN it belongs in that subtree's own author-instructions file, which the root points at
+
+#### Scenario: A tool's block grows at an upgrade
+
+- GIVEN a root file with 100 lines of the project's own and two managed blocks
+- WHEN a release adds a line to its block
+- THEN the gate passes, and one more line of the project's own fails it
 
 Verify: `pre-commit run agents-digest-size --all-files`
 

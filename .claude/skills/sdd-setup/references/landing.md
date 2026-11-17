@@ -14,13 +14,15 @@ The stage writes nothing into the target. Keep it until the general post-flight 
 1. Run `sdd stage compare <root> --target . --json`, with `<root>` from the receipt.
 2. Route each row by what the landing decides for it: its `state`, `ownership`, `vouched`, and `replaceable`. Show its `provenance` with each question, as how much the tool can say about who wrote the bytes. Where `history.available` is false, the Git half of provenance is missing, and `history.reason` says why.
 
-| Row                                                                     | What follows                                                                                                   |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `equal`, or `absent` with `replaceable` false                           | nothing to decide                                                                                              |
-| `adopted` and `differs`                                                 | nothing to decide, because the landing keeps the project's bytes                                               |
-| `managed` or `integration` with `vouched` true                          | the landing refreshes it, or takes a `retired` row back                                                        |
-| `replaceable` true                                                      | ask the operator, as a gated step, whether to keep the edit or discard it; for `absent`, whether to restore it |
-| `managed` or `integration` with `vouched` false and `replaceable` false | a refusal: report it, because no `--replace` name resolves it; the operator moves the file aside               |
+| Row                                                                                 | What follows                                                                                                                        |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `equal`, or `absent` with `replaceable` false                                       | nothing to decide                                                                                                                   |
+| `adopted` and `differs`                                                             | nothing to decide, because the landing keeps the project's bytes                                                                    |
+| `retired`                                                                           | nothing to decide, because the landing deletes a file nobody edited                                                                 |
+| `dropped`                                                                           | nothing blocks the landing: tell the operator the file stays as the project's, and that a dropped `SKILL.md` still loads as a skill |
+| `managed` or `integration`, `differs`, with `vouched` true                          | the landing refreshes it                                                                                                            |
+| `replaceable` true                                                                  | ask the operator, as a gated step, whether to keep the edit or discard it; for `absent`, whether to restore it                      |
+| `managed` or `integration`, `differs`, with `vouched` false and `replaceable` false | a refusal: report it, because no `--replace` name resolves it; the operator moves the file aside                                    |
 
 Each folder in `refused_packages` holds a skill package that no record attributes. The landing refuses it whole, and no `--replace` name resolves it, so report it and ask the operator to move the folder aside.
 
@@ -49,7 +51,7 @@ Write only what the project owns, and write it before the landing:
 ## 5. Prove
 
 1. Run `sdd stage compare <root> --target . --json` again.
-2. Confirm that every `managed` and `integration` destination reads `equal`. An `adopted` destination can differ, because the landing kept the bytes of the project.
+2. Confirm that every `managed` and `integration` destination reads `equal`. An `adopted` destination can differ, because the landing kept the bytes of the project. A `retired` or `dropped` row is gone, because the record no longer names the file.
 3. Carry the result into the proof line of the report.
 
-Route each kept copy in the task post-flight: a lint configuration edit goes to `tune-gates`, and anything else goes to "Still the operator's" in the report. A discarded copy stays where `--replace` saved it, and the report lists it.
+Route each kept copy in the task post-flight: a lint configuration edit goes to `tune-gates`, and anything else goes to "Still the operator's" in the report. A discarded copy stays where `--replace` saved it, and the report lists it. List each `dropped` file under "Still the operator's" too, because the project owns it from the landing.

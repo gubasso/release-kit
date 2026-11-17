@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.18.1",
+  "canon_version": "0.19.0",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -24,7 +24,7 @@
     {
       "source": "skills/sdd-setup/references/landing.md",
       "destination": ".claude/skills/sdd-setup/references/landing.md",
-      "sha256": "a34b001fd3bda0bc342c6e5d94ec9ad4c002d7d1b83c4c9840a77339185b960a"
+      "sha256": "d82f9c0baeb3c3962e5cc8bbfb311b22b7aa1657ba67f20ad9c74e35267915db"
     },
     {
       "source": "skills/sdd-setup/references/migrate.md",
@@ -89,7 +89,7 @@
     {
       "source": "skills/sdd-setup/references/landing.md",
       "destination": ".agents/skills/sdd-setup/references/landing.md",
-      "sha256": "a34b001fd3bda0bc342c6e5d94ec9ad4c002d7d1b83c4c9840a77339185b960a"
+      "sha256": "d82f9c0baeb3c3962e5cc8bbfb311b22b7aa1657ba67f20ad9c74e35267915db"
     },
     {
       "source": "skills/sdd-setup/references/migrate.md",
@@ -176,8 +176,8 @@
     {
       "source": "instance/payload/_docs/specs/SPEC-docs-format.md",
       "destination": "_docs/specs/SPEC-docs-format.md",
-      "sha256": "79b88d85ecfaaa24b9940045113f7b7665dcfd1f5d8c0333f29f2e43fe9aee3e",
-      "baseline_sha256": "79b88d85ecfaaa24b9940045113f7b7665dcfd1f5d8c0333f29f2e43fe9aee3e"
+      "sha256": "3f94a24b4b6641d2e7b6221018c5b05f4696a5ea752f4c693763f3f61d89706c",
+      "baseline_sha256": "3f94a24b4b6641d2e7b6221018c5b05f4696a5ea752f4c693763f3f61d89706c"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-docs-foundations.md",
@@ -254,8 +254,8 @@
     {
       "source": "templates/TEMPLATE-agents-digest.md",
       "destination": "_docs/reference/TEMPLATE-agents-digest.md",
-      "sha256": "48c4ac615b3840008126876a527c184860ea086c3d6322b4ca94251369fcfe02",
-      "baseline_sha256": "48c4ac615b3840008126876a527c184860ea086c3d6322b4ca94251369fcfe02"
+      "sha256": "67e9a9c16ce636643e686259657c3a968143a0b2cba95c9191f652c736a00cfd",
+      "baseline_sha256": "67e9a9c16ce636643e686259657c3a968143a0b2cba95c9191f652c736a00cfd"
     },
     {
       "source": "templates/TEMPLATE-guide.md",

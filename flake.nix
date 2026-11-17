@@ -19,7 +19,7 @@
     # a spec-driven-docs input of its own, its previous release; the empty
     # string points it at this flake, so flake.lock holds one sdd node.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.18.1";
+      url = "github:gubasso/spec-driven-docs/v0.19.0";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.spec-driven-docs.follows = "";
       # Its rk and the store guard serve only its own devShell, so they
@@ -37,6 +37,7 @@
       # empty string is the root flake, this repository.
       inputs.release-kit.follows = "";
       inputs.spec-driven-docs.follows = "spec-driven-docs";
+      inputs.rust-overlay.follows = "rust-overlay";
     };
     # The rk that manages this repository: a released tag, as in every
     # consumer. It runs the hooks, rk worktree, rk integrate, and this
