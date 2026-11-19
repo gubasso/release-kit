@@ -351,9 +351,12 @@ repos:
     rev: lychee-v0.24.2
     hooks:
       # The devshell supplies the lychee binary, so the hook installs none.
+      # local-only: an outside site answers a CI runner with a block or a
+      # timeout that it does not give a developer host.
       # owner: devshell (no-hook-language) upstream lychee offers only script, docker_image, and system ids.
       - id: lychee-system
         stages: [pre-push]
+        groups: [local-only]
         types: [markdown]
         args: [--no-progress]
   # The upstream `language: python` hook, with its own args
