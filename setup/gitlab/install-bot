@@ -131,7 +131,10 @@ if [ "$path" = "token" ]; then
   active="$(printf '%s\n' "$tokens" | where name "\"$name\"" | number_of id)"
   # The live bot under another name: a marked token, or one named
   # release-bot from before the marker existed.
-  other="$( { printf '%s\n' "$tokens" | where description "\"$marker\""; printf '%s\n' "$tokens" | where name '"release-bot"'; } | grep -F -v "\"name\":\"$name\"" | text_of name)"
+  other="$({
+    printf '%s\n' "$tokens" | where description "\"$marker\""
+    printf '%s\n' "$tokens" | where name '"release-bot"'
+  } | grep -F -v "\"name\":\"$name\"" | text_of name)"
   # Checked whether or not a token under the requested name exists: a
   # second identity beside the live bot is a rename either way.
   if [ -n "$other" ]; then

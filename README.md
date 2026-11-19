@@ -39,6 +39,10 @@ The binary is `rk`.
 
 This repository dogfoods its own convention. The procedure lives in the shipped runbooks, served by `rk guide`; [_docs/guides/release/](./_docs/guides/release/README.md) is this repository's overlay — the coordinates to export once, its deviations, and the transcript of a release cut end to end.
 
+## Develop
+
+direnv loads the development shell of `flake.nix`. The host supplies the tools that [host-requirements.toml](./host-requirements.toml) lists.
+
 ## License
 
 The method is under [CC BY 4.0](./LICENSE-CC-BY-4.0) and the distribution that lands it is under the [MIT License](./LICENSE-MIT). [LICENSE](./LICENSE) states which side each file falls on, and `rk license` prints the terms the binary carries.

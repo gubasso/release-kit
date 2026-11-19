@@ -22,7 +22,10 @@ set -eu
 : "${RK_FORGE_GATE:?rk sets this; run this script through rk setup}"
 case "$RK_FORGE_GATE" in
   true | false) ;;
-  *) echo "RK_FORGE_GATE is $RK_FORGE_GATE; rk sets it to true or false" >&2; exit 1 ;;
+  *)
+    echo "RK_FORGE_GATE is $RK_FORGE_GATE; rk sets it to true or false" >&2
+    exit 1
+    ;;
 esac
 
 project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
@@ -54,7 +57,7 @@ assert "$RK_TRUNK_BRANCH refuses force pushes" '"allow_force_push":false' "$trun
   'rk setup step protect-trunk --apply'
 trunk_levels="$(printf '%s' "$trunk" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
 trunk_grants="$(printf '%s' "$trunk_levels" | grep -o '{' | grep -c . || true)"
-if [ "$trunk_grants" = "1" ] && printf '%s' "$trunk_levels" | grep -q "\"access_level\":$RK_GITLAB_PUSH_LEVEL[,}]"; then
+if [ "$trunk_grants" = "1" ] && printf '%s' "$trunk_levels" | grep -q "\"access_level\":${RK_GITLAB_PUSH_LEVEL}[,}]"; then
   echo "ok $RK_TRUNK_BRANCH takes a push at access level $RK_GITLAB_PUSH_LEVEL alone"
 else
   echo "FAIL $RK_TRUNK_BRANCH push grants: the setup owns exactly one at access level $RK_GITLAB_PUSH_LEVEL, and the forge honors the most permissive of $trunk_grants" >&2
@@ -63,7 +66,7 @@ else
 fi
 trunk_merge_levels="$(printf '%s' "$trunk" | grep -o '"merge_access_levels":\[[^]]*\]' || true)"
 trunk_merge_grants="$(printf '%s' "$trunk_merge_levels" | grep -o '{' | grep -c . || true)"
-if [ "$trunk_merge_grants" = "1" ] && printf '%s' "$trunk_merge_levels" | grep -q "\"access_level\":$RK_GITLAB_MERGE_LEVEL[,}]"; then
+if [ "$trunk_merge_grants" = "1" ] && printf '%s' "$trunk_merge_levels" | grep -q "\"access_level\":${RK_GITLAB_MERGE_LEVEL}[,}]"; then
   echo "ok $RK_TRUNK_BRANCH merges only at access level $RK_GITLAB_MERGE_LEVEL"
 else
   echo "FAIL $RK_TRUNK_BRANCH merge grants: the setup owns exactly one at access level $RK_GITLAB_MERGE_LEVEL, found $trunk_merge_grants" >&2
@@ -81,7 +84,7 @@ if [ "$RK_FORGE_GATE" = true ]; then
 else
   pipeline_label='no pipeline is required: no forge gate lands, so none runs'
 fi
-assert "$pipeline_label" "\"only_allow_merge_if_pipeline_succeeds\":$RK_FORGE_GATE[,}]" "$settings" \
+assert "$pipeline_label" "\"only_allow_merge_if_pipeline_succeeds\":${RK_FORGE_GATE}[,}]" "$settings" \
   'rk setup step protect-trunk --apply'
 assert 'merges fast-forward' "\"merge_method\":\"$RK_GITLAB_MERGE_METHOD\"" "$settings" \
   'rk setup step protect-trunk --apply'

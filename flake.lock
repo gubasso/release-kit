@@ -1,33 +1,5 @@
 {
   "nodes": {
-    "exobrain-tech": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "release-kit": [],
-        "rust-overlay": [
-          "rust-overlay"
-        ],
-        "spec-driven-docs": [
-          "spec-driven-docs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1794417935,
-        "narHash": "sha256-tHYPUSvVvoXH4DtAt7HnLrS2rxeEWJ5agNuX7fJWJXQ=",
-        "owner": "gubasso",
-        "repo": "exobrain-tech",
-        "rev": "9abb55d665bc8c7b515e1bcc4cbfaeeb5410fa40",
-        "type": "github"
-      },
-      "original": {
-        "owner": "gubasso",
-        "ref": "v1.0.0",
-        "repo": "exobrain-tech",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1794042290,
@@ -46,9 +18,7 @@
     },
     "release-kit": {
       "inputs": {
-        "exobrain-tech": [
-          "exobrain-tech"
-        ],
+        "exobrain-tech": [],
         "nixpkgs": [
           "nixpkgs"
         ],
@@ -77,7 +47,6 @@
     },
     "root": {
       "inputs": {
-        "exobrain-tech": "exobrain-tech",
         "nixpkgs": "nixpkgs",
         "release-kit": "release-kit",
         "rust-overlay": "rust-overlay",
@@ -106,9 +75,7 @@
     },
     "spec-driven-docs": {
       "inputs": {
-        "exobrain-tech": [
-          "exobrain-tech"
-        ],
+        "exobrain-tech": [],
         "nixpkgs": [
           "nixpkgs"
         ],

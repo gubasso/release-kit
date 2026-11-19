@@ -1,0 +1,10 @@
+# statix walks the tree itself, so this file holds its scope.
+#
+# The snippets are the sources that rk lands into each target, and a change
+# there changes every landing. The tests and the landing verbs judge them.
+ignore = ["snippets"]
+
+# The flake inputs keep one `inputs.<name>.follows` line per transitive
+# input, each under its own comment, the form that the flakes of the pinned
+# rk and sdd use too.
+disabled = ["repeated_keys"]

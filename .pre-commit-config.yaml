@@ -113,35 +113,75 @@ repos:
 # fixers below have no configuration, so each takes its own exclude. The
 # reading hooks keep them: the YAML, TOML, and JSON parsers, the secret and
 # merge-conflict scans, the link check, actionlint, and zizmor.
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+  # The prek built-ins take the place of pre-commit/pre-commit-hooks: no
+  # clone, no environment, and no rev. The arguments of the common set keep
+  # the upstream behavior where a built-in judges less by default.
+  # project: each hook below that states its stages adds manual, the stage
+  # that `just check` and CI sweep (default_stages above).
+  - repo: builtin
     hooks:
+      # A fixer never runs at push. The argument keeps a Markdown hard break.
+      # project: the exclude names every generated file of the list above,
+      # which is longer than the pattern of the common set.
       - id: trailing-whitespace
-        stages: [pre-commit, manual, pre-merge-commit]
         args: [--markdown-linebreak-ext=md]
+        stages: [pre-commit, manual, pre-merge-commit]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/(rk-setup|rk-release|sdd-setup|sdd-write-docs)/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+      # project: the exclude names every generated file of the list above.
       - id: end-of-file-fixer
         stages: [pre-commit, manual, pre-merge-commit]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/(rk-setup|rk-release|sdd-setup|sdd-write-docs)/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+      # The default `auto` keeps the most frequent ending of a file, so a file
+      # that holds only CRLF passes. `--fix=lf` holds every file to LF.
+      # project: the exclude names every generated file of the list above.
       - id: mixed-line-ending
         args: [--fix=lf]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.(claude|agents)/skills/(rk-setup|rk-release|sdd-setup|sdd-write-docs)/.+|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
+      # project: --maxkb=16384, because tests/cli.rs holds about 2.2 MiB,
+      # over the 2048 KiB of the common set.
       - id: check-added-large-files
         args: ['--maxkb=16384']
         stages: [pre-commit, manual, pre-merge-commit]
       - id: check-case-conflict
+      # Without the argument the hook passes outside a merge or a rebase, so a
+      # marker that a resolved conflict left behind lands unseen.
       - id: check-merge-conflict
+        args: [--assume-in-merge]
+      - id: check-symlinks
       - id: destroyed-symlinks
         stages: [pre-commit, manual, pre-merge-commit]
+      - id: check-executables-have-shebangs
+        stages: [pre-commit, manual, pre-merge-commit]
+      - id: check-shebang-scripts-are-executable
+        stages: [pre-commit, manual, pre-merge-commit]
+      # prek accepts an unknown tag unless it gets --disallow-unknown-tags. The
+      # upstream hook refuses one while it loads the file.
       - id: check-yaml
+        args: [--disallow-unknown-tags]
       - id: check-toml
+      - id: check-xml
+      # check-json5 parses JSON with comments and trailing commas, so it does
+      # not refuse a commented configuration such as dprint.json or a .jsonc
+      # file. `types` resets the filter to every file, and `types_or` selects
+      # json, json5, and jsonc. It is the syntax gate only: dprint owns the
+      # layout.
+      - id: check-json5
+        types: [file]
+        types_or: [json, json5, jsonc]
       - id: detect-private-key
+  # The upstream `language: golang` hook. It checks what no formatter owns:
+  # the charset, the line endings, the trailing whitespace, and the indent
+  # style.
+  #   - -disable-insert-final-newline: end-of-file-fixer owns it.
+  #   - -disable-indent-size: each formatter owns the indentation of its files.
+  # Markdown is excluded, and .editorconfig-checker.json excludes the
+  # generated files.
   - repo: https://github.com/editorconfig-checker/editorconfig-checker
-    rev: v3.11.1
+    rev: v4.0.2
     hooks:
       - id: editorconfig-checker
         alias: ec
-        args: [-disable-insert-final-newline]
+        args: [-disable-insert-final-newline, -disable-indent-size]
         exclude: '\.md$'
   - repo: local
     hooks:
@@ -154,21 +194,28 @@ repos:
         entry: dprint check --allow-no-files
         language: system
         types_or: [markdown, json]
+      # A check, not a fix: a hook that rewrites a file leaves the staged copy
+      # behind, so `cargo fmt --check` fails and the author formats.
       # owner: devshell (project-environment) cargo fmt is part of the Rust toolchain that the devshell pins.
       - id: cargo-fmt
         name: cargo fmt check
         entry: cargo fmt --check
         language: system
-        types: [rust]
+        files: '(\.rs|(^|/)Cargo\.(toml|lock)|^rust-toolchain\.toml)$'
         pass_filenames: false
+      # --all-targets lints the tests too, so a lint in a test fails at commit
+      # and not first in CI.
       # owner: devshell (project-environment) cargo clippy is part of the Rust toolchain and builds the crate.
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
-        types: [rust]
+        files: '(\.rs|(^|/)Cargo\.(toml|lock)|^(rust-toolchain|clippy)\.toml)$'
         pass_filenames: false
       # owner: devshell (project-environment) cargo test runs the test suite of the crate.
+      # project: the test suite runs here at commit, over the files that the
+      # binary embeds, in place of the cargo-nextest hook of the rust set at
+      # push. Both would run the same suite twice.
       - id: cargo-test
         name: cargo test
         entry: cargo test
@@ -187,6 +234,12 @@ repos:
       # The three checks below are scope `both` at moment push: each is too
       # costly for a commit, so it runs at pre-push, and in the manual sweep
       # that `rk integrate` and `just check` run, which CI invokes too.
+      # cargo deny reads the RustSec database that cargo audit reads, and adds
+      # the yanked crates, the bans, the sources, and the licenses, so one
+      # policy file, deny.toml, owns all four.
+      # project: always_run in place of the files of the rust set, because an
+      # advisory published after the last change of the lock file fails the
+      # next push, not first the CI sweep.
       # owner: devshell (project-environment) cargo deny is a cargo subcommand that reads the lock file of the crate.
       - id: cargo-deny
         name: cargo deny check
@@ -257,9 +310,13 @@ repos:
       # _docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md
       - id: actionlint
         files: '^(\.github|snippets/.*/\.github)/workflows/.*\.ya?ml$'
+  # md-toc rewrites the list between two `<!--TOC-->` markers, and leaves a
+  # file without the markers alone.
   - repo: https://github.com/frnmst/md-toc
-    rev: 9.0.0
+    rev: 9.1.0
     hooks:
+      # project: `-l, '3'` and the files of the specs, because this project
+      # keeps a TOC only in its specs, as the common set describes.
       - id: md-toc
         args: [-p, -c, --skip-lines, '1', github, -l, '3']
         files: '^_docs/specs/SPEC-.*\.md$'
@@ -270,15 +327,26 @@ repos:
     hooks:
       - id: markdownlint-cli2
   - repo: https://github.com/crate-ci/typos
-    rev: v1.49.0
+    rev: v1.52.2
     hooks:
       - id: typos
         args: [--force-exclude]
         stages: [pre-commit, manual, pre-merge-commit]
+  # Two layers. ripsecrets scans what each commit adds. gitleaks scans the
+  # whole history before a push, and passes no file names.
   - repo: https://github.com/sirwart/ripsecrets
     rev: v0.1.11
     hooks:
       - id: ripsecrets
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      # project: manual and pre-merge-commit beside pre-push, as for every
+      # check that runs at push (the note above cargo-deny).
+      - id: gitleaks
+        entry: gitleaks git --redact --verbose --no-banner
+        pass_filenames: false
+        stages: [pre-push, manual, pre-merge-commit]
   - repo: https://github.com/lycheeverse/lychee
     rev: lychee-v0.24.2
     hooks:
@@ -288,6 +356,72 @@ repos:
         stages: [pre-push]
         types: [markdown]
         args: [--no-progress]
+  # The upstream `language: python` hook, with its own args
+  # (--fixup --wip --commit-file). committed.toml holds the rules. The
+  # release-kit block holds the Conventional Commits grammar through
+  # conventional-pre-commit, so committed.toml sets `style = "none"` and keeps
+  # the line length, the case, and the period at the end of the subject, so
+  # two hooks never judge one property.
+  - repo: https://github.com/crate-ci/committed
+    rev: v1.1.12
+    hooks:
+      - id: committed
+        stages: [commit-msg]
+  # Unused dependencies, at push. The upstream `language: rust` hook, which
+  # prek builds with the cargo of the devshell.
+  - repo: https://github.com/bnjbvr/cargo-machete
+    rev: v0.10.1
+    hooks:
+      # project: manual and pre-merge-commit beside pre-push, as for every
+      # check that runs at push.
+      - id: cargo-machete
+        stages: [pre-push, manual, pre-merge-commit]
+  # The one shell script, blocks/post-merge-hook.sh, is a text that rk writes
+  # into each clone. shfmt reads its layout from .editorconfig.
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.14.1-1
+    hooks:
+      - id: shfmt
+        stages: [pre-commit, manual, pre-merge-commit]
+  # The Nix hooks. deadnix is the upstream `language: rust` hook.
+  - repo: https://github.com/astro/deadnix
+    rev: v1.3.2
+    hooks:
+      # project: the exclude keeps out the snippets, the sources that rk
+      # lands into each target. A change there changes every landing, so the
+      # tests and the landing verbs judge them, as statix.toml says.
+      - id: deadnix
+        exclude: '^snippets/'
+  - repo: local
+    hooks:
+      # project: the devshell shellcheck in place of the shellcheck-py hook of
+      # the bash set, because actionlint runs that shellcheck on the `run:`
+      # scripts of the workflows, so both judge with one version.
+      # owner: devshell (outside-caller) actionlint runs the devshell shellcheck, so the hook runs the same one.
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+      # The flake publishes nixfmt as its `formatter`, and `nix fmt` runs it
+      # outside prek, so the hook runs the nixfmt of the same nixpkgs.
+      # project: the exclude keeps out the snippets, as for deadnix.
+      # owner: devshell (outside-caller) nix fmt runs the nixpkgs nixfmt, so the hook runs the same one.
+      - id: nixfmt
+        name: nixfmt
+        entry: nixfmt
+        language: system
+        types: [nix]
+        exclude: '^snippets/'
+      # statix walks the tree itself, so statix.toml holds its scope, and the
+      # hook passes no file names.
+      # owner: devshell (no-hook-language) statix has no hook in a language that prek builds.
+      - id: statix
+        name: statix
+        entry: statix check
+        language: system
+        types: [nix]
+        pass_filenames: false
   - repo: local
     hooks:
       # A flake holds no language library: a package belongs to the manifest
@@ -298,12 +432,24 @@ repos:
         entry: '^(?!\s*#).*(withPackages|python3[0-9]*Packages\.|pythonPackages\.|nodePackages\.|perlPackages\.)'
         files: '(^|/)flake\.nix$|(^|/)nix/.*\.nix$'
         stages: [pre-commit, manual, pre-merge-commit]
-  # A flake reference reads the git tree of a checkout, never a path copy of
-  # the whole folder into the Nix store. The hook is published by exobrain-tech.
+  # The hooks that exobrain-tech publishes. A flake reference reads the git
+  # tree of a checkout, never a path copy of the whole folder into the Nix
+  # store. A flake holds no git hook runner. host-requirements.toml parses.
+  # The rev of each repository of the named sets follows the tag below, and
+  # `exobrain hooks sync` alone moves it.
   - repo: https://github.com/gubasso/exobrain-tech
-    rev: v1.0.0
+    rev: v1.2.0
     hooks:
       - id: no-path-flake-reference
+      - id: no-hook-runner-in-flake
+      # owner: host (host-tool) the hook calls exobrain, which host-requirements.toml lists.
+      - id: host-requirements
+      # owner: host (host-tool) the hook calls exobrain, which host-requirements.toml lists.
+      - id: hook-revisions
+        args: [--set, common, --set, rust, --set, bash, --set, nix]
+  # project: the check-useless-excludes hook of the common set stays out,
+  # because the spec-driven-docs block below renders an exclude for
+  # prose-stays-unwrapped that matches no file here, and sdd owns that block.
 # BEGIN spec-driven-docs managed
   - repo: local
     hooks:

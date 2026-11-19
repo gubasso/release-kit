@@ -1,0 +1,44 @@
+# The rules of the committed hook of common.yaml, on commit-msg. A project
+# copies this file to its root, where committed finds it.
+#
+# The release-kit block holds the Conventional Commits grammar through
+# conventional-pre-commit, so this file sets `style = "none"`, and two hooks
+# judge no property twice. A project changes it to `style = "conventional"`
+# where no conventional-pre-commit hook runs, or where its house style
+# capitalizes the description (see below).
+style = "none"
+
+# The 50/72 convention: a header aims for 50 characters, a soft limit that
+# committed cannot warn on. Every line, the header included, stays at or
+# under 72 characters, the hard limit. `line_length` caps every line, and
+# `subject_length` caps the subject. committed lets one trailing word run past
+# either limit.
+line_length = 72
+subject_length = 72
+
+# `false` turns off the rule that wants a capital letter, so
+# `build(hooks): x` passes. committed has no rule that wants a lowercase one.
+# Under `style = "none"`, committed cannot check the case of the description
+# after the colon. A project whose house style capitalizes it keeps
+# `style = "conventional"` with `subject_capitalized = true`, even beside
+# conventional-pre-commit.
+subject_capitalized = false
+subject_not_punctuated = true
+# The mood check is a heuristic, and it refuses good subjects.
+imperative_subject = false
+
+# committed reads this list only under `style = "conventional"`. Its own
+# default list lacks `build`, `ci`, and `revert`.
+allowed_types = [
+  "feat",
+  "fix",
+  "docs",
+  "style",
+  "refactor",
+  "perf",
+  "test",
+  "build",
+  "ci",
+  "chore",
+  "revert",
+]

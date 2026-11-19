@@ -69,7 +69,10 @@ fi
 # lands and false where none does, and it is always sent.
 case "$RK_FORGE_GATE" in
   true | false) ;;
-  *) echo "RK_FORGE_GATE is $RK_FORGE_GATE; rk sets it to true or false" >&2; exit 1 ;;
+  *)
+    echo "RK_FORGE_GATE is $RK_FORGE_GATE; rk sets it to true or false" >&2
+    exit 1
+    ;;
 esac
 set -- -F "only_allow_merge_if_pipeline_succeeds=$RK_FORGE_GATE" -f "merge_method=$RK_GITLAB_MERGE_METHOD" -f "squash_option=$RK_GITLAB_SQUASH_OPTION"
 if [ "$RK_MERGE_FORM" = squash ]; then

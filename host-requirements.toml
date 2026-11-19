@@ -1,0 +1,11 @@
+schema = 1
+
+[tools.exobrain]
+version = ">=1.2.0"
+
+[tools.git]
+
+[tools.nix]
+
+[tools.prek]
+version = "*"

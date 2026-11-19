@@ -20,6 +20,16 @@ indent_style = tab
 [*.{sh,bash,bats}]
 indent_style = space
 indent_size = 2
+switch_case_indent = true
+binary_next_line = true
+
+# The setup scripts that rk setup runs carry no extension, and shfmt reads
+# their layout from here.
+[setup/**]
+indent_style = space
+indent_size = 2
+switch_case_indent = true
+binary_next_line = true
 
 # rustfmt owns Rust formatting, including continuation indents that are not
 # multiples of the base, so no indent size is enforced here.

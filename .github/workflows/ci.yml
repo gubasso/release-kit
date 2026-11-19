@@ -39,6 +39,23 @@ jobs:
         with:
           install-only: true
           prek-version: "0.5.7"
+      # The exobrain CLI comes from the host, not the devshell, and the hooks
+      # hook-revisions and host-requirements call it. This step installs the
+      # release of the exobrain-tech tag that .pre-commit-config.yaml pins,
+      # so that entry is the one owner of the version, and checks the
+      # attestation that the exobrain-tech release workflow signs.
+      # nix develop keeps it on PATH.
+      - name: Install the exobrain CLI of the pinned exobrain-tech tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(yq '.repos[] | select(.repo | test("/exobrain-tech(\.git)?/?$")) | .rev' .pre-commit-config.yaml)
+          asset=exobrain-x86_64-unknown-linux-gnu.tar.xz
+          gh release download "$tag" --repo gubasso/exobrain-tech --pattern "$asset" --dir "$RUNNER_TEMP"
+          gh attestation verify "$RUNNER_TEMP/$asset" --repo gubasso/exobrain-tech
+          mkdir -p "$RUNNER_TEMP/exobrain"
+          tar -xJf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/exobrain" --strip-components=1
+          echo "$RUNNER_TEMP/exobrain" >> "$GITHUB_PATH"
       # sdd is this repository's docs gate and comes from the flake input the
       # devshell carries, so this job installs it nowhere: the shell that runs
       # just check is the shell that has it, and flake.lock is what pins it.

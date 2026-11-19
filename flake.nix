@@ -22,21 +22,12 @@
       url = "github:gubasso/spec-driven-docs/v0.19.0";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.spec-driven-docs.follows = "";
-      # Its rk and the store guard serve only its own devShell, so they
-      # follow this flake's inputs, and flake.lock nests neither.
+      # Its rk serves only its own devShell, so it follows this flake's
+      # input, and flake.lock nests no second rk. Its store guard serves
+      # only that devShell too, and the host supplies exobrain here, so the
+      # empty string points it at this flake and flake.lock nests none.
       inputs.release-kit.follows = "release-kit";
-      inputs.exobrain-tech.follows = "exobrain-tech";
-      inputs.rust-overlay.follows = "rust-overlay";
-    };
-    # The store guard of the canon (exobrain): `exobrain store-guard --daily`
-    # in .envrc warns about working-tree copies in the Nix store.
-    exobrain-tech = {
-      url = "github:gubasso/exobrain-tech/v1.0.0";
-      inputs.nixpkgs.follows = "nixpkgs";
-      # Its rk and sdd serve only its own devShell, so it takes these: the
-      # empty string is the root flake, this repository.
-      inputs.release-kit.follows = "";
-      inputs.spec-driven-docs.follows = "spec-driven-docs";
+      inputs.exobrain-tech.follows = "";
       inputs.rust-overlay.follows = "rust-overlay";
     };
     # The rk that manages this repository: a released tag, as in every
@@ -55,7 +46,9 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rust-overlay.follows = "rust-overlay";
       inputs.spec-driven-docs.follows = "spec-driven-docs";
-      inputs.exobrain-tech.follows = "exobrain-tech";
+      # Its store guard serves only its own devShell, and the host supplies
+      # exobrain here, so flake.lock nests no exobrain-tech.
+      inputs.exobrain-tech.follows = "";
     };
   };
 
@@ -65,7 +58,6 @@
       nixpkgs,
       rust-overlay,
       spec-driven-docs,
-      exobrain-tech,
       release-kit,
     }:
     let
@@ -132,7 +124,11 @@
           # language library never enters this shell. What does not: the host
           # baseline. git and the hook runner, prek, come from the host:
           # .pre-commit-config.yaml declares the oldest prek it accepts, and
-          # ci.yml installs that version. The Rust toolchain comes from
+          # ci.yml installs that version. The exobrain CLI comes from the host
+          # too, because a copy here would come first on PATH and hide a newer
+          # host CLI. host-requirements.toml lists every host tool, and ci.yml
+          # installs exobrain at the exobrain-tech tag that
+          # .pre-commit-config.yaml pins. The Rust toolchain comes from
           # rust-toolchain.toml through the overlay so CI and local development
           # share one compiler. The installed package owns its own runtime
           # closure in nix/package.nix.
@@ -146,8 +142,6 @@
               # rk, the previous release that manages this repository.
               release-kit.packages.${pkgs.stdenv.hostPlatform.system}.default
               spec-driven-docs.packages.${pkgs.stdenv.hostPlatform.system}.default
-              # exobrain, the store guard that .envrc runs once a day.
-              exobrain-tech.packages.${pkgs.stdenv.hostPlatform.system}.default
               pkgs.cargo-nextest
               pkgs.cargo-deny
               pkgs.just
@@ -159,8 +153,14 @@
               pkgs.ripgrep
               pkgs.lychee
               # actionlint, a hook that the hook runner builds, runs shellcheck from
-              # PATH on the `run:` scripts of the workflows it reads.
+              # PATH on the `run:` scripts of the workflows it reads, and the
+              # shellcheck hook runs the same one.
               pkgs.shellcheck
+              # The nixfmt hook runs the nixfmt that `nix fmt` runs, the
+              # formatter output below. statix has no hook in a language that
+              # the hook runner builds.
+              pkgs.nixfmt
+              pkgs.statix
               pkgs.jq
               # The changelog test renders the landed cliff.toml seeds through
               # the git-cliff the release pipelines install: the same release
@@ -224,6 +224,6 @@
         }
       );
 
-      formatter = eachSystem (pkgs: pkgs.nixfmt-rfc-style);
+      formatter = eachSystem (pkgs: pkgs.nixfmt);
     };
 }

@@ -10,6 +10,7 @@ fmt:
 # — the same again for the nix opt-in — then assert the published crate
 # carries every distribution root and the landed seed actually builds.
 build:
+    exobrain host-check git nix
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; \
     cargo run -q -- init --technology rust --forge github --repo acme/widget --target "$d" --apply >/dev/null; \
     test -f "$d/release-plz.toml"; test -f "$d/.release-kit/manifest.json"; test -f "$d/.release-kit/config.toml"; \
@@ -44,8 +45,10 @@ build:
 # rk release that the devshell pins. The hooks that test the tree build it
 # themselves: cargo test, and just build through cargo run. Loading the
 # configuration for the manual run is what refuses an invalid hook
-# configuration, so no separate validate step remains.
+# configuration, so no separate validate step remains. The sweep runs
+# every hook, so it first checks every tool of host-requirements.toml.
 check:
+    exobrain host-check
     prek run --hook-stage manual --all-files
 
 # Remove the skill copies an earlier release installed under the home. Every
