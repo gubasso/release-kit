@@ -107,7 +107,7 @@ That is the mode's whole saving and its whole cost.
 `rk integrate <branch>` performs the transaction, and it is the only path that writes a local trunk commit. In order, it does these things:
 
 1. It resolves the branch and its seat.
-2. It refuses a dirty seat and a branch off the grammar.
+2. It refuses a dirty seat, a branch off the grammar, and a squash message that the clone's `commit-msg` hook refuses.
 3. It refreshes the trunk, and brings the branch onto that tip.
 4. It runs the clone's `pre-merge-commit` hook on the staged squash.
 5. It observes the branch again.
@@ -121,13 +121,13 @@ Git offers no compare-and-swap for a checked-out branch that also moves its work
 
 A refresh of a held trunk before the gate can complete and stay unconfirmed. That refuses the integration, and the command says that it refreshed the trunk to its remote tip.
 
-Under `rebase`, the command builds no commit. Its rebase flattens every merge and moves no other branch, whatever the Git configuration asks. The published range holds no merge commit, and the command reads it back before it publishes. It judges the message of every commit between the trunk and the branch tip. It stages evidence that names the branch tip, and moves the trunk to that tip by the same publication. The trunk then carries the same commits as the branch, in order. The command refuses `-m` under `rebase`, because every commit keeps its own message.
+Under `rebase`, the command builds no commit. Its rebase flattens every merge and moves no other branch, whatever the Git configuration asks. The published range holds no merge commit, and the command reads it back before it publishes. It judges the message of every commit between the trunk and the branch tip, and runs no `commit-msg` hook on them. Each commit passed the hooks of its seat when it was made, and a rule that the project added later binds no earlier commit. It stages evidence that names the branch tip, and moves the trunk to that tip by the same publication. The trunk then carries the same commits as the branch, in order. The command refuses `-m` under `rebase`, because every commit keeps its own message.
 
 The command undoes nothing, because nothing is published early. A trunk that moved under the gate refuses with no ref touched. So does a trunk whose holder changed. Evidence that names a commit the trunk does not reach proves nothing. So a refusal at the last step leaves inert residue, not a false proof.
 
-The command holds two things that a forge would hold for it. First, every message it publishes passes the whole landed `commit-msg` judgment here, because the command that moves the trunk fires no hook. So a message with agent attribution, or with a reference to an ignored path, refuses at the desk before it reaches a permanent history. Second, the command observes the branch before the gate and again after it. The integrated tree and the tip that the evidence certifies are the one object that the gate judged. So a commit that lands in the seat during the transaction refuses. It neither rides in ungated nor leaves evidence for work that the trunk does not carry. A hook that commits or stages a change in the seat also refuses, and the seat stays as the hook left it. [Recovery](./04-recovery.md) gives the repair.
+The command holds two things that a forge would hold for it. First, every message it publishes passes the whole landed `commit-msg` judgment here, because the command that moves the trunk fires no hook. So a message with agent attribution, or with a reference to an ignored path, refuses at the desk before it reaches a permanent history. The squash message is the one trunk message that no `commit-msg` hook saw. So under `squash` the command also writes it to a file and asks git to run the clone's own `commit-msg` hook on it, before it refreshes the trunk. A project that holds its length limits in that hook gets them judged on the squash title too. A clone with no such hook passes. A hook that refuses or rewrites the message refuses the integration, and nothing moves. Second, the command observes the branch before the gate and again after it. The integrated tree and the tip that the evidence certifies are the one object that the gate judged. So a commit that lands in the seat during the transaction refuses. It neither rides in ungated nor leaves evidence for work that the trunk does not carry. A hook that commits or stages a change in the seat also refuses, and the seat stays as the hook left it. [Recovery](./04-recovery.md) gives the repair.
 
-The command never pushes. A preview refreshes nothing. It does none of these:
+The command never pushes. A preview refreshes nothing, and it runs no hook. It does none of these:
 
 - It takes a lock.
 - It runs a fetch.

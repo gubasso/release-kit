@@ -19,7 +19,8 @@ pub struct IntegrateArgs {
 
     /// The trunk commit's message. A local integration writes it as the
     /// squash commit, so it must be a Conventional Commit the landed
-    /// guards admit, scoped wherever the record names a release. Required
+    /// guards admit, scoped wherever the record names a release, and one
+    /// the clone's own commit-msg hook accepts, where it installs one. Required
     /// for a local integration under the squash merge form, and refused
     /// under rebase, where every commit of the branch keeps its own
     /// message.

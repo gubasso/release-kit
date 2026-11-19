@@ -43,13 +43,15 @@ The full branch suite is the `pre-push` stage. git fires it on the push of step 
 
 On local:
 
+Run `rk integrate` from the branch's seat, in the seat's environment, with `--target <main checkout>`. The gate and the `commit-msg` hook both run in the caller's environment, so they find the tools of the seat's environment there.
+
 ```bash
-rk integrate <type>/<slug>                               # preview: names the rebase, the gate, and the squash
-rk integrate <type>/<slug> -m "<type>(<scope>): <subject>" --apply
+rk integrate <type>/<slug> --target ../<project>         # preview: names the commit-msg hook, the rebase, the gate, and the squash
+rk integrate <type>/<slug> -m "<type>(<scope>): <subject>" --target ../<project> --apply
 # check: the report names the trunk's new commit and records the integration
 ```
 
-The message becomes the trunk's commit message. So it is a Conventional Commit, with a scope wherever the record names a release. Under `release.mode = "none"`, the scope is preferred and not required, because no changelog reads it. `git commit-tree` fires no hook. So `rk integrate` holds the message to the same convention as the landed `commit-msg` stage. Every refusal leaves the trunk at the tip it started from. The rebase form takes no message. Section 3b covers it.
+The message becomes the trunk's commit message. So it is a Conventional Commit, with a scope wherever the record names a release. Under `release.mode = "none"`, the scope is preferred and not required, because no changelog reads it. `git commit-tree` fires no hook. So `rk integrate` holds the message to the same convention as the landed `commit-msg` stage. It also writes the message to a file and asks git to run the clone's own `commit-msg` hook on it, before anything moves. A project that holds its line lengths in that hook gets them judged on the squash message. A clone with no `commit-msg` hook skips this step. Every refusal leaves the trunk at the tip it started from. The rebase form takes no message. Section 3b covers it.
 
 On forge:
 
@@ -78,6 +80,8 @@ Where the move started elsewhere, the range runs from the observed tip to that s
 | a branch off the grammar     | rename the branch to `<type>/<slug>` or the forge-minted form      |
 | a diverged trunk             | fast-forward the trunk, or push it, then re-run                    |
 | a rebase conflict            | resolve it in the seat, commit, then re-run                        |
+| the commit-msg hook          | fix the line that the refusal names in `-m`, then re-run           |
+| a rewritten squash message   | give the message that the hook wants with `-m`, then re-run        |
 | the pre-merge-commit hook    | fix what the hook reported, commit, then re-run                    |
 | no pre-merge-commit hook     | install it with the project's hook manager, then re-run            |
 | a hook that committed        | keep its commit, the repair, `git reset -q --hard`, a clean status |
@@ -96,13 +100,13 @@ The repair is `git -C <seat> symbolic-ref HEAD refs/heads/<branch>`. It leaves a
 Under `git.merge_form = "rebase"`, the local integration takes no message:
 
 ```bash
-rk integrate <type>/<slug>                               # preview: names the rebase, the gate, and each commit it judges
-rk integrate <type>/<slug> --apply
+rk integrate <type>/<slug> --target ../<project>         # preview: names the rebase, the gate, and each commit it judges
+rk integrate <type>/<slug> --target ../<project> --apply
 # check: the report names the branch tip as the trunk's new commit; no new commit was written, and none is a merge commit
 # exit 73 with the reason merge-form-mismatch: a -m was given; drop it
 ```
 
-Every commit between the trunk and the branch tip becomes a trunk commit. So `rk integrate` judges each message by the landed `commit-msg` judgment before it moves anything. It names the first commit it refuses. Its rebase flattens every merge and moves no other branch, whatever the clone's Git configuration asks. A range that still holds a merge commit refuses, with the trunk unmoved. The trunk then carries the same commits as the branch, in order. At the forge, the request command asks for no squash. A commit gate judges every commit of the request on each push, in place of the title gate.
+Every commit between the trunk and the branch tip becomes a trunk commit. So `rk integrate` judges each message by the landed `commit-msg` judgment before it moves anything. It names the first commit it refuses. It runs no `commit-msg` hook on these commits, because each one passed the hooks of its seat when it was made. Its rebase flattens every merge and moves no other branch, whatever the clone's Git configuration asks. A range that still holds a merge commit refuses, with the trunk unmoved. The trunk then carries the same commits as the branch, in order. At the forge, the request command asks for no squash. A commit gate judges every commit of the request on each push, in place of the title gate.
 
 ## 4. Push the trunk and prune
 

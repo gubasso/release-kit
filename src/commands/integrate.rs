@@ -19,10 +19,17 @@
 //! every commit of the branch reaches the trunk with its own message, and
 //! each of those messages is judged first.
 //!
+//! The squash message is the one trunk message that no commit-msg hook
+//! saw, so the squash form also runs the clone's own `commit-msg` hook on
+//! it, through git, before anything moves. The rebase form runs none:
+//! each of its commits already passed the hooks of its seat.
+//!
 //! SATISFIES git:a-local-integration-is-a-transaction
 //! SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 //! SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
 //! SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+
+use std::fmt::Write as _;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
@@ -447,6 +454,10 @@ fn preview(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(), 
         true,
     );
     steps.push("no fetch and no lock: a preview refreshes nothing".to_owned());
+    steps.push(
+        "would run the commit-msg hook on the squash message, where the clone installs one"
+            .to_owned(),
+    );
     steps.push(format!(
         "would rebase {} onto {}, or onto whatever the fetch brings",
         args.branch,
@@ -493,6 +504,15 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
     // after the squash is published.
     let ledger_path = run.git_dir.join(integrate::LEDGER_PATH);
     let mut ledger = read_ledger(&ledger_path)?;
+
+    // The squash message is the one trunk message that no commit-msg hook
+    // saw, because `git commit-tree` fires none. The clone's own hook
+    // judges it here, before anything moves, so a refusal leaves the
+    // trunk, the branch, and the seat exactly where they stood.
+    message_hook(out, run, message)?;
+    steps.push(
+        "the commit-msg hook, where the clone installs one, passed the squash message".to_owned(),
+    );
 
     refresh_trunk(run, &mut steps)?;
 
@@ -1729,6 +1749,147 @@ impl Drop for SeatHead<'_> {
     }
 }
 
+/// The hook event that judges a commit message.
+const MESSAGE_HOOK: &str = "commit-msg";
+
+/// Where the squash message waits for the commit-msg hook, under the
+/// common git directory, beside the evidence ledger. The integration lock
+/// covers that directory, so no second run writes the same file.
+const MESSAGE_PATH: &str = "rk/SQUASH_EDITMSG";
+
+/// Run the clone's `commit-msg` hook on the squash message, the way
+/// `git commit` runs it on a message it is about to write.
+///
+/// The message goes to a file under the common git directory, and git
+/// runs the hook in the seat with that file as its one argument, through
+/// `git hook run --ignore-missing`. A clone with no commit-msg hook
+/// passes, as it did before this step. Like [`gate`], rk names no hook
+/// runner and reads no hook configuration: git runs whatever the project
+/// installed. A hook that rewrites the file refuses, because the message
+/// that reaches the trunk is the message the operator gave and rk judged.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+fn message_hook(out: Output, run: &LocalRun<'_>, message: &str) -> Result<(), RkError> {
+    let path = run.git_dir.join(MESSAGE_PATH);
+    let mut text = message.to_owned();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &text)?;
+    let mut command = std::process::Command::new(crate::probes::git_bin());
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let ran = command
+        .arg("-C")
+        .arg(run.seat.as_std_path())
+        .args(["hook", "run", "--ignore-missing", MESSAGE_HOOK, "--"])
+        .arg(path.as_std_path())
+        .stdin(std::process::Stdio::null())
+        .output();
+    let after = std::fs::read_to_string(&path);
+    let _ = std::fs::remove_file(&path);
+    let ran = ran.map_err(|source| {
+        RkError::subprocess(
+            Diagnostic::new(
+                Reason::SubprocessSpawn,
+                format!("git did not run in {}: {source}", run.seat),
+            )
+            .target_state("unchanged; the trunk stands where it stood"),
+        )
+    })?;
+    let untouched = "unchanged; the trunk, the branch, and the seat stand where they stood";
+    if !ran.status.success() {
+        out.child_passthrough(crate::events::ChildStream::Stderr, &ran.stderr);
+        out.child_passthrough(crate::events::ChildStream::Stdout, &ran.stdout);
+        let said = hook_findings(&ran, path.as_str());
+        let mut detail = format!(
+            "the commit-msg hook in {} refused the squash message, so nothing reached {}",
+            run.seat, run.trunk
+        );
+        for (line, length, limit) in over_length(message, &said) {
+            let _ = write!(
+                detail,
+                "; line {line} is {length} characters, over the limit of {limit}"
+            );
+        }
+        if !said.is_empty() {
+            detail.push_str(": ");
+            detail.push_str(&said.join("; "));
+        }
+        return Err(RkError::refusal(
+            Diagnostic::new(Reason::Usage, detail)
+                .expected("a squash message that the clone's commit-msg hook accepts")
+                .action("retype the message given with -m, then integrate again")
+                .target_state(untouched),
+        ));
+    }
+    match after {
+        Ok(after) if after == text => Ok(()),
+        _ => Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::Usage,
+                format!(
+                    "the commit-msg hook in {} rewrote the squash message, so the message it passed is not the one rk judged, and nothing reached {}",
+                    run.seat, run.trunk
+                ),
+            )
+            .expected("a commit-msg hook that judges the message and changes nothing")
+            .action("give the message the hook wants with -m, then integrate again")
+            .target_state(untouched),
+        )),
+    }
+}
+
+/// The lines a refusing hook printed, with the message file named as the
+/// squash message, so a refusal reads the same under `--json`.
+fn hook_findings(ran: &std::process::Output, path: &str) -> Vec<String> {
+    let stderr = String::from_utf8_lossy(&ran.stderr);
+    let stdout = String::from_utf8_lossy(&ran.stdout);
+    stderr
+        .lines()
+        .chain(stdout.lines())
+        .map(|line| line.replace(path, "the squash message").trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// The lines of `message` whose length a hook's output names, with that
+/// length and the limit it names: `(line number, length, limit)`. A line
+/// of the form `N exceeds the max length of M`, which the `committed`
+/// hook prints, carries both numbers. A hook whose output names neither
+/// yields nothing, and the refusal relays its output alone.
+fn over_length(message: &str, said: &[String]) -> Vec<(usize, usize, usize)> {
+    const MARK: &str = " exceeds the max length of ";
+    let mut found = Vec::new();
+    for line in said {
+        let Some(at) = line.find(MARK) else {
+            continue;
+        };
+        let length = line[..at]
+            .rsplit(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|digits| digits.parse::<usize>().ok());
+        let limit = line[at + MARK.len()..]
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|digits| digits.parse::<usize>().ok());
+        let (Some(length), Some(limit)) = (length, limit) else {
+            continue;
+        };
+        for (index, text) in message.lines().enumerate() {
+            let entry = (index + 1, length, limit);
+            if text.chars().count() == length && !found.contains(&entry) {
+                found.push(entry);
+            }
+        }
+    }
+    found
+}
+
 /// Judge what the gate answered: `Ok` where the hook passed, and the
 /// refusal that names what stopped it otherwise.
 fn judge_gate(out: Output, run: &LocalRun<'_>, branch: &str, gate: Gate) -> Result<(), RkError> {
@@ -1898,7 +2059,10 @@ const TYPES: [&str; 11] = [
 /// `rk message --check` reports — agent attribution, a reference to a
 /// path the target ignores, and a scope outside the title check's shape.
 /// A message that reaches the trunk here reaches a permanent history and
-/// a forge-facing changelog, so the two paths judge one set.
+/// a forge-facing changelog, so the two paths judge one set. The landed
+/// set holds no length rule. A project that keeps one in its own
+/// commit-msg hook has it judged on the squash message by
+/// [`message_hook`], which runs whatever hook the clone installs.
 ///
 /// # Errors
 ///

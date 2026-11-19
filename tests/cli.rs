@@ -39921,6 +39921,187 @@ fn the_gate_refuses_when_no_hook_is_installed() {
     assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
 }
 
+/// Install a `commit-msg` hook in a fixture repository whose gate hook is
+/// already installed: a script whose body is `body`, beside the gate hook
+/// in the hooks directory the repository's own configuration names.
+fn install_message_hook(at: &Path, body: &str) {
+    let common = PathBuf::from(git_out(
+        at,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ));
+    let hook = common.join("rk-test-hooks").join("commit-msg");
+    std::fs::write(&hook, format!("#!/bin/sh\nset -eu\n{body}\n")).expect("the hook writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("the hook is executable");
+    }
+}
+
+/// A stand-in for the `committed` hook under a `committed.toml` that sets
+/// `subject_length` and `line_length` to 72. It prints what `committed`
+/// prints, and, as `committed` does, it lets one trailing word run a line
+/// past the limit.
+const COMMITTED_72: &str = r#"awk -v f="$1" '
+{ rest = $0; sub(/ [^ ]*$/, "", rest) }
+NR == 1 && length(rest) > 72 { print f ": error Commit subject is too long, " length($0) " exceeds the max length of 72"; bad = 1 }
+length(rest) > 72 { print f ": error Line is too long, " length($0) " exceeds the max length of 72"; bad = 1 }
+END { exit bad }
+' "$1""#;
+
+/// A squash title of 81 characters, over a limit of 72 by more than one
+/// trailing word.
+const LONG_TITLE: &str =
+    "feat(greeting): add the greeting file that every visitor reads when the app opens";
+
+/// A squash title over the limit of the clone's commit-msg hook refuses,
+/// names the line, its length, and the limit, and leaves the trunk, the
+/// branch, and the seat exactly where they stood.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_message_hook_refuses_a_squash_title_over_the_limit() {
+    assert_eq!(LONG_TITLE.len(), 81);
+    let (_parent, repo) = integrate_fixture();
+    install_message_hook(&repo, COMMITTED_72);
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
+    let output = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply", "--json"])
+        .args(["-m", LONG_TITLE, "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .get_output()
+        .clone();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("stderr is one JSON diagnostic");
+    let message = diagnostic["message"].as_str().expect("a message");
+    assert!(message.contains("commit-msg hook"), "{message}");
+    assert!(
+        message.contains("line 1 is 81 characters, over the limit of 72"),
+        "{message}"
+    );
+    assert!(
+        message.contains("the squash message: error Commit subject is too long"),
+        "{message}"
+    );
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert_eq!(rev_parse(&repo, "feat/greeting"), tip, "no rebase ran");
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+    assert!(!repo.join(".git/rk/SQUASH_EDITMSG").exists());
+    assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
+}
+
+/// The same title passes in a clone that installs no commit-msg hook, as
+/// it did before the hook ran: the step finds nothing to run.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_message_hook_is_absent_and_the_title_passes() {
+    let (_parent, repo) = integrate_fixture();
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", LONG_TITLE, "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%s", "master"]),
+        LONG_TITLE
+    );
+}
+
+/// A body line over the limit refuses and names its line. A body line
+/// that one trailing word carries over the limit passes, as `committed`
+/// allows, and the hook judged the very message that reaches the trunk.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_message_hook_judges_the_body_lines() {
+    let long_line =
+        "The greeting reads the same in every locale that the app supports for all the users";
+    assert_eq!(long_line.len(), 83);
+    let (_parent, repo) = integrate_fixture();
+    install_message_hook(&repo, COMMITTED_72);
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", &format!("feat(greeting): add it\n\n{long_line}")])
+        .arg("--target")
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(
+            "line 3 is 83 characters, over the limit of 72",
+        ));
+    assert_eq!(rev_parse(&repo, "master"), before);
+
+    let (parent, repo) = integrate_fixture();
+    let log = parent.path().join("message.log");
+    install_message_hook(
+        &repo,
+        &format!("{COMMITTED_72}\ncp \"$1\" '{}'", log.display()),
+    );
+    let message = "feat(greeting): add it\n\nThe greeting reads the same in every locale that the app supports at https://example.com/locales";
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", message, "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("passed the squash message"));
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("the hook ran"),
+        format!("{message}\n"),
+        "the hook read the squash message"
+    );
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%B", "master"]),
+        message
+    );
+    assert!(!repo.join(".git/rk/SQUASH_EDITMSG").exists());
+}
+
+/// A commit-msg hook that rewrites the message refuses: the message that
+/// reaches the trunk is the one the operator gave and rk judged.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_message_hook_that_rewrites_the_message_is_refused() {
+    let (_parent, repo) = integrate_fixture();
+    install_message_hook(&repo, "echo 'Signed-off-by: someone' >> \"$1\"");
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("rewrote the squash message"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
+}
+
+/// The preview names the commit-msg step and runs no hook.
+#[test]
+fn the_message_hook_is_named_by_the_preview_and_not_run() {
+    let (parent, repo) = integrate_fixture();
+    let log = parent.path().join("message.log");
+    install_message_hook(&repo, &format!("echo ran >> '{}'\nexit 1", log.display()));
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "would run the commit-msg hook on the squash message",
+        ));
+    assert!(!log.exists(), "the preview ran no hook");
+}
+
 /// The hook sees the squash as the staged change: every file the branch
 /// changed against the trunk, across all of its commits, and no other.
 ///
@@ -45070,6 +45251,25 @@ fn rebase_integrate_refuses_a_commit_message_the_judgment_refuses() {
         .code(73)
         .stderr(predicate::str::contains("Conventional Commit"));
     assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// The rebase form runs no commit-msg hook on its branch commits: each
+/// already passed the hooks of its seat, and a rule that a project added
+/// later binds no commit made before it.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_runs_no_commit_msg_hook() {
+    let (parent, repo) = rebase_fixture(&[LONG_TITLE]);
+    let log = parent.path().join("message.log");
+    install_message_hook(
+        &repo,
+        &format!("echo ran >> '{}'\n{COMMITTED_72}", log.display()),
+    );
+    let tip = rev_parse(&repo, "feat/greeting");
+    let report = rebase_integrate_apply(&repo);
+    assert_eq!(report["trunk_commit"], tip, "{report}");
+    assert!(!log.exists(), "no commit-msg hook ran");
 }
 
 /// A hook that stages a change in the seat refuses under the rebase form:
