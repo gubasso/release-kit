@@ -72,6 +72,15 @@ ureq = { version = "=3.5.2", default-features = false, features = ["rustls-no-pr
 yaml_serde = "0.10"
 zeroize = "1.9.0"
 
+# Line tables for this crate keep the file and line of each backtrace frame;
+# the dependencies carry no debug information. A debugger session overrides
+# both for one command with --config.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

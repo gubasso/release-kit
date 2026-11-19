@@ -46,9 +46,12 @@ build:
 # themselves: cargo test, and just build through cargo run. Loading the
 # configuration for the manual run is what refuses an invalid hook
 # configuration, so no separate validate step remains. The sweep runs
-# every hook, so it first checks every tool of host-requirements.toml.
+# every hook, so it first checks the tools of host-requirements.toml that
+# the hooks call. It names them rather than checking the whole file,
+# because kache serves only the direnv shell: CI runs this recipe in the
+# devshell without direnv and has no kache.
 check:
-    exobrain host-check
+    exobrain host-check exobrain git nix prek
     prek run --hook-stage manual --all-files
 
 # Remove the skill copies an earlier release installed under the home. Every

@@ -5,6 +5,10 @@ version = ">=1.2.0"
 
 [tools.git]
 
+# The compile cache that .envrc routes rustc through. The host configuration
+# installs one kache and owns its version, so this entry checks presence only.
+[tools.kache]
+
 [tools.nix]
 
 [tools.prek]
