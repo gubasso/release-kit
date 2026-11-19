@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3](https://github.com/gubasso/release-kit/compare/v0.10.2...v0.10.3) - 2026-11-19
+
+### Added
+
+- *(landing/hooks)* group the guards CI cannot run
+- *(integrate)* run the commit-msg hook on the squash
+
+### Other
+
+- *(cargo)* build through kache with a lean dev profile
+- *(hooks)* adopt the exobrain-tech v1.2.0 hook sets
+
 ## [0.10.2](https://github.com/gubasso/release-kit/compare/v0.10.1...v0.10.2) - 2026-11-17
 
 ### Fixed
