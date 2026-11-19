@@ -41,14 +41,11 @@
     # release. The empty string points it at this flake, so a pin move does
     # not nest the older release in flake.lock, one node per release.
     release-kit = {
-      url = "github:gubasso/release-kit/v0.10.1";
+      url = "github:gubasso/release-kit/v0.10.3";
       inputs.release-kit.follows = "";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rust-overlay.follows = "rust-overlay";
       inputs.spec-driven-docs.follows = "spec-driven-docs";
-      # Its store guard serves only its own devShell, and the host supplies
-      # exobrain here, so flake.lock nests no exobrain-tech.
-      inputs.exobrain-tech.follows = "";
     };
   };
 

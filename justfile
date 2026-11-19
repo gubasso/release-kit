@@ -49,10 +49,12 @@ build:
 # every hook, so it first checks the tools of host-requirements.toml that
 # the hooks call. It names them rather than checking the whole file,
 # because kache serves only the direnv shell: CI runs this recipe in the
-# devshell without direnv and has no kache.
-check:
+# devshell without direnv and has no kache. With no argument the sweep
+# is the whole manual stage. CI passes --no-group local-only, so it runs
+# the same line without the hooks that a CI checkout cannot run.
+check *filter:
     exobrain host-check exobrain git nix prek
-    prek run --hook-stage manual --all-files
+    prek run --stage manual --all-files {{filter}}
 
 # Remove the skill copies an earlier release installed under the home. Every
 # landing now carries the skills, so the home keeps none.

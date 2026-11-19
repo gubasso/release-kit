@@ -66,15 +66,14 @@ jobs:
       # construction rather than by anyone remembering to add a check
       # twice.
       #
-      # rk-worktree-location is the one check classified `local-only`, and
-      # this is where that classification is expressed. CI checks out
-      # detached in a plain clone, which the guard refuses by design.
-      # Under local integration the guard that refuses a trunk commit is
-      # not in the block at all, so nothing else is skipped and every
-      # other hook still runs.
-      - run: nix develop --command just check
-        env:
-          SKIP: rk-worktree-location
+      # A hook that this job cannot run carries groups: [local-only] in
+      # .pre-commit-config.yaml, with its reason above it, and the step
+      # leaves that group out. rk-worktree-location is in it because CI
+      # checks out detached in a plain clone, which the guard refuses by
+      # design. lychee-system and the trunk guard no-commit-to-branch are
+      # in the group too, each with its own reason, but neither runs at
+      # the manual stage. Every other hook still runs, and no SKIP is set.
+      - run: nix develop --command just check --no-group local-only
 
   # The release configuration proves itself here, not in release.yml.
   # pr-run-mode is skip, so the generated workflow is tag-only and reports

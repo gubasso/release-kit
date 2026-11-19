@@ -18,7 +18,6 @@
     },
     "release-kit": {
       "inputs": {
-        "exobrain-tech": [],
         "nixpkgs": [
           "nixpkgs"
         ],
@@ -31,16 +30,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1794766942,
-        "narHash": "sha256-0XQcW69jCO5jiX4H9l/rPeff3r6Ik95Edzh7hznHwy8=",
+        "lastModified": 1795113456,
+        "narHash": "sha256-ZJXudoxn2c2xDtAV052xruY2RwY4p4DoTbj5ocCNqW8=",
         "owner": "gubasso",
         "repo": "release-kit",
-        "rev": "20ffd0ad359ed192dc12998c9595c5f2caf782bb",
+        "rev": "ddd71230727c68b427682919ef6e936bc4ad2557",
         "type": "github"
       },
       "original": {
         "owner": "gubasso",
-        "ref": "v0.10.1",
+        "ref": "v0.10.3",
         "repo": "release-kit",
         "type": "github"
       }
