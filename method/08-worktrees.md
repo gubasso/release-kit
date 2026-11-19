@@ -83,7 +83,7 @@ A branch that must keep committing before it merges is guarded either way, becau
 
 ## The escape and its cost
 
-`--no-verify` defeats every desk-level mirror, and the forge cannot see local topology. The guard of the linked-worktree mode is honest about both. Its one named escape is the sweep. A CI checkout is commonly detached on the main worktree. So the sweep of a linked-worktree target with its hook manager sets `SKIP=no-commit-to-branch,rk-worktree-location` in its environment. The same escape serves deliberate surgery on the main checkout. This chapter states it once, here.
+`--no-verify` defeats every desk-level mirror, and the forge cannot see local topology. The guard of the linked-worktree mode is honest about both. Its one named escape is the CI run. A CI checkout is commonly detached on the main worktree, or on the trunk after a push. So the landed block puts `no-commit-to-branch` and `rk-worktree-location` in the `local-only` group, and CI runs each stage with `--no-group local-only`. Deliberate surgery on the main checkout is a one-time run, and that run alone sets `SKIP` for the two hooks. This chapter states it once, here.
 
 ## What a worktree does not isolate
 

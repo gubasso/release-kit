@@ -1154,8 +1154,8 @@ mod tests {
         assert!(err.contains("unmatched"), "{err}");
     }
 
-    /// Both modes of both blocks: the guard entry and the skip pair exist
-    /// exactly in the worktree mode, one orientation line differs in the
+    /// Both modes of both blocks: the guard entry exists exactly in the
+    /// worktree mode, one orientation line differs in the
     /// routing block, the rest is byte-identical, no mode token survives
     /// substitution, and the rendered grammar is [`BRANCH_GRAMMAR`], the
     /// one owner.
@@ -1164,18 +1164,12 @@ mod tests {
         let worktree_hooks = hooks_block(CheckoutMode::LinkedWorktree);
         let branches_hooks = hooks_block(CheckoutMode::MainWorktree);
         assert!(worktree_hooks.contains("- id: rk-worktree-location"));
-        assert!(
-            worktree_hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
-            "{worktree_hooks}"
-        );
         assert!(!branches_hooks.contains("rk-worktree-location"));
-        assert!(branches_hooks.contains("SKIP=no-commit-to-branch in"));
         for block in [&worktree_hooks, &branches_hooks] {
             assert!(block.contains(BRANCH_GRAMMAR), "the grammar has one owner");
             for token in [
                 "RK_BRANCH_GRAMMAR",
-                "RK_SWEEP_SKIP",
-                "RK_SWEEP_NOTE",
+                "RK_CI_NOTE",
                 "RK_WORKTREE_GUARD",
                 "RK_TRUNK_COMMIT_GUARD",
                 "RK_TRUNK_PUSH_GUARD",
@@ -1506,14 +1500,15 @@ mod tests {
                 ] {
                     assert!(!block.contains(gone), "{gone}: {block}");
                 }
-                assert!(block.contains("A CI sweep needs no SKIP here"), "{block}");
+                assert!(block.contains("--no-group local-only"), "{block}");
+                assert!(!block.contains("\n        groups:"), "{block}");
                 for token in [
                     "RK_MESSAGE_GUARDS",
                     "RK_BRANCH_NAME_GUARD",
                     "RK_WORKTREE_GUARD",
                     "RK_TRUNK_COMMIT_GUARD",
                     "RK_TRUNK_PUSH_GUARD",
-                    "RK_SWEEP_NOTE",
+                    "RK_CI_NOTE",
                 ] {
                     assert!(!block.contains(token), "{token} survived: {block}");
                 }
@@ -1617,61 +1612,92 @@ mod tests {
                     assert!(!block.contains(gone), "{gone}: {block}");
                 }
             }
-            for token in [
-                "RK_TRUNK_COMMIT_GUARD",
-                "RK_TRUNK_PUSH_GUARD",
-                "RK_SWEEP_NOTE",
-            ] {
+            for token in ["RK_TRUNK_COMMIT_GUARD", "RK_TRUNK_PUSH_GUARD", "RK_CI_NOTE"] {
                 assert!(!local.contains(token), "{token} survived: {local}");
                 assert!(!forge.contains(token), "{token} survived: {forge}");
             }
         }
-        // The sweep note names exactly the hooks a trunk checkout meets:
-        // the trunk guard under either integration mode, and the location
-        // guard in the worktree mode.
-        assert!(
-            hooks_block_for(CheckoutMode::LinkedWorktree, Integration::Local)
-                .contains("SKIP=no-commit-to-branch,rk-worktree-location in")
-        );
-        assert!(
-            hooks_block_for(CheckoutMode::MainWorktree, Integration::Local)
-                .contains("SKIP=no-commit-to-branch in")
-        );
-        assert!(
-            unguarded_hooks_block(CheckoutMode::MainWorktree, Integration::Local)
-                .contains("A CI sweep needs no SKIP here")
-        );
+        // The hooks that a CI checkout meets as refusals carry the
+        // local-only group: the trunk guard under either integration
+        // mode, and the location guard in the worktree mode.
+        for integration in [Integration::Forge, Integration::Local] {
+            let worktree = hooks_block_for(CheckoutMode::LinkedWorktree, integration);
+            assert_eq!(
+                grouped_hooks(&worktree),
+                ["no-commit-to-branch", "rk-worktree-location"],
+                "{worktree}"
+            );
+            let branches = hooks_block_for(CheckoutMode::MainWorktree, integration);
+            assert_eq!(
+                grouped_hooks(&branches),
+                ["no-commit-to-branch"],
+                "{branches}"
+            );
+        }
     }
 
-    /// Both sweep notes invite the project to name its own local-only
-    /// checks, so the pairing that starts empty still teaches the
-    /// mechanism rather than only the one that starts full.
+    /// The id of every hook in a rendered block that carries
+    /// `groups: [local-only]`, in block order.
+    fn grouped_hooks(block: &str) -> Vec<String> {
+        let mut grouped = Vec::new();
+        let mut current = None;
+        for line in block.lines() {
+            let line = line.trim_start();
+            if let Some(id) = line.strip_prefix("- id: ") {
+                current = Some(id.to_owned());
+            } else if line == "groups: [local-only]" {
+                grouped.extend(current.take());
+            }
+        }
+        grouped
+    }
+
+    /// Every shape of the hook block teaches the group filter, never a
+    /// `SKIP` value: CI runs each stage with the local-only group left
+    /// out and runs the ci-only group at the manual stage, and the
+    /// project marks its own hooks with the same groups. Each grouped
+    /// hook states its reason in the comment above it.
     ///
     /// SATISFIES git:a-check-declares-where-it-runs
     #[test]
-    fn a_landed_sweep_note_invites_the_projects_own_skips() {
-        let with_skip = hooks_block_for(CheckoutMode::LinkedWorktree, Integration::Local);
-        assert!(
-            with_skip.contains("SKIP=no-commit-to-branch,rk-worktree-location in"),
-            "{with_skip}"
-        );
-        assert!(with_skip.contains("local-only"), "{with_skip}");
-        assert!(
-            with_skip
-                .contains("a job running the project's hook manager\n# against a trunk checkout"),
-            "{with_skip}"
-        );
-        assert!(
-            with_skip.contains("value is a list the project owns"),
-            "{with_skip}"
-        );
-
-        let without = unguarded_hooks_block(CheckoutMode::MainWorktree, Integration::Local);
-        assert!(
-            without.contains("A CI sweep needs no SKIP here"),
-            "{without}"
-        );
-        assert!(without.contains("local-only"), "{without}");
+    fn a_landed_ci_note_teaches_the_group_filter_and_never_skip() {
+        for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
+            for integration in [Integration::Forge, Integration::Local] {
+                for block in [
+                    hooks_block_for(mode, integration),
+                    unguarded_hooks_block(mode, integration),
+                ] {
+                    assert!(!block.contains("SKIP="), "{block}");
+                    for step in [
+                        "#   prek run --all-files --stage pre-commit --no-group local-only\n",
+                        "#   prek run --all-files --stage pre-push --no-group local-only\n",
+                        "#   prek run --all-files --stage manual --group ci-only\n",
+                    ] {
+                        assert!(block.contains(step), "{step}: {block}");
+                    }
+                    assert!(
+                        block.contains("Mark each hook of this project the same way."),
+                        "{block}"
+                    );
+                    let lines: Vec<&str> = block.lines().collect();
+                    for (at, line) in lines.iter().enumerate() {
+                        if line.trim_start() != "groups: [local-only]" {
+                            continue;
+                        }
+                        let id = lines[..at]
+                            .iter()
+                            .rposition(|line| line.trim_start().starts_with("- id: "))
+                            .expect("a group belongs to a hook");
+                        let reason = lines[..id]
+                            .iter()
+                            .rev()
+                            .take_while(|line| line.trim_start().starts_with('#'))
+                            .any(|line| line.trim_start().starts_with("# local-only: "));
+                        assert!(reason, "no reason above {}: {block}", lines[id]);
+                    }
+                }
+            }
+        }
     }
 
     /// The pre-integrate note teaches the stage assignment and the scope

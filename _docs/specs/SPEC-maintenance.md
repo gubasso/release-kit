@@ -114,7 +114,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:worktree-mode-guards-the-main-checkout` — Worktree mode guards the main checkout
 
-Where the target selects the workflow guards, in the worktree mode the landed hook block MUST refuse every commit in the main checkout, detached HEAD included — the trunk through the trunk guard under either integration mode, everything else through the location guard — and MUST pass every linked worktree by topology; the mirror is desk-level, honest about `--no-verify`, and its one named escape is the sweep-skip pair the block's comment states.
+Where the target selects the workflow guards, in the worktree mode the landed hook block MUST refuse every commit in the main checkout, detached HEAD included — the trunk through the trunk guard under either integration mode, everything else through the location guard — and MUST pass every linked worktree by topology; the mirror is desk-level, honest about `--no-verify`, and its one named escape is the `local-only` group that the block puts both guards in and whose CI filter the block's comment states.
 
 #### Scenario: The main checkout tries a detached commit
 

@@ -81,8 +81,8 @@ The stage says when a check runs. Scope says where it can run at all. Scope come
 | Scope        | What it means                                          | How a project expresses it                              |
 | ------------ | ------------------------------------------------------ | ------------------------------------------------------- |
 | `both`       | the check runs at a desk and in continuous integration | a hook at its native stage, with CI invoking that stage |
-| `local-only` | the check is meaningless in continuous integration     | a hook whose id the CI sweep names in `SKIP`            |
-| `ci-only`    | the check is meaningless at a desk                     | no hook. It names the remote boundary it guards and why |
+| `local-only` | the check is meaningless in continuous integration     | a hook in the `local-only` group, which CI leaves out   |
+| `ci-only`    | the check is meaningless at a desk                     | a `manual` hook in the `ci-only` group, or no hook      |
 
 Most checks are `both`, and that value carries a rule. Such a check must have a local execution path and a remote one of equivalent coverage. The commands do not have to be identical. A desk that runs a suite through a devshell meets the rule, and so does a runner that runs it through a task runner. A check that exists on one side alone and claims `both` does not.
 

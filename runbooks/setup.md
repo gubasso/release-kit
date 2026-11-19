@@ -597,7 +597,7 @@ The operator chooses between it and the landed hook. The choice is never a silen
 
 On an existing configuration, check that the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]`. Under local integration, add `pre-merge-commit` to it. The splice cannot add a top-level key.
 
-Under the workflow guards, the CI of a target can run a sweep with the hook manager of the project. If it does, set the `SKIP` value in the environment of that job. The comment of the block names the value. A CI checkout is commonly detached on the main worktree and commits nothing. So the commit-time guards refuse every trunk checkout that they sweep. That value is a list the project owns the tail of. Append the id of every check that it classifies `local-only`. Have the sweep invoke the same stages that the project assigned. A check then runs on both sides of the boundary, or says why it cannot.
+The CI of a target can run the hooks with prek. If it does, run each stage with its group filter, as the comment of the block shows: `--no-group local-only` at the `pre-commit` and `pre-push` stages, and `--group ci-only` at the `manual` stage. A CI checkout is commonly detached on the main worktree, or on the trunk, and commits nothing. So the commit-time guards of the workflow guards refuse it, and the block puts them in the `local-only` group. Put each hook of the project that CI cannot run in the same group, with its reason in a comment above it. Leave the `ci-only` step out where no hook carries that group. Set no `SKIP` in a CI job. A check then runs on both sides of the boundary, or says why it cannot.
 
 ```bash
 prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --hook-type pre-merge-commit

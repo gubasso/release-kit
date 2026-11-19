@@ -2210,11 +2210,8 @@ pub const PRE_COMMIT_TRUNK_COMMIT_GUARD: &str = "blocks/pre-commit-trunk-commit-
 /// The forge integration mode's guard against a trunk push.
 pub const PRE_COMMIT_TRUNK_PUSH_GUARD: &str = "blocks/pre-commit-trunk-push-guard.yaml.in";
 
-/// The header note naming what a CI sweep skips.
-pub const PRE_COMMIT_SWEEP_SKIP: &str = "blocks/pre-commit-sweep-skip.yaml.in";
-
-/// The header note for the pairing whose sweep skips nothing.
-pub const PRE_COMMIT_SWEEP_NONE: &str = "blocks/pre-commit-sweep-none.yaml.in";
+/// The header note naming the hook groups that select what CI runs.
+pub const PRE_COMMIT_CI_NOTE: &str = "blocks/pre-commit-ci-note.yaml.in";
 
 /// The header note naming the pre-integrate contract.
 pub const PRE_COMMIT_INTEGRATE_NOTE: &str = "blocks/pre-commit-integrate-note.yaml.in";
@@ -2394,18 +2391,7 @@ pub fn compose_hooks(
         .and_then(|hooks| hooks.worktree)
         .map_or_else(String::new, fragment);
     let trunk_guards = workflow.is_some();
-    let mut skips: Vec<&str> = Vec::new();
-    if trunk_guards {
-        skips.push("no-commit-to-branch");
-    }
-    if !worktree.is_empty() {
-        skips.push("rk-worktree-location");
-    }
-    let sweep = if skips.is_empty() {
-        fragment(parts.sweep_none)
-    } else {
-        fragment(&authored(parts.sweep_skip).replacen("RK_SWEEP_SKIP", &skips.join(","), 1))
-    };
+    let ci_note = fragment(parts.ci_note);
     let (commit_guard, push_guard) = match (trunk_guards, parts.integration) {
         (false, _) => (String::new(), String::new()),
         (true, Integration::Forge) => (fragment(parts.trunk_commit), fragment(parts.trunk_push)),
@@ -2438,7 +2424,7 @@ pub fn compose_hooks(
         },
     );
     authored(template)
-        .replacen("RK_SWEEP_NOTE", &format!("{sweep}{note}"), 1)
+        .replacen("RK_CI_NOTE", &format!("{ci_note}{note}"), 1)
         .replacen("RK_MESSAGE_GUARDS", &message, 1)
         .replacen("RK_TRUNK_COMMIT_GUARD", &commit_guard, 1)
         .replacen("RK_BRANCH_NAME_GUARD", &branch_name, 1)
@@ -2474,10 +2460,8 @@ pub struct TrunkGuards<'a> {
     /// The release files the status check watches, as one pattern
     /// fragment.
     pub release_files: &'a str,
-    /// The header note naming what a CI sweep skips.
-    pub sweep_skip: &'a str,
-    /// The header note for the pairing where a sweep skips nothing.
-    pub sweep_none: &'a str,
+    /// The header note naming the hook groups that select what CI runs.
+    pub ci_note: &'a str,
     /// The header note naming the pre-integrate contract.
     pub integrate_note: &'a str,
 }
@@ -2659,8 +2643,7 @@ pub fn hooks_block_of(shape: &BlockShape) -> Result<String, RkError> {
         local_trunk_push: embedded_block(PRE_COMMIT_LOCAL_TRUNK_PUSH_GUARDS)?,
         tag_guard: embedded_block(PRE_COMMIT_TAG_GUARD)?,
         release_files: embedded_block(PRE_COMMIT_STATUS_RELEASE_FILES)?,
-        sweep_skip: embedded_block(PRE_COMMIT_SWEEP_SKIP)?,
-        sweep_none: embedded_block(PRE_COMMIT_SWEEP_NONE)?,
+        ci_note: embedded_block(PRE_COMMIT_CI_NOTE)?,
         integrate_note: embedded_block(PRE_COMMIT_INTEGRATE_NOTE)?,
     };
     Ok(compose_hooks(
@@ -2723,11 +2706,7 @@ fn block_template(destination: &str, params: &Params) -> Result<Option<BlockTemp
                 sources.push(PRE_COMMIT_TAG_GUARD.to_owned());
                 sources.push(PRE_COMMIT_STATUS_RELEASE_FILES.to_owned());
             }
-            sources.push(if guards {
-                PRE_COMMIT_SWEEP_SKIP.to_owned()
-            } else {
-                PRE_COMMIT_SWEEP_NONE.to_owned()
-            });
+            sources.push(PRE_COMMIT_CI_NOTE.to_owned());
             if shape.integration == Integration::Local {
                 sources.push(PRE_COMMIT_INTEGRATE_NOTE.to_owned());
             }

@@ -1,0 +1,11 @@
+# A hook that CI cannot run carries groups: [local-only], with its reason
+# above it, and a hook that only CI runs carries stages: [manual] and
+# groups: [ci-only]. Mark each hook of this project the same way. CI runs
+# each stage with its group filter, through the project's environment, and
+# no committed file sets SKIP. A group filter with no --stage also runs the
+# manual hooks, so each step names its stage:
+#   prek run --all-files --stage pre-commit --no-group local-only
+#   prek run --all-files --stage pre-push --no-group local-only
+#   prek run --all-files --stage manual --group ci-only
+# prek refuses a --group that matches no hook, so leave the third step out
+# where no hook carries ci-only.

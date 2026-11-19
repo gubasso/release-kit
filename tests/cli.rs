@@ -9576,9 +9576,10 @@ fn the_hook_block_splices_and_lands_whole_and_refuses_reposless() {
         assert!(config.contains(hook), "the block carries {hook}");
     }
     assert!(
-        config.contains("SKIP=no-commit-to-branch"),
-        "the block names the CI-sweep skip beside the install command"
+        config.contains("--stage pre-commit --no-group local-only"),
+        "the block names the CI group filter beside the install command"
     );
+    assert!(!config.contains("SKIP="), "{config}");
     assert!(
         !config.contains("default_install_hook_types"),
         "an existing file's top level belongs to the target"
@@ -16592,9 +16593,14 @@ fn init_defaults_to_the_worktree_workflow() {
         "the worktree mode lands the location guard: {hooks}"
     );
     assert!(
-        hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
-        "the sweep comment names the two hooks a trunk checkout meets: {hooks}"
+        hooks.contains("      - id: rk-worktree-location\n        name: rk worktree location\n        groups: [local-only]\n"),
+        "CI leaves the location guard out by its group: {hooks}"
     );
+    assert!(
+        hooks.contains("      - id: no-commit-to-branch\n        groups: [local-only]\n"),
+        "CI leaves the trunk guard out by its group: {hooks}"
+    );
+    assert!(!hooks.contains("SKIP="), "{hooks}");
     assert!(
         hooks.contains("- id: no-commit-to-branch"),
         "rk integrate moves the trunk with no commit hook, so a hand commit there refuses: {hooks}"
@@ -39014,9 +39020,9 @@ fn the_checkout_mode_rename_reaches_no_landed_byte() {
             "{hooks}"
         );
         assert_eq!(
-            hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
-            older == "worktree",
-            "the sweep pair renders unchanged: {hooks}"
+            hooks.matches("groups: [local-only]\n").count(),
+            if older == "worktree" { 2 } else { 1 },
+            "the local-only groups render unchanged: {hooks}"
         );
     }
 }
@@ -47293,7 +47299,7 @@ fn workflow_only_trunk_commit_refuses_and_integrate_still_moves_the_trunk() {
         release_kit::registry::version_of("pre-commit-hooks").expect("pre-commit-hooks is pinned");
     assert!(
         block.contains(&format!(
-            "  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v{pin}\n    hooks:\n      - id: no-commit-to-branch\n        args: [--branch, master]\n        stages: [pre-commit]\n"
+            "  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v{pin}\n    hooks:\n      # local-only: a CI job on a trunk push checks out the trunk, which\n      # this guard refuses.\n      - id: no-commit-to-branch\n        groups: [local-only]\n        args: [--branch, master]\n        stages: [pre-commit]\n"
         )),
         "the trunk guard is the pinned hook, for the trunk, at the pre-commit stage alone: {block}"
     );

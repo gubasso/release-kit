@@ -1,5 +1,8 @@
+      # local-only: a CI job checks out the main worktree, which this guard
+      # refuses when the checkout is detached.
       - id: rk-worktree-location
         name: rk worktree location
+        groups: [local-only]
         language: system
         always_run: true
         pass_filenames: false

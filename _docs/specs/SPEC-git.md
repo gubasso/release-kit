@@ -182,7 +182,7 @@ A project MUST assign every check both a scope and a boundary moment, and the la
 - WHEN the landed guidance is read
 - THEN it teaches that the two sides of the boundary must invoke the same stages, and no binary judges the project's workflow file to reach that conclusion
 
-Verify: `cargo nextest run -E 'test(a_landed_sweep_note_invites_the_projects_own_skips) or test(a_landed_integrate_note_names_both_axes)'`
+Verify: `cargo nextest run -E 'test(a_landed_ci_note_teaches_the_group_filter_and_never_skip) or test(a_landed_integrate_note_names_both_axes)'`
 
 ### `git:a-local-integration-is-a-transaction` — A local integration is a transaction
 
