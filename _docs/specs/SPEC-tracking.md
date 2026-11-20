@@ -32,7 +32,7 @@ The registry MUST be one YAML document with `schema_version: 1` and a `tracked` 
 - WHEN the gate parses it
 - THEN it fails, because untrusted input is bounded before any semantic read
 
-Verify: `pre-commit run tracking-registry --all-files`
+Verify: `prek run tracking-registry --all-files`
 
 ### `tracking:a-perishable-source-is-registered` — A perishable source is registered
 
@@ -56,7 +56,7 @@ Where an entry derives from a Git upstream, the author MUST record a `source` ob
 - WHEN the gate validates it
 - THEN it fails, because a moving reference cannot say which bytes the local copy holds
 
-Verify: `pre-commit run tracking-registry --all-files`
+Verify: `prek run tracking-registry --all-files`
 
 ### `tracking:an-entry-declares-how-to-revalidate` — An entry declares how to revalidate
 
@@ -80,7 +80,7 @@ If an entry's `last_checked` plus `cadence_days` is before today, then the gate 
 - WHEN the freshness gate runs
 - THEN it fails naming the exact due date and the recovery steps, and it reads current bytes only
 
-Verify: `pre-commit run tracking-registry --all-files`
+Verify: `prek run tracking-registry --all-files`
 
 ### `tracking:a-declared-dependent-exists` — A declared dependent exists
 
@@ -92,7 +92,7 @@ The gate MUST resolve an entry's `path` and every `dependent` from the repositor
 - WHEN the gate resolves the dependents
 - THEN it fails naming the missing path, because a dependent that does not exist tracks nothing
 
-Verify: `pre-commit run tracking-registry --all-files`
+Verify: `prek run tracking-registry --all-files`
 
 ### `tracking:an-upstream-check-does-not-edit-the-tree` — An upstream check does not edit the tree
 
@@ -118,7 +118,7 @@ The companion schema at `SPEC-tracking/tracking.schema.json` holds the structura
 - WHEN the gate runs
 - THEN it fails naming the entry and the escape, because only the validator reads where a path leads
 
-Verify: `pre-commit run tracking-registry --all-files`
+Verify: `prek run tracking-registry --all-files`
 
 ## Unenforced
 

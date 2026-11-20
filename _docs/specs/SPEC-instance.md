@@ -32,7 +32,7 @@ A record written by an older release is readable: the tool carries a bounded rea
 - WHEN the edit leaves the record missing or truncated
 - THEN the hook fails naming the manifest, because a record no check can read disables every ownership check at once
 
-Verify: `pre-commit run instance-manifest --all-files`
+Verify: `prek run instance-manifest --all-files`
 
 ### `instance:the-agents-block-stays-managed` — The managed AGENTS block stays intact
 
@@ -56,7 +56,7 @@ The project MUST keep `<root>/reference/tracking.yaml` valid against its schema 
 - WHEN the entry's cadence elapses without a revalidation
 - THEN the gate fails naming the due date and the recovery steps, and the project revalidates the source before advancing the date
 
-Verify: `pre-commit run tracking-registry --all-files`
+Verify: `prek run tracking-registry --all-files`
 
 ### `instance:the-lint-configuration-composes` — The lint configuration composes
 

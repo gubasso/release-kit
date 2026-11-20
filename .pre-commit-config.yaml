@@ -463,9 +463,9 @@ repos:
       # owner: host (host-tool) the hook calls exobrain, which host-requirements.toml lists.
       - id: hook-revisions
         args: [--set, common, --set, rust, --set, bash, --set, nix]
-  # project: the check-useless-excludes hook of the common set stays out,
-  # because the spec-driven-docs block below renders an exclude for
-  # prose-stays-unwrapped that matches no file here, and sdd owns that block.
+  - repo: meta
+    hooks:
+      - id: check-useless-excludes
 # BEGIN spec-driven-docs managed
   - repo: local
     hooks:
@@ -606,7 +606,6 @@ repos:
         language: system
         files: '^_docs/(?:specs|decisions|guides|reference|explanation)/(?:.*/)?[^/]*\.md$'
         types: [markdown]
-        exclude: '^(?:.*/)?CHANGELOG\.md$'
       - id: spec-requirement-parts
         name: 'spec requirement parts'
         entry: sdd gate spec-requirement-parts

@@ -59,7 +59,7 @@ The rule binds an author writing any document, and the gate judges the whole pro
 - WHEN a second reader follows it
 - THEN the path resolves for nobody else and names someone who never agreed to be named, which the placeholder form avoids at no cost
 
-Verify: `pre-commit run no-personal-path --all-files`
+Verify: `prek run no-personal-path --all-files`
 
 ### `docs-foundations:a-document-owns-what-it-governs` — A document owns what it governs
 

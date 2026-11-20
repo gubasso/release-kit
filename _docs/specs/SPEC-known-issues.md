@@ -31,7 +31,7 @@ The author MUST name every known-issue record `KI-<slug>.md`, with a slug of low
 - WHEN both allocate the next sequential number
 - THEN two records claim one identity, which a slug name makes impossible
 
-Verify: `pre-commit run ki-filename-shape --all-files`
+Verify: `prek run ki-filename-shape --all-files`
 
 ### `known-issues:a-record-carries-one-state` — A record carries one state
 
@@ -43,7 +43,7 @@ The author MUST give every known-issue record exactly one `state:` value, from `
 - WHEN a reader sorts the zone by how each case is handled
 - THEN the record answers with a word the method never defined, and the gate rejects it
 
-Verify: `pre-commit run ki-state --all-files`
+Verify: `prek run ki-state --all-files`
 
 ### `known-issues:a-record-carries-one-filing-state` — A record carries one filing state
 
@@ -55,7 +55,7 @@ The author MUST give every known-issue record exactly one `filing:` value, from 
 - WHEN someone looks for the cases whose evidence is ready to file
 - THEN every record has to be read in full, because no field carries the answer
 
-Verify: `pre-commit run ki-filing --all-files`
+Verify: `prek run ki-filing --all-files`
 
 ### `known-issues:a-record-carries-its-retirement-condition` — A record carries its retirement condition
 
@@ -67,7 +67,7 @@ The author MUST give a masked record a non-empty `retire_when:` value, and MUST 
 - WHEN the upstream fix ships
 - THEN nothing retires the workaround, and the next reader takes it for a design choice
 
-Verify: `pre-commit run ki-retire-when --all-files`
+Verify: `prek run ki-retire-when --all-files`
 
 ### `known-issues:a-record-records-its-last-check` — A record records its last check
 
@@ -79,7 +79,7 @@ Where `state:` is `masked` or `monitoring`, the author MUST give the record an I
 - WHEN a reader asks whether either one shipped
 - THEN nothing in the record says when anyone last looked, and the mask outlives the bug
 
-Verify: `pre-commit run ki-checked-date --all-files`
+Verify: `prek run ki-checked-date --all-files`
 
 ### `known-issues:a-record-walks-the-mechanism` — A record walks its mechanism
 
@@ -91,7 +91,7 @@ The author MUST walk a known-issue record's mechanism step by step under a `## H
 - WHEN a reader arrives from a suppression's case id
 - THEN the claim is unfalsifiable to everyone but its author, and the gate rejects the record
 
-Verify: `pre-commit run ki-mechanism-walkthrough --all-files`
+Verify: `prek run ki-mechanism-walkthrough --all-files`
 
 ### `known-issues:a-filed-record-carries-its-report` — A filed record carries its report
 
@@ -103,7 +103,7 @@ Where `filing:` is `filed`, the author MUST name the issue in `upstream:` and ke
 - WHEN only the tracker holds the report
 - THEN the two drift from that moment on, and the gate rejects the record
 
-Verify: `pre-commit run ki-report-body --all-files`
+Verify: `prek run ki-report-body --all-files`
 
 ### `known-issues:a-bugzilla-report-body-fits-in-79-columns` — A Bugzilla report body fits in 79 columns
 
@@ -115,4 +115,4 @@ Where `upstream:` names a Bugzilla tracker, the author MUST keep every line of t
 - WHEN Bugzilla renders the comment as preformatted text
 - THEN it wraps where Bugzilla chooses and the alignment carrying the argument is lost
 
-Verify: `pre-commit run ki-bugzilla-report-width --all-files`
+Verify: `prek run ki-bugzilla-report-width --all-files`

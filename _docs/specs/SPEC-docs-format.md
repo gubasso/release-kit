@@ -37,7 +37,7 @@ A ceiling the project records for an inherited chapter under `SPEC-budget-debt.m
 - WHEN more rules arrive
 - THEN the excess becomes a requirement in a spec or a decision record, not a longer chapter
 
-Verify: `pre-commit run chapter-size-cap --all-files`
+Verify: `prek run chapter-size-cap --all-files`
 
 ### `docs-format:author-instructions-stay-within-budget` — Author instructions stay within budget
 
@@ -57,7 +57,7 @@ A managed block runs from a whole-line `<!-- BEGIN <label> -->` to the `<!-- END
 - WHEN a release adds a line to its block
 - THEN the gate passes, and one more line of the project's own fails it
 
-Verify: `pre-commit run agents-digest-size --all-files`
+Verify: `prek run agents-digest-size --all-files`
 
 ### `docs-format:every-budget-carries-a-gate` — Every count-shaped budget carries a gate
 
@@ -101,7 +101,7 @@ The gate skips the decision records. A record states the reasoning of one moment
 - WHEN the author removes it
 - THEN the deletion leaves no trace in prose, only in the log
 
-Verify: `pre-commit run no-self-narration --all-files`
+Verify: `prek run no-self-narration --all-files`
 
 ### `docs-format:fence-declares-a-language` — Every fence declares a language
 
@@ -113,7 +113,7 @@ The author MUST give every fenced code block a language, using `text` when none 
 - WHEN no language is declared
 - THEN the linter rejects it and `text` is the correct declaration
 
-Verify: `pre-commit run markdownlint-cli2 --all-files`
+Verify: `prek run markdownlint-cli2 --all-files`
 
 ### `docs-format:prose-stays-unwrapped` — Prose stays unwrapped
 
@@ -129,7 +129,7 @@ Prose the project keeps outside the paths it declares for this gate belongs to t
 - WHEN an edit touches one sentence
 - THEN the diff rewraps neighboring lines it never changed, so the paragraph joins back onto one line and the editor soft-wraps it
 
-Verify: `pre-commit run prose-stays-unwrapped --all-files`
+Verify: `prek run prose-stays-unwrapped --all-files`
 
 ## Unenforced
 

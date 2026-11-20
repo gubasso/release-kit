@@ -16,7 +16,7 @@ The author MUST write every verdict as its symbol followed by its word, from the
 - WHEN a reader scans the column
 - THEN the bare symbol is guessed at, and the gate rejects the row
 
-Verify: `pre-commit run comparison-verdict-word --all-files`
+Verify: `prek run comparison-verdict-word --all-files`
 
 ### `comparison-docs:a-comparison-carries-a-legend` — A comparison carries a legend
 
@@ -28,7 +28,7 @@ The author MUST give every document containing a comparison table a `Legend:` li
 - WHEN no legend defines them
 - THEN each reader assigns their own meaning, and the gate rejects the document
 
-Verify: `pre-commit run comparison-legend --all-files`
+Verify: `prek run comparison-legend --all-files`
 
 ### `comparison-docs:every-table-is-dated` — Every table is dated
 
@@ -40,7 +40,7 @@ The author MUST give every document containing a comparison table a `Verified: <
 - WHEN the candidate ships it a release later
 - THEN nothing tells a reader the table predates the release, and the gate rejects the document
 
-Verify: `pre-commit run comparison-dated-tables --all-files`
+Verify: `prek run comparison-dated-tables --all-files`
 
 ### `comparison-docs:a-cell-carries-one-reference` — A cell carries one reference
 
@@ -52,7 +52,7 @@ The author MUST keep a comparison cell to at most one reference link.
 - WHEN all three are linked in the cell
 - THEN the column stops being scannable, and the evidence belongs in the scenario below the table
 
-Verify: `pre-commit run comparison-one-reference-per-cell --all-files`
+Verify: `prek run comparison-one-reference-per-cell --all-files`
 
 ### `comparison-docs:table-pipes-are-escaped` — Table pipes are escaped
 
@@ -64,4 +64,4 @@ The author MUST escape a literal pipe inside inline code in a table row.
 - WHEN the renderer splits the row on the pipe
 - THEN the table gains a phantom column, and the gate rejects the row
 
-Verify: `pre-commit run comparison-escaped-pipes --all-files`
+Verify: `prek run comparison-escaped-pipes --all-files`

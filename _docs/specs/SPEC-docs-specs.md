@@ -60,7 +60,7 @@ The documentation root's managed lint configuration holds the order up to the re
 - WHEN the hooks run over the spec
 - THEN `spec-trailing-section` fails naming the heading and where it moves, because the lint shape alone admits it
 
-Verify: `pre-commit run markdownlint-cli2 --all-files && pre-commit run spec-trailing-section --all-files`
+Verify: `prek run markdownlint-cli2 --all-files && prek run spec-trailing-section --all-files`
 
 ### `docs-specs:rule-id-is-unique-and-slugged` — A rule ID is a slug pair and is unique
 
@@ -72,7 +72,7 @@ The author MUST identify every requirement as `<spec-slug>:<rule-slug>`, unique 
 - WHEN both choose the same rule slug
 - THEN the duplicate is a real conflict about one subject, and the gate reports it
 
-Verify: `pre-commit run spec-rule-id-unique --all-files`
+Verify: `prek run spec-rule-id-unique --all-files`
 
 ### `docs-specs:rule-id-outlives-its-sentence` — A rule ID survives rewording
 
@@ -110,11 +110,11 @@ A ceiling or an exception the project records for an inherited spec under `SPEC-
 - WHEN another requirement arrives
 - THEN the domain has split, and the excess becomes a spec of its own rather than a longer file
 
-Verify: `pre-commit run spec-size-cap --all-files`
+Verify: `prek run spec-size-cap --all-files`
 
 ### `docs-specs:verification-names-a-live-hook` — A verification names a live hook
 
-Where a requirement's verification runs a hook, the author MUST name a hook the project still defines. A verification runs a hook as `prek run <hook>` or as `pre-commit run <hook>`, and a new verification uses `prek run <hook>`.
+Where a requirement's verification runs a hook, the author MUST name a hook the project still defines. A verification runs a hook as `prek run <hook>` or as `pre-commit run <hook>`, and a new verification uses `prek run <hook>`. Where the hook configuration holds a `repo: builtin` entry, a verification MUST run its hook as `prek run <hook>`, because pre-commit cannot load that configuration.
 
 #### Scenario: A hook is renamed
 
@@ -122,7 +122,7 @@ Where a requirement's verification runs a hook, the author MUST name a hook the 
 - WHEN the hook is renamed and the spec is not
 - THEN the rule is enforced by nothing while still reading as gated, and the gate reports it
 
-Verify: `pre-commit run spec-verify-hooks-exist --all-files`
+Verify: `prek run spec-verify-hooks-exist --all-files`
 
 ### `docs-specs:prohibitions-are-capped` — Prohibitions are capped and paired
 

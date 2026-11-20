@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.19.0",
+  "canon_version": "0.19.1",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -164,50 +164,50 @@
     {
       "source": "instance/payload/_docs/specs/SPEC-decision-records.md",
       "destination": "_docs/specs/SPEC-decision-records.md",
-      "sha256": "26a701c060224fcd3d5b3ed2332973dd43b76d3b3b1c9f7741f986bec91217da",
-      "baseline_sha256": "26a701c060224fcd3d5b3ed2332973dd43b76d3b3b1c9f7741f986bec91217da"
+      "sha256": "7b9662969afb3eca079022e2fdaedf22936128ef3f4d363ef223920a27fb5363",
+      "baseline_sha256": "7b9662969afb3eca079022e2fdaedf22936128ef3f4d363ef223920a27fb5363"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-instance.md",
       "destination": "_docs/specs/SPEC-instance.md",
-      "sha256": "0aa1f9d0757984fea229e66c24f8f498bc3cba173a278dbc191842cd39306da1",
-      "baseline_sha256": "0aa1f9d0757984fea229e66c24f8f498bc3cba173a278dbc191842cd39306da1"
+      "sha256": "7b692ab8986dd47978a1138bd18039e06832e5e91610bc678da984903c98a765",
+      "baseline_sha256": "7b692ab8986dd47978a1138bd18039e06832e5e91610bc678da984903c98a765"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-docs-format.md",
       "destination": "_docs/specs/SPEC-docs-format.md",
-      "sha256": "3f94a24b4b6641d2e7b6221018c5b05f4696a5ea752f4c693763f3f61d89706c",
-      "baseline_sha256": "3f94a24b4b6641d2e7b6221018c5b05f4696a5ea752f4c693763f3f61d89706c"
+      "sha256": "373f20948dd642b98c4e10992cafd4952f9edd4ea72300b783ae63c044ed8f75",
+      "baseline_sha256": "373f20948dd642b98c4e10992cafd4952f9edd4ea72300b783ae63c044ed8f75"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-docs-foundations.md",
       "destination": "_docs/specs/SPEC-docs-foundations.md",
-      "sha256": "a9f0d0c64c2db8075203e22ac931b4c42ace6e68c1f4381bd7acf295185aea73",
-      "baseline_sha256": "a9f0d0c64c2db8075203e22ac931b4c42ace6e68c1f4381bd7acf295185aea73"
+      "sha256": "9c09ba73d9db06c9a271250a701ec9a1d578383e7464ad3a533e8f9cee5bab06",
+      "baseline_sha256": "9c09ba73d9db06c9a271250a701ec9a1d578383e7464ad3a533e8f9cee5bab06"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-docs-specs.md",
       "destination": "_docs/specs/SPEC-docs-specs.md",
-      "sha256": "a17a834d93c7df146bea1a65746923b664deb3c36974c1e29433cbd477ddfd68",
-      "baseline_sha256": "a17a834d93c7df146bea1a65746923b664deb3c36974c1e29433cbd477ddfd68"
+      "sha256": "68c02c4f3e7453432771926189fd13b8a4cb38aa7488e1063e672e22e544012c",
+      "baseline_sha256": "68c02c4f3e7453432771926189fd13b8a4cb38aa7488e1063e672e22e544012c"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-comparison-docs.md",
       "destination": "_docs/specs/SPEC-comparison-docs.md",
-      "sha256": "e9e3525239db5ad1408ab2b3d9b78624524b36885b7ffa478618a0b65f3de804",
-      "baseline_sha256": "e9e3525239db5ad1408ab2b3d9b78624524b36885b7ffa478618a0b65f3de804"
+      "sha256": "5384c808bacf353dbdbd329ccafe090adeb77ed834ba12950572acc89c17fc36",
+      "baseline_sha256": "5384c808bacf353dbdbd329ccafe090adeb77ed834ba12950572acc89c17fc36"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-known-issues.md",
       "destination": "_docs/specs/SPEC-known-issues.md",
-      "sha256": "00f3396494b816eba4904f90567db12729e99aa8e71e21d3018f40728c07336f",
-      "baseline_sha256": "00f3396494b816eba4904f90567db12729e99aa8e71e21d3018f40728c07336f"
+      "sha256": "1c30fcc5ba9bc4386e421abba12f69414ff93296d37950a12e25036919b5f92a",
+      "baseline_sha256": "1c30fcc5ba9bc4386e421abba12f69414ff93296d37950a12e25036919b5f92a"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-spec-to-code.md",
       "destination": "_docs/specs/SPEC-spec-to-code.md",
-      "sha256": "9dbc4cf57855073b75832342b85e0fd9865d14492e5af66c76b137199f795e6b",
-      "baseline_sha256": "9dbc4cf57855073b75832342b85e0fd9865d14492e5af66c76b137199f795e6b"
+      "sha256": "bce4a01bbf5c65b661c8b7e413ff6d101f7457470db0aac2b25e8039d31bf8b4",
+      "baseline_sha256": "bce4a01bbf5c65b661c8b7e413ff6d101f7457470db0aac2b25e8039d31bf8b4"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-guides.md",
@@ -224,8 +224,8 @@
     {
       "source": "instance/payload/_docs/specs/SPEC-tracking.md",
       "destination": "_docs/specs/SPEC-tracking.md",
-      "sha256": "758f350534c061fb6fb36b6385c2c25967c914bab4c169240d8370874e068d9f",
-      "baseline_sha256": "758f350534c061fb6fb36b6385c2c25967c914bab4c169240d8370874e068d9f"
+      "sha256": "7460d4d509a81d91dd8c798b5a401e99f14d31293066760b586487229fab6cd3",
+      "baseline_sha256": "7460d4d509a81d91dd8c798b5a401e99f14d31293066760b586487229fab6cd3"
     },
     {
       "source": "instance/payload/_docs/specs/SPEC-tracking/tracking.schema.json",
@@ -273,7 +273,7 @@
   "integration_blocks": [
     {
       "path": ".pre-commit-config.yaml",
-      "marker_hash": "1f18a2cb83cedcf620e6a9dfb4695933f3ea58d366fbe1a817d362252d4ab2d6"
+      "marker_hash": "024c8791ba03b6c9c563831b6a68c7ed3f76739350945362609010e507411203"
     },
     {
       "path": "AGENTS.md",

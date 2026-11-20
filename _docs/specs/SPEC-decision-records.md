@@ -16,7 +16,7 @@ When an author creates a decision record, the author MUST name it `ADR-<slug>.md
 - WHEN both allocate the next sequential number
 - THEN two records claim one identity, which a slug name makes impossible
 
-Verify: `pre-commit run adr-filename-shape --all-files`
+Verify: `prek run adr-filename-shape --all-files`
 
 ### `decision-records:a-record-follows-the-heading-shape` — A record follows the heading shape
 
@@ -30,7 +30,7 @@ The documentation root's managed lint configuration holds the shape with case ma
 - WHEN the linter runs over the record
 - THEN the heading-shape rule fails it, because the five sections are the whole record and a note belongs inside one of them
 
-Verify: `pre-commit run markdownlint-cli2 --all-files`
+Verify: `prek run markdownlint-cli2 --all-files`
 
 ### `decision-records:a-citation-resolves-to-a-rule` — A citation resolves to a rule
 
@@ -44,7 +44,7 @@ A superseded record keeps the pointer it was frozen with. Its successor carries 
 - WHEN the rule is renamed to `release:license-declares-both-halves`
 - THEN the citation resolves to nothing. The gate reports it because the pointer to what binds is the one part of a frozen record that must keep working
 
-Verify: `pre-commit run adr-cites-a-live-rule --all-files`
+Verify: `prek run adr-cites-a-live-rule --all-files`
 
 ### `decision-records:record-is-not-revised` — A decision record is not revised
 
@@ -86,7 +86,7 @@ A ceiling the project records for an inherited record under `SPEC-budget-debt.md
 - WHEN it exceeds the cap
 - THEN it holds two decisions and becomes two records
 
-Verify: `pre-commit run adr-word-cap --all-files`
+Verify: `prek run adr-word-cap --all-files`
 
 ## Unenforced
 

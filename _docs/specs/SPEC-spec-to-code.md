@@ -52,7 +52,7 @@ The author MUST make every rule ID a gate prints resolve to a requirement in a s
 - WHEN the gate keeps printing the old ID
 - THEN the failure message addresses nothing, and the gate reports the unresolved ID
 
-Verify: `pre-commit run gate-message-cites-a-rule --all-files`
+Verify: `prek run gate-message-cites-a-rule --all-files`
 
 ### `spec-to-code:a-comment-names-no-record` — A comment names no decision record
 
@@ -78,4 +78,4 @@ The citation is the subject, not the suppression that carries it. This conventio
 - WHEN a commit deletes the record of that name
 - THEN the citation fails, because a mask nobody can look up never gets removed
 
-Verify: `pre-commit run suppression-names-its-case --all-files`
+Verify: `prek run suppression-names-its-case --all-files`
