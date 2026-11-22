@@ -158,7 +158,7 @@ pub fn stamp(now: std::time::SystemTime) -> String {
 /// A history time: UTC to the second, `%Y-%m-%dT%H:%M:%SZ`.
 #[must_use]
 pub fn at(now: std::time::SystemTime) -> String {
-    crate::self_depend::check::stamp(now)
+    crate::landing::manifest::stamp(now)
 }
 
 /// The refusal for a target with no open migration.

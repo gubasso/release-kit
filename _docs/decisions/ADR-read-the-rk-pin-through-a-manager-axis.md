@@ -25,4 +25,4 @@ Enforced by `packaging:the-pin-is-read-through-a-manager-axis`.
 
 ## Status
 
-Implemented: `src/self_depend/manager.rs`, `src/self_depend.rs`, `src/commands/self_depend.rs`, `src/depend/target.rs`, `src/cli/depend.rs`.
+Superseded by [installing rk through the project's tool manager](./ADR-install-rk-through-the-projects-tool-manager.md).

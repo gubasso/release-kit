@@ -33,11 +33,7 @@ fn main() -> ExitCode {
     let status = result
         .as_ref()
         .map_or_else(|e| e.reason().as_str(), |()| "ok");
-    // The version check runs on every directory entry and writes nothing
-    // but its cache, so it leaves no record in the application log.
-    if !is_version_check(&cli.command) {
-        applog::record(name(&cli.command), status, started.elapsed().as_millis());
-    }
+    applog::record(name(&cli.command), status, started.elapsed().as_millis());
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -76,7 +72,6 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Issue(args) => commands::issue::run(args),
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
-        Commands::SelfDepend(args) => commands::self_depend::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
         Commands::Usage => commands::usage::run(),
         Commands::License => commands::license::run(),
@@ -142,19 +137,11 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Issue(_) => "issue",
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
-        Commands::SelfDepend(_) => "self-depend",
         Commands::Doctor(_) => "doctor",
         Commands::Usage => "usage",
         Commands::License => "license",
         Commands::Completions(_) => "completions",
     }
-}
-
-/// Whether the invocation is `rk self-depend check`, the one verb that
-/// leaves no application log record.
-const fn is_version_check(command: &Commands) -> bool {
-    use release_kit::cli::self_depend::SelfDependAction;
-    matches!(command, Commands::SelfDepend(args) if matches!(args.action, SelfDependAction::Check(_)))
 }
 
 /// Whether the invocation asked for machine output, which decides how an
@@ -166,7 +153,6 @@ const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::migrate::MigrateAction;
     use release_kit::cli::release::ReleaseAction;
     use release_kit::cli::runs::RunsAction;
-    use release_kit::cli::self_depend::SelfDependAction;
     use release_kit::cli::setup::SetupAction;
     use release_kit::cli::skill::SkillAction;
     use release_kit::cli::stage::StageAction;
@@ -239,15 +225,6 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Skill(args) => match &args.action {
             SkillAction::Install { json, .. } | SkillAction::Uninstall { json, .. } => *json,
             SkillAction::List | SkillAction::Show { .. } => false,
-        },
-        // Every action named: a `_ => false` arm would render a JSON
-        // caller's failure as human prose the moment a new one lands.
-        Commands::SelfDepend(args) => match &args.action {
-            SelfDependAction::Status(args) => args.json,
-            SelfDependAction::Add(args) => args.json,
-            SelfDependAction::Clean(args) => args.json,
-            SelfDependAction::Sync(args) => args.json,
-            SelfDependAction::Check(args) => args.json,
         },
         _ => false,
     }

@@ -21,7 +21,7 @@ Present "State: `adopt`. Request: set up. Tasks: `adopt`. Proceed?" and wait for
 
 ## Route
 
-1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json` and `rk setup status --target . --json`.
 2. `adopt` pre-flight: run `rk profile --target . --json`, and ask the release style explicitly.
 3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --release-style trunk` and hold `<root>`.
 4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. No receipt exists, so provenance comes from Git alone, a history-guided heuristic. Group the rows by `edited_after_added`: the untouched group takes one answer, replace them all with each copy saved, and the one file edited after it gets its own question. No automatic overwrite happens.

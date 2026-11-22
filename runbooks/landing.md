@@ -6,7 +6,7 @@ Every stage is kept from step 1 through step 5 and the checks after it. Nothing 
 
 ## Prerequisites
 
-- `rk` on `PATH`: `rk --version` answers, and the version is the one the operator chose to install.
+- `rk` on `PATH`: `rk --version` answers, and the version is the one the operator chose to install. The tool manager that the project runs installs it, by the commands of the Install section of the release-kit README. The crate's page, <https://crates.io/crates/release-kit>, carries that README.
 - The target is a repository: `git rev-parse --show-toplevel` prints its root, and `git status --porcelain` is empty. The landing writes files Git must be able to show as one diff.
 - The landing state is known: `rk status --target .` reports a record or reports none.
 - A migration adds one: the findings inventory [the migration runbook](./migration.md) shapes is written and approved before the first `--apply` below.
@@ -18,8 +18,6 @@ Every stage is kept from step 1 through step 5 and the checks after it. Nothing 
 ```bash
 rk --version
 # check: prints the version the operator installed. A version nobody chose is a stop, and the request decides whether an update comes first
-rk self-depend status --target .
-# check: names the manager that pins rk, or no manager. A host install takes its updates through the host's own path
 rk status --target .
 # check: none, or the record with its rk_version. A record newer than this binary is a stop that names the version to install
 ```

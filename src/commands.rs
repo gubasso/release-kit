@@ -19,7 +19,6 @@ pub mod profile;
 pub mod read;
 pub mod release;
 pub mod runs;
-pub mod self_depend;
 pub mod setup;
 pub mod skill;
 pub mod stage;

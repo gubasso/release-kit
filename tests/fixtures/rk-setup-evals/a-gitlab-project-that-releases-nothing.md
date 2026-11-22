@@ -21,7 +21,7 @@ Present "State: `setup`. Request: land the convention with these answers. Tasks:
 
 ## Route
 
-1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json` and `rk setup status --target . --json`.
 2. `land` pre-flight: run `rk profile --target . --json`, and ask only what it leaves open, one default each, with its consequence stated.
 3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --release-mode none --reporting-policy --workflow-guards` and hold `<root>`.
 4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every row reads `absent` with the word `created`: the hooks, the routing block, and the policy. No release workflow appears. With neither a receipt nor useful history, the class is a best-effort heuristic, and no automatic overwrite can happen.

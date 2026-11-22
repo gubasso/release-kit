@@ -122,16 +122,16 @@ pub fn direnv_bin() -> std::ffi::OsString {
         .unwrap_or_else(|| "direnv".into())
 }
 
-/// Nix answers; `rk self-depend sync` updates and builds the pinned devshell
-/// with it. Soft, and deliberately outside the wrapper: wrapping nix
-/// would put it inside the package's own closure on every host.
+/// Nix answers; it builds the devshell that pins a project's rk. Soft,
+/// and deliberately outside the wrapper: wrapping nix would put it
+/// inside the package's own closure on every host.
 #[must_use]
 pub fn nix() -> ProbeResult {
     tool(
         "nix",
         "RK_NIX_BIN",
         "nix",
-        "Nix; rk self-depend sync updates and builds the pinned devshell with it",
+        "Nix; it builds the devshell that pins a project's rk",
         &["--version"],
     )
 }
@@ -185,7 +185,6 @@ pub fn run_all() -> Vec<ProbeResult> {
         state_root(),
         skill_shadow(),
         git_remote(),
-        pin_freshness(),
         forge_cli(
             "gh-auth",
             "RK_GH_BIN",
@@ -352,10 +351,10 @@ fn tool(
     }
 }
 
-/// The crates.io index answers, so `rk versions --check` and
-/// `rk self-depend sync` can compare a pin against the registry. Soft: a
-/// host that cannot reach it is a constraint on the two verbs that fetch,
-/// never a broken install, and every offline verb runs without it.
+/// The crates.io index answers, so `rk versions --check` can compare a
+/// pin against the registry. Soft: a host that cannot reach it is a
+/// constraint on that check, never a broken install, and every offline
+/// verb runs without it.
 fn registry() -> ProbeResult {
     let id = "registry";
     let answered = crate::http::send(
@@ -373,7 +372,7 @@ fn registry() -> ProbeResult {
             id,
             ProbeClass::Soft,
             "the crates.io index does not answer",
-            "reach the network before rk versions --check or rk self-depend sync; every offline verb runs without it",
+            "reach the network before rk versions --check; every offline verb runs without it",
         )
     }
 }
@@ -516,50 +515,6 @@ fn skill_shadow() -> ProbeResult {
         ProbeClass::Soft,
         format!("no user-scope copy of an rk skill under {home} shadows a project's landed one"),
     )
-}
-
-/// Whether the rk pin of the working directory is behind the latest
-/// release that its check cache records. It reads the cache and never
-/// the network. A directory with no pin or no cache passes.
-///
-/// SATISFIES packaging:the-unattended-caller-never-fails-the-shell
-fn pin_freshness() -> ProbeResult {
-    use crate::self_depend::{self, advice};
-    let id = "pin-freshness";
-    let Ok(observed) = self_depend::observe(camino::Utf8Path::new(".")) else {
-        return ProbeResult::ok(
-            id,
-            ProbeClass::Soft,
-            "the working directory does not read as a project",
-        );
-    };
-    let Some(pin) = observed
-        .wired
-        .and_then(|wired| observed.entry(wired))
-        .and_then(|entry| entry.read.version())
-        .map(|version| version.trim_start_matches('v').to_owned())
-    else {
-        return ProbeResult::ok(id, ProbeClass::Soft, "the working directory pins no rk");
-    };
-    let key = observed.key();
-    if let Some(warning) = advice::pending_from_cache(&key, &pin) {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            format!("this project pins rk {pin}, and a newer release is out"),
-            warning,
-        );
-    }
-    let message = advice::cached_latest(&key).map_or_else(
-        || format!("this project pins rk {pin}; no release check is cached yet"),
-        |latest| {
-            format!(
-                "this project pins rk {pin}, and the latest known release is {}",
-                latest.trim_start_matches('v')
-            )
-        },
-    );
-    ProbeResult::ok(id, ProbeClass::Soft, message)
 }
 
 /// The working directory's `origin` remote parses to a host, which is

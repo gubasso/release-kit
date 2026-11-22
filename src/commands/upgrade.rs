@@ -245,12 +245,12 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     // A preview from a newer binary is where a pin move lands the reader,
     // so it opens with the route through that binary's setup skill.
     //
-    // SATISFIES packaging:the-unattended-caller-never-fails-the-shell
+    // SATISFIES version-gate:a-gated-command-names-its-fix
     if !args.apply
         && manifest::alignment(&recorded.rk_version, env!("CARGO_PKG_VERSION"))
             == manifest::Alignment::BinaryNewer
     {
-        next.insert(0, crate::self_depend::advice::after_move());
+        next.insert(0, crate::landing::gate::after_move());
     }
     out.next(&next);
     out.emit(&Report {

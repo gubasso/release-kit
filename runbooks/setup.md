@@ -12,7 +12,7 @@ The commands are the operator's to run. An agent serves a runbook and states the
 
 Every step below assumes these prerequisites. Each one is a probe, not a change.
 
-- `rk` on `PATH`: `rk --version`. Two ways put it there. A host install, `cargo install release-kit`, serves one version to the whole host. The devshell pin below gives each project its own `rk` from its flake and keeps the pin fresh. One project runs one of the two, never both. `rk self-depend add --host --apply` records a host install as the acquisition answer of the configuration. `rk self-depend status --target .` then reports `state host`.
+- `rk` on `PATH`: `rk --version`. The tool manager that the project runs installs `rk` and moves its pin, by the commands of the Install section of the release-kit README. The crate's page, <https://crates.io/crates/release-kit>, carries that README. No `rk` verb installs or moves `rk`.
 - No user-scope copy of the skills: `rk doctor` reports `skill-shadow` ok. The landing writes the skills of this binary into the project, under two roots:
   - `.claude/skills`, which Claude Code reads
   - `.agents/skills`, which these agents read:
@@ -26,52 +26,10 @@ Every step below assumes these prerequisites. Each one is a probe, not a change.
 - An OS keyring where the forge bootstrap needs one: `secret-tool --version`, on a host shell and never in a container.
 - A clean trunk: `git status --porcelain` is empty, and `HEAD` equals the remote trunk.
 
-The devshell pin replaces a predecessor in five moves. Run them in this order:
+Decide how the project obtains `rk` before the first landing closes, with an agent or without one. Two answers close it:
 
-- Detect.
-- Clean.
-- Add.
-- Apply the fragments.
-- Verify.
-
-The commands:
-
-```bash
-rk self-depend status --target .
-# check: state, and every leftover of a predecessor bump mechanism by file and line; superseded means a predecessor is still there
-rk self-depend clean --target .                 # preview: what goes, what is rewritten, and what a line scan must not touch
-rk self-depend clean --target . --apply
-# check: the scripts and suites are removed and the .envrc invocation, the retired sync line included, became the one check line; every manual entry is edited by hand or accepted on the record, and the rerun reports an empty leftovers list
-rk self-depend add --target . --json            # the four fragments with their anchors, in application order; the tag is this binary's version
-rk self-depend add --target . --apply
-# check: seeds flake.nix and .envrc where the target has neither; an owned file is refused with the fragments still printed, and takes them by hand
-# a flake of its own plus rk init --nix-packaging: run the init first, because a flake this seed wrote is withheld by the landing
-git add flake.nix .envrc && git commit -m 'chore(<scope>): pin rk in the devshell'
-# check: the pair is committed; nix reads only tracked files, and the sync refuses uncommitted edits to flake.nix or flake.lock
-rk self-depend sync --target . --apply
-# check: bumped or current; the pin in flake.nix is the version, the flake.lock node of the root release-kit input is the content, and the build proved the pair
-git add flake.lock && git commit -m 'chore(<scope>): lock the rk self-depend pin'
-direnv allow
-# check: the shell loads and rk --version answers from the devshell
-rk self-depend status --target . --json
-# check: ready, with an empty leftovers list; nothing else in the tree names an rk version
-```
-
-A target already wired to another manager takes the `add` step alone. The block above is the flake route, not the route of that manager. Pass `--manager` with the manager that the status named under `wired`. An unqualified `add` resolves the manager from the files present, and it refuses a target that carries more than one. A bump then moves the answer of that manager, and the sync report names it. Read the report, not the two-file shape below. `rk self-depend status --target . --json` reports `envrc_check` false until the line is in place.
-
-Decide the wire before a first landing closes, with an agent or without one. Without the line, the pin holds its release until somebody bumps it by hand. To accept, place the served line in `.envrc`. Then run `direnv allow`. Commit the file. To refuse, record the reason where the project keeps its own decisions. A later reader then tells a choice from an omission. Either answer closes the landing.
-
-Decide the same way where the status reports `state no-manager`, because then nothing pins `rk` here. Three answers close it:
-
-- Wire a manager. The manager puts the version in the repository, where a diff shows it.
-- Keep the host install, which serves one version to every project on this machine. `rk self-depend add --host --apply` records it in `.release-kit/config.toml`, with the version of this binary as the minimum. Run it before or after the first landing. The status then reports `state host` and not `no-manager`.
-- Wire it by hand outside this convention. Write down where.
-
-Answer before the first landing closes. Record the answer in every case.
-
-To wire a manager, pass `--manager` to `add` with the manager chosen. The block above is the flake route. An unqualified `add` picks the flake on a target that carries no manager. The flake route answers the wire question by itself. Its apply seeds the `.envrc` with the check line already in it. Decide the wire before running it. On a refusal, drop the check line from the seeded `.envrc`. Commit the file without it. `rk self-depend status --target . --json` then reports the manager under `wired`, and `envrc_check` false, which is the refusal recorded in the tree. Preview first. A pair that the matrix cannot wire reports `manual` with its reason and writes nothing. Then rerun the same call with `--apply`, which seeds the manager file. Read `rk self-depend status --target .` back. It names the chosen manager under `wired`. If it does not, the wiring did not happen.
-
-From then on, the `.envrc` line runs `rk self-depend check` on directory entry. It reads the latest release at most once a week per checkout, or one hour after a failed read. It warns on every entry while a newer release is out or while the last read failed. It writes nothing but its cache under `$XDG_CACHE_HOME/release-kit/`, and it moves no pin. It exits 0, so the shell always starts. `RK_DEVSHELL_SYNC=0` in `.envrc.local` switches it off, and a CI variable switches it off on a runner. To move the pin, run `rk self-depend sync --target . --apply` from a shell. The sync leaves a diff to review and commit. A failed bump restores both files. Inside an `.envrc` evaluation, the sync moves nothing and exits 1.
+- A manager. Place the install lines of that manager in its file, and commit the file with its lock. The manager file and its lock record the version for every contributor. A pin move edits the version in the manager file by that manager's own commands, then lands the new release through [the landing runbook](./landing.md).
+- A host install. No file records the version, so each host installs `rk` itself, and nothing lands in the repository.
 
 This project decides where a file lands for a third-party application, such as an agent root or an editor directory. The project makes it against the current documentation of that application and records it with a dated citation. Release-kit states where its own artifacts go. It never decides such a placement for a project.
 

@@ -21,7 +21,7 @@ Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wai
 
 ## Route
 
-1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json` and `rk setup status --target . --json`.
 2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
 3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.
 4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every differing `rendered` row reads `attributed`.

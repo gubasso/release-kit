@@ -1,17 +1,8 @@
 # Packaging Sources
 
-External sources behind the consumer-pin rules of `SPEC-packaging.md` and the artifact-reach half of `SPEC-forge-setup.md`: what the Nix CLI, direnv, the forge, each venue `rk` publishes to, and each binding's packaging tool promise, the release bot's package boundary, and which rule each promise bears on.
+External sources behind the consumer rules of `SPEC-packaging.md`, the install commands of the `## Install` section of the root `README.md`, and the artifact-reach half of `SPEC-forge-setup.md`: what Cargo, the shell installer of a release, and each binding's packaging tool promise, the release bot's package boundary, and which rule each promise bears on.
 
-Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, the venue sections on 2026-09-12, the exact-version install section on 2026-09-14, the release-plz section on 2026-09-27, and the shell installer section on 2026-11-12.
-
-## Venue `crates`, on `cargo install` and the mise cargo backend
-
-`cargo install` builds a crate from the registry and installs its binaries, and `--version` selects one exact version. mise's cargo backend declares a crate as a `[tools]` entry keyed `cargo:<crate>` with the version as its value, runs `cargo install` for it, and uses `cargo-binstall` first where that tool is on `PATH`, falling back to `cargo install` where no prebuilt artifact exists.
-
-- <https://doc.rust-lang.org/cargo/commands/cargo-install.html>
-- <https://mise.jdx.dev/dev-tools/backends/cargo.html>
-
-Bearing: `packaging:the-venue-and-the-manager-cross-in-one-matrix` — the mise and crates pair renders the cargo backend entry with the bare version, which is the form the registry names, and `rk self-depend sync` moves that one value.
+Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, the exact-version install section on 2026-09-14, the release-plz section on 2026-09-27, the shell installer section on 2026-11-12, and the install route sections on 2026-11-22.
 
 ## Cargo, on installing one exact version into one root
 
@@ -29,61 +20,47 @@ Each release of this repository carries `release-kit-installer.sh`, which cargo-
 
 Bearing: `packaging:a-landed-job-takes-rk-by-one-route`. A landed job that fetches the installer from the release of the version it pins gets that exact binary, with no version argument and no resolution.
 
-## Venue `flake`, on flake references in a flake input and in devbox
+## Nix, on a flake input at a release tag
 
-A flake reference of the form `github:<owner>/<repo>/<ref>` names a repository at a branch, a tag, or a commit, and `nix flake update <input>` refreshes that one input's lock node. devbox accepts a flake reference string in the `packages` list of `devbox.json`, for flakes on GitHub and local paths, with `#<output>` selecting the package.
+The flake reference `github:<owner>/<repo>/<rev-or-ref>` selects a tag by name: "`<rev-or-ref>` specifies the name of a branch or tag (`ref`), or a commit hash (`rev`)." `inputs.<name>.follows` takes a `/`-separated path of input names, and the manual shows the empty value in its example of a circular input, `inputs.b.inputs.a.follows = "";`, with the comment "Tell the 'b' flake not to fetch 'a' again, to ensure its 'a' is this 'a'." `nix flake update [option...] inputs...` updates only the named inputs in `flake.lock`, as its example `nix flake update nixpkgs` shows.
 
-- <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake>
-- <https://www.jetify.com/docs/devbox/configuration/>
+- <https://nix.dev/manual/nix/2.28/command-ref/new-cli/nix3-flake>
+- <https://nix.dev/manual/nix/2.28/command-ref/new-cli/nix3-flake-update>
 
-Bearing: `packaging:the-venue-and-the-manager-cross-in-one-matrix` — the flake and devbox managers both record the `v` tag inside a flake reference, so the flake pair moves the tag and the lock node together while the devbox pair moves the tag alone.
+Bearing: the Nix flake route of the README. The empty follows on the `release-kit` input inside the release-kit input keeps the previous release that the flake pins for its own development out of `flake.lock`. A pin move edits the tag and updates the one input.
 
-## Venue `github-release`, on the archives a release carries and the mise ubi backend
+## mise, on the cargo backend
 
-cargo-dist attaches one archive per built platform to the GitHub release, a zip or a tarball with the binaries at its root. mise's ubi backend declares a tool as a `[tools]` entry keyed `ubi:<owner>/<repo>`, fetches the matching archive from that repository's release for the version given, and takes `exe` where the binary's name differs from the repository's.
+The cargo backend installs a crate at a pinned version: "pin one with `mise use cargo:eza@0.23.5`." It "downloads a prebuilt binary when cargo-binstall can find one and builds the crate with Cargo otherwise."
 
-- <https://axodotdev.github.io/cargo-dist/book/artifacts/archives.html>
-- <https://mise.jdx.dev/dev-tools/backends/ubi.html>
-- <https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases>
+- <https://mise.jdx.dev/dev-tools/backends/cargo.html>
 
-Bearing: `packaging:the-venue-and-the-manager-cross-in-one-matrix` — the mise and github-release pair renders the ubi entry with `exe = "rk"`, because the repository is named release-kit and the binary is not; the flake and devbox pairs stay manual on this venue, because fetching an archive from Nix needs a hash the binary cannot compute offline.
+Bearing: the mise route of the README, `mise use cargo:release-kit@X.Y.Z`.
 
-## The system package venue, recorded without a variant
+## devbox, on a flake reference as a package
 
-The Open Build Service builds distribution packages from a package source and publishes them to repositories a host's package manager installs from. The version a host runs is then chosen by the host's package manager, and no file inside a project repository records or moves it.
+A remote flake is a package name: "Use `github:<org>/<repo>/<ref>#<output>` as the package name to install from a Github repo." The command is `devbox add <pkg>...`, from `internal/boxcli/add.go` at the same commit. The guide page that the example links, `https://www.jetify.com/docs/devbox/guides/using-flakes/`, returned HTTP 404 on 2026-11-22.
 
-- <https://openbuildservice.org/help/manuals/obs-user-guide/>
+- <https://github.com/jetify-com/devbox/blob/58c59a28c257e66c3020b2910e2270af66001d06/examples/flakes/README.md>
+- <https://github.com/jetify-com/devbox/blob/58c59a28c257e66c3020b2910e2270af66001d06/internal/boxcli/add.go>
 
-Bearing: `packaging:the-venue-and-the-manager-cross-in-one-matrix` — every pair on such a venue would be manual with the reason `system-package-unpinnable`, so the reason is recorded and no venue variant exists until a system package is published and proven.
+Bearing: the devbox route of the README, `devbox add github:gubasso/release-kit/vX.Y.Z#default`.
 
-## Nix, on updating one input and on the result symlink
+## asdf, on the plugin index
 
-`nix flake update` takes a list of input names as its positional arguments; by default all inputs are updated, a lock file that does not exist yet is created, and inputs not yet in the lock file are added. `nix build --no-link` does not create symlinks to the build results, whose default prefix under `--out-link` is `result`.
+The plugin index holds no entry named `rk` or `release-kit`, and no other asdf plugin for release-kit exists.
 
-- <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake-update>
-- <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-build>
+- <https://github.com/asdf-vm/asdf-plugins/tree/1fc7a2c7cbf185f4147e84f1a58e1f5513dc8041/plugins>
 
-Bearing: `packaging:the-consumer-pin-has-two-facts-and-one-mover` — the sync refreshes the one node by name, and a lock a seed did not write is created by the same call — and `packaging:a-pin-bump-is-all-or-nothing`, whose fence builds with `--no-link` so a directory entry drops no `result` symlink into the tree.
+Bearing: the asdf entry of the README. asdf records no version of rk, so an asdf user takes the GitHub release, which is a host install.
 
-## direnv, on `use flake` and the watched files
+## The GitHub release, on its archive and its installer
 
-`use flake` loads the build environment of a derivation the way `nix develop` does, from the current directory's `flake.nix` devShell by default. The stdlib's `use_flake` calls `watch_file flake.nix` and `watch_file flake.lock`, and `watch_file` adds a file to direnv's watch list so a change reloads the environment on the next prompt.
+The release `v0.10.3` carries `release-kit-x86_64-unknown-linux-gnu.tar.xz` and `release-kit-installer.sh`, and `dist-workspace.toml` builds that one target. Its notes give the installer command `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/gubasso/release-kit/releases/download/v0.10.3/release-kit-installer.sh | sh`.
 
-- <https://direnv.net/man/direnv-stdlib.1.html>
-- <https://github.com/direnv/direnv/blob/master/stdlib.sh>
+- <https://github.com/gubasso/release-kit/releases/tag/v0.10.3>
 
-The stdlib exports `DIRENV_IN_ENVRC=1` at its top level, so a program can detect that it runs inside an `.envrc` evaluation, and the diffing leaves the variable out of the environment direnv exports afterward. `direnv exec`, which evaluates the `.envrc` and runs one command in that environment, still hands it to the command: the rk test suite meets it there.
-
-Bearing: `packaging:the-unattended-caller-never-fails-the-shell` — the check runs after `use flake`, with the pinned `rk`, and exits 0 on every outcome — and `packaging:a-pin-moves-only-on-the-operators-order`, whose sync refuses under `DIRENV_IN_ENVRC`, so an older line that still runs it on entry moves no pin.
-
-## GitHub, on the latest release
-
-The latest release is the most recent non-prerelease, non-draft release, sorted by the `created_at` attribute, and `/releases/latest` links to it.
-
-- <https://docs.github.com/en/rest/releases/releases#get-the-latest-release>
-- <https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases>
-
-Bearing: `packaging:the-consumer-pin-has-two-facts-and-one-mover` — discovery reads the redirect of that page, which excludes prereleases, costs no API quota, and needs no token.
+Bearing: the GitHub release route of the README, for asdf users and any host with no manager. The crate `release-kit` on <https://crates.io/crates/release-kit> serves the host install, `cargo install release-kit`, under the Cargo section above.
 
 ## Cargo, on package selection and the file listing
 

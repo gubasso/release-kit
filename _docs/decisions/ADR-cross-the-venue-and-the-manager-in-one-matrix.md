@@ -25,4 +25,4 @@ Enforced by `packaging:the-venue-and-the-manager-cross-in-one-matrix`, `packagin
 
 ## Status
 
-Implemented: `src/self_depend/venue.rs`, `src/self_depend/matrix.rs`, `src/self_depend/fragments.rs`, `src/commands/self_depend.rs`, `blocks/self-depend-*.in`.
+Superseded by [installing rk through the project's tool manager](./ADR-install-rk-through-the-projects-tool-manager.md).

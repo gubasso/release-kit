@@ -106,7 +106,6 @@ pub const CLASSES: &[(&str, Class)] = &[
     ("issue start", Class::Writing),
     ("runs", Class::Exempt),
     ("skill", Class::Exempt),
-    ("self-depend", Class::Exempt),
     ("doctor", Class::Exempt),
     ("usage", Class::Exempt),
     ("license", Class::Exempt),
@@ -171,7 +170,6 @@ pub fn classify(command: &Commands) -> Option<Gated> {
         | Commands::Upgrade(_)
         | Commands::Runs(_)
         | Commands::Skill(_)
-        | Commands::SelfDepend(_)
         | Commands::Doctor(_)
         | Commands::Usage
         | Commands::License
@@ -286,21 +284,13 @@ pub fn require_aligned(command: &Commands) -> Result<(), RkError> {
     match manifest::alignment(recorded, binary) {
         Alignment::Aligned => Ok(()),
         Alignment::BinaryNewer => {
-            let pin = crate::self_depend::pinned_version(&gated.target);
-            let outside = pin
-                .as_deref()
-                .is_some_and(|pin| manifest::alignment(pin, binary) == Alignment::BinaryNewer);
             if gated.effect == Effect::ReadOnly {
-                crate::output::Output::human().warn(binary_newer_warning(recorded, outside));
+                crate::output::Output::human().warn(binary_newer_warning(recorded));
                 return Ok(());
             }
-            Err(binary_newer(&gated.target, recorded, outside))
+            Err(binary_newer(&gated.target, recorded))
         }
-        Alignment::TargetNewer => {
-            let pin = crate::self_depend::pinned_version(&gated.target)
-                .filter(|pin| manifest::alignment(recorded, pin) == Alignment::TargetNewer);
-            Err(record_newer(&gated.target, recorded, pin.as_deref()))
-        }
+        Alignment::TargetNewer => Err(record_newer(recorded)),
     }
 }
 
@@ -401,18 +391,29 @@ fn no_record(target: &Utf8Path) -> RkError {
     )
 }
 
-fn binary_newer(target: &Utf8Path, recorded: &str, outside: bool) -> RkError {
+/// The skill that runs an upgrade and provisions the binary.
+pub const SKILL: &str = "rk-setup";
+
+/// The route after a pin move, through the setup skill of the new rk.
+///
+/// The gate and `rk upgrade` carry this one wording, and the managed
+/// block of `AGENTS.md` carries its short form. It is shared with sdd
+/// word for word, so a reader who moves both pins reads one procedure.
+///
+/// SATISFIES version-gate:a-gated-command-names-its-fix
+#[must_use]
+pub fn after_move() -> String {
+    format!(
+        "After the pin move, load the devshell and run the upgrade through the {SKILL} skill of the rk in that devshell, and do every migration it names. Before `rk upgrade`, read it with `rk skill show {SKILL}`. After it, the project's .claude/skills/{SKILL} is that skill. Never use a host copy or an older skill."
+    )
+}
+
+fn binary_newer(target: &Utf8Path, recorded: &str) -> RkError {
     let binary = env!("CARGO_PKG_VERSION");
-    let action = if outside {
-        format!(
-            "this rk comes from outside the project's environment, which pins rk {recorded}: {OWN_RK}. Where the project moved its pin to {binary}, run `rk upgrade --target {target} --apply` instead, then run this command again"
-        )
-    } else {
-        format!(
-            "run `rk upgrade --target {target} --apply` to move the landing, then run this command again. Where the project pins rk {recorded}, {OWN_RK}. {}",
-            crate::self_depend::advice::after_move()
-        )
-    };
+    let action = format!(
+        "run `rk upgrade --target {target} --apply` to move the landing, then run this command again. Where the project pins rk {recorded}, {OWN_RK}. {}",
+        after_move()
+    );
     RkError::refusal(
         Diagnostic::new(
             Reason::StateDrift,
@@ -424,27 +425,18 @@ fn binary_newer(target: &Utf8Path, recorded: &str, outside: bool) -> RkError {
     )
 }
 
-fn binary_newer_warning(recorded: &str, outside: bool) -> String {
+fn binary_newer_warning(recorded: &str) -> String {
     let binary = env!("CARGO_PKG_VERSION");
-    if outside {
-        format!(
-            "the landing is at rk {recorded} and this rk is {binary}, from outside the project's environment; {OWN_RK}, or run `rk upgrade` where the pin moved"
-        )
-    } else {
-        format!(
-            "the landing is at rk {recorded} and this rk is {binary}; run `rk upgrade` to move the landing"
-        )
-    }
+    format!(
+        "the landing is at rk {recorded} and this rk is {binary}; run `rk upgrade` to move the landing"
+    )
 }
 
-fn record_newer(target: &Utf8Path, recorded: &str, pin: Option<&str>) -> RkError {
+fn record_newer(recorded: &str) -> RkError {
     let binary = env!("CARGO_PKG_VERSION");
-    let mut action = OWN_RK.to_owned();
-    if let Some(pin) = pin {
-        action = format!(
-            "{action}. The pin of {target} names {pin}. Move it to {recorded} with `rk self-depend sync --apply --tag v{recorded}`"
-        );
-    }
+    let action = format!(
+        "{OWN_RK}. Where that environment lacks it, install rk {recorded} through the project's tool manager, by the `provision` task of the {SKILL} skill: `rk skill show {SKILL} --file references/provision.md`"
+    );
     RkError::refusal(
         Diagnostic::new(
             Reason::StateDrift,

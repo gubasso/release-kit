@@ -29,4 +29,4 @@ Enforced by `packaging:the-unattended-caller-never-fails-the-shell` and `packagi
 
 ## Status
 
-Accepted. It replaces the daily move of [owning the consumer pin in the binary](./ADR-own-the-consumer-pin-in-the-binary.md), whose transaction stays.
+Superseded by [installing rk through the project's tool manager](./ADR-install-rk-through-the-projects-tool-manager.md).

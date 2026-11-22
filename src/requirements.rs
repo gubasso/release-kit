@@ -31,7 +31,8 @@ pub enum Tool {
     Sh,
     /// A forge CLI: gh or glab.
     ForgeCli(Forge),
-    /// Nix, which `rk self-depend sync` updates and builds a devshell with.
+    /// Nix, which builds the devshell that pins a project's rk. Only the
+    /// doctor probes it.
     Nix,
     /// cargo, which `rk integrate` asks for a crate's package listing.
     Cargo,

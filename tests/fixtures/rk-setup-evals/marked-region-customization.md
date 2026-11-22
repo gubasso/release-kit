@@ -21,7 +21,7 @@ Present "State: `drift`. Request: fix the drift. Tasks: `repair`. Proceed?" and 
 
 ## Route
 
-1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json` and `rk setup status --target . --json`.
 2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
 3. `repair` pre-flight: run `rk status --check --target . --json` and sort the violations by kind. The one violation is rendered drift.
 4. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.

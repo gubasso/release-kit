@@ -224,7 +224,6 @@ mod tests {
             "WORKTREE_GUARD_ENTRY",
             "HOOK_BODY",
             "use flake",
-            "rk self-depend check ||",
             "release-kit.packages.",
             "inputs.nixpkgs.follows",
         ];

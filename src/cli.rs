@@ -19,7 +19,6 @@ pub mod profile_flags;
 pub mod read;
 pub mod release;
 pub mod runs;
-pub mod self_depend;
 pub mod setup;
 pub mod skill;
 pub mod stage;
@@ -92,8 +91,6 @@ pub enum Commands {
     /// Read the agent skills, and remove the copies an earlier release
     /// installed under the home.
     Skill(skill::SkillArgs),
-    /// Wire release-kit as a consumer's dependency and keep its pin fresh.
-    SelfDepend(self_depend::SelfDependArgs),
     /// Run every environment probe and report by class.
     Doctor(doctor::DoctorArgs),
     /// Print the whole command surface in one call.

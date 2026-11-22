@@ -760,7 +760,16 @@ pub fn render(manifest: &Manifest) -> Result<Vec<u8>, RkError> {
 /// The current instant in the record's RFC 3339 form.
 #[must_use]
 pub fn now() -> String {
-    crate::self_depend::check::stamp(std::time::SystemTime::now())
+    stamp(std::time::SystemTime::now())
+}
+
+/// RFC 3339 UTC to the second.
+#[must_use]
+pub fn stamp(at: std::time::SystemTime) -> String {
+    let at = jiff::Timestamp::try_from(at).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+    jiff::Timestamp::from_second(at.as_second())
+        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+        .to_string()
 }
 
 /// How a record's `rk_version` stands against this binary's.
@@ -873,11 +882,24 @@ fn numeric_core(version: &str) -> Vec<u64> {
 mod tests {
     use super::{
         Alignment, CapabilityRequests, CheckoutMode, FileRecord, GitWorkflow, Manifest, Parameters,
-        Placement, ProfileSnapshot, Provider, ReleaseIntent, ReleaseMode, Style, alignment,
+        Placement, ProfileSnapshot, Provider, ReleaseIntent, ReleaseMode, Style, alignment, stamp,
     };
     use crate::digest::Digest;
     use crate::landing::Integration;
     use crate::landing::Kind;
+
+    #[test]
+    fn a_stamp_is_utc_to_the_second_and_reads_back() {
+        use std::time::{Duration, SystemTime};
+        let at = SystemTime::UNIX_EPOCH + Duration::from_millis(1_794_874_301_750);
+        let text = stamp(at);
+        assert_eq!(text, "2026-11-17T00:11:41Z");
+        let read: jiff::Timestamp = text.parse().expect("the stamp parses back");
+        assert_eq!(
+            SystemTime::try_from(read).ok(),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_874_301))
+        );
+    }
 
     /// The complete record shape at schema 9, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump

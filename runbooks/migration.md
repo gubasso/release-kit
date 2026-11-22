@@ -4,7 +4,7 @@ The steps of [migration](../method/10-migration.md) as commands, in the chapter'
 
 ## Prerequisites
 
-The setup runbook's prerequisites, unchanged: `rk` on `PATH`, no user-scope copy of the skills, the forge CLI authenticated, and a clean working tree. A migration adds two. The target classifies as brownfield, and the work runs on the operator's own branch, so the trunk keeps releasing through the predecessor until that branch merges.
+The setup runbook's prerequisites, unchanged: `rk` on `PATH`, no user-scope copy of the skills, the forge CLI authenticated, and a clean working tree. The project's tool manager installs `rk` by the Install section of the release-kit README, which the crate's page, <https://crates.io/crates/release-kit>, carries. A migration adds two. The target classifies as brownfield, and the work runs on the operator's own branch, so the trunk keeps releasing through the predecessor until that branch merges.
 
 ```bash
 rk assess --target .
@@ -63,7 +63,7 @@ rk migrate archive --rebuild --apply --target .
 
 ### 3a. Land the greenfield instance
 
-The landing is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk init` as the front in its step 4. The archive left no collision, so no `--replace` passes it. A predecessor bump mechanism is removed first through `rk self-depend clean`, as [the setup runbook](./setup.md)'s prerequisites carry it (check: `rk status --target .` reports the landing, and still `classification: migration`).
+The landing is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk init` as the front in its step 4. The archive left no collision, so no `--replace` passes it. Check: `rk status --target .` reports the landing, and still `classification: migration`.
 
 ### 3b. Take the snapshots the landing adds
 

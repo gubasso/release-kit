@@ -48,8 +48,6 @@ pub struct Config {
     pub setup: Setup,
     /// Names and floored policy.
     pub protection: Protection,
-    /// How every host obtains `rk`, where no manager file pins it.
-    pub acquisition: Option<Acquisition>,
     /// How a command runs in the project's own development environment.
     pub dev_environment: Option<dev_environment::DevEnvironment>,
     /// The landing declaration: the rendered destinations the project
@@ -93,70 +91,10 @@ impl Default for Config {
             security: Security::default(),
             setup: Setup::default(),
             protection: Protection::default(),
-            acquisition: None,
             dev_environment: None,
             landing: Landing::default(),
         }
     }
-}
-
-/// Where every host obtains `rk`, where no manager file records a pin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AcquisitionSource {
-    /// Each host installs `rk` itself, at the minimum or newer.
-    Host,
-}
-
-impl AcquisitionSource {
-    /// The word the file spells.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Host => "host",
-        }
-    }
-}
-
-/// The `acquisition` table: the host-install answer.
-///
-/// A project gives it where it obtains `rk` from each host's own install.
-/// A manager file records its own pin, so only the one method that leaves
-/// no file behind needs this table.
-///
-/// SATISFIES target-config:a-host-install-is-a-recorded-answer
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Acquisition {
-    /// P: how every host obtains the binary.
-    pub source: AcquisitionSource,
-    /// P: the lowest `rk` release a host may run against this project.
-    pub minimum: String,
-}
-
-impl Acquisition {
-    /// A host answer whose minimum is this binary's own release.
-    #[must_use]
-    pub fn host_at_this_release() -> Self {
-        Self {
-            source: AcquisitionSource::Host,
-            minimum: env!("CARGO_PKG_VERSION").to_owned(),
-        }
-    }
-}
-
-/// Whether a value is a release version: three numeric parts, then an
-/// optional pre-release or build suffix.
-fn is_release_version(value: &str) -> bool {
-    let core = value.split(['-', '+']).next().unwrap_or_default();
-    let parts: Vec<&str> = core.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-        && value[core.len()..]
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
 }
 
 /// The `project` table: identity.
@@ -895,15 +833,6 @@ fn parse(text: &str) -> Result<Config, RkError> {
     bot_name_shape(&config.setup.bot.name).map_err(invalid)?;
     exclusions(&config.setup.excluded_steps)?;
     accepted_drift(&config.landing.accepted_drift)?;
-    if let Some(acquisition) = &config.acquisition
-        && !is_release_version(&acquisition.minimum)
-    {
-        return Err(invalid(format!(
-            "acquisition.minimum is {}, which is no release version; write one such as {}",
-            acquisition.minimum,
-            env!("CARGO_PKG_VERSION")
-        )));
-    }
     if let Some(answer) = &config.dev_environment {
         answer.check().map_err(invalid)?;
     }
@@ -1359,20 +1288,6 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             "RK_CONFIG_SETUP_BOT_NAME",
             Some(config.setup.bot.name.clone().into()),
         ),
-        (
-            "RK_CONFIG_ACQUISITION_SOURCE",
-            config
-                .acquisition
-                .as_ref()
-                .map(|answer| answer.source.as_str().into()),
-        ),
-        (
-            "RK_CONFIG_ACQUISITION_MINIMUM",
-            config
-                .acquisition
-                .as_ref()
-                .map(|answer| answer.minimum.clone().into()),
-        ),
     ];
     fields.extend(
         protection_fields(&config.protection, trunk.as_str())
@@ -1638,96 +1553,6 @@ const PARAMETER_KEYS: [&str; 31] = [
     "setup.required_check",
     "schema_version",
 ];
-
-/// The configuration text with the acquisition answer recorded, and
-/// whether that changes anything.
-///
-/// An existing file keeps every byte but the `acquisition` table. A target
-/// with no file gets one holding the schema and the answer alone: every
-/// other table takes its compiled default, and the landing that follows
-/// rewrites the file rather than replacing it, so the answer survives it.
-///
-/// # Errors
-/// Returns a config-invalid refusal for a file that does not parse, and
-/// preserves I/O errors.
-pub fn with_acquisition(target: &Path, answer: &Acquisition) -> Result<(String, bool), RkError> {
-    let path = target.join(CONFIG_PATH);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error.into()),
-    };
-    if text.is_empty() {
-        let template = crate::embedded::BLOCKS
-            .get_file("acquisition-config.toml.in")
-            .and_then(include_dir::File::contents_utf8)
-            .ok_or_else(|| invalid("the binary lacks its acquisition template"))?;
-        let mut fresh = template.as_bytes().to_vec();
-        for (token, value) in [
-            (
-                "RK_CONFIG_SCHEMA_VERSION",
-                toml_edit::Value::from(SCHEMA_VERSION),
-            ),
-            (
-                "RK_CONFIG_ACQUISITION_SOURCE",
-                toml_edit::Value::from(answer.source.as_str()),
-            ),
-            (
-                "RK_CONFIG_ACQUISITION_MINIMUM",
-                toml_edit::Value::from(answer.minimum.clone()),
-            ),
-        ] {
-            fresh =
-                crate::landing::substitute(&fresh, token.as_bytes(), value.to_string().as_bytes());
-        }
-        let fresh = String::from_utf8(fresh).map_err(|error| invalid(error.to_string()))?;
-        parse(&fresh)?;
-        return Ok((fresh, true));
-    }
-    let held = parse(&text)?;
-    if held.acquisition.as_ref() == Some(answer) {
-        return Ok((text, false));
-    }
-    let text = current_text(&text)?;
-    let mut document = text
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|error| invalid(error.to_string()))?;
-    if !document.contains_table("acquisition") {
-        let mut table = toml_edit::Table::new();
-        table.decor_mut().set_prefix("\n");
-        document.insert("acquisition", toml_edit::Item::Table(table));
-    }
-    let table = document
-        .get_mut("acquisition")
-        .and_then(toml_edit::Item::as_table_mut)
-        .ok_or_else(|| invalid("acquisition must be a table"))?;
-    for (key, value, note) in [
-        (
-            "source",
-            answer.source.as_str().to_owned(),
-            " P: host where every host installs rk itself; absent where a manager file pins it",
-        ),
-        (
-            "minimum",
-            answer.minimum.clone(),
-            " P: the lowest rk release a host may run against this project",
-        ),
-    ] {
-        let kept = table
-            .get(key)
-            .and_then(toml_edit::Item::as_value)
-            .map(|held| held.decor().clone());
-        let mut value = toml_edit::Value::from(value);
-        match kept {
-            Some(decor) => *value.decor_mut() = decor,
-            None => value.decor_mut().set_suffix(format!(" #{note}")),
-        }
-        table.insert(key, toml_edit::Item::Value(value));
-    }
-    let next = document.to_string();
-    parse(&next)?;
-    Ok((next, true))
-}
 
 impl Config {
     /// Whether this configuration states an open migration and nothing

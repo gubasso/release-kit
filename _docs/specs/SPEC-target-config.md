@@ -18,7 +18,6 @@
   - [`target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy](#target-configan-exclusion-narrows-scope-and-not-policy--an-exclusion-narrows-scope-and-not-policy)
   - [`target-config:an-unanswered-key-is-absent-and-not-empty` — An unanswered key is absent and not empty](#target-configan-unanswered-key-is-absent-and-not-empty--an-unanswered-key-is-absent-and-not-empty)
   - [`target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged](#target-configan-untaken-config-is-reported-and-not-judged--an-untaken-config-is-reported-and-not-judged)
-  - [`target-config:a-host-install-is-a-recorded-answer` — A host install is a recorded answer](#target-configa-host-install-is-a-recorded-answer--a-host-install-is-a-recorded-answer)
   - [`target-config:a-dev-environment-is-a-recorded-answer` — A dev environment is a recorded answer](#target-configa-dev-environment-is-a-recorded-answer--a-dev-environment-is-a-recorded-answer)
   - [`target-config:a-security-scope-is-one-paragraph` — A security scope is one paragraph](#target-configa-security-scope-is-one-paragraph--a-security-scope-is-one-paragraph)
   - [`target-config:an-open-migration-is-one-top-level-key` — An open migration is one top-level key](#target-configan-open-migration-is-one-top-level-key--an-open-migration-is-one-top-level-key)
@@ -252,20 +251,6 @@ When a committed class P answer differs from the record's, status MUST report th
 - THEN both report `profile.release.style` as pending and exit 0
 
 Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
-
-### `target-config:a-host-install-is-a-recorded-answer` — A host install is a recorded answer
-
-Where a project obtains `rk` from each host's own install rather than a manager file, the configuration MUST record it in the `acquisition` table as `source = "host"` and `minimum`, the lowest release a host may run, and a `minimum` that is no release version MUST refuse as `config-invalid`.
-
-A manager file records its own pin, so the table exists only for the one method that leaves no file behind, and a configuration that omits it records no host decision. Every landing verb rewrites an existing configuration and keeps the table.
-
-#### Scenario: A host answer names no version
-
-- GIVEN a configuration whose `acquisition.minimum` reads `soon`
-- WHEN any verb that reads the configuration runs
-- THEN it refuses as `config-invalid` naming `acquisition.minimum`, and nothing is written
-
-Verify: `cargo nextest run -E 'test(a_malformed_acquisition_minimum_refuses_as_config_invalid) or test(a_host_answer_survives_the_landing_and_keeps_the_configuration)'`
 
 ### `target-config:a-dev-environment-is-a-recorded-answer` — A dev environment is a recorded answer
 

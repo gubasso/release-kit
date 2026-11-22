@@ -21,7 +21,7 @@ Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wai
 
 ## Route
 
-1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json` and `rk setup status --target . --json`.
 2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
 3. `legacy_state` names an active operation, so the update waits for the answer. Ask whether the operator finishes it with the installed 0.4.x binary, per `rk guide landing` 1b, or records that it is abandoned. Remove nothing.
 4. The operator has not answered, so the run stops the update here and reports the active operation.

@@ -6,9 +6,9 @@
 //! argument surface, `commands` the handlers, `projection` the one pure
 //! candidate tree over the embedded sources, `landing` the parameters and
 //! the direct writes into a target, `stage` the disposable candidate
-//! stage over the projection, `self_depend` the consumer pin, `skills`
-//! the skill packages and the removal of the user-scope copies, `digest` the one hash type, and `error`
-//! the one exit-code matrix.
+//! stage over the projection, `skills` the skill packages and the
+//! removal of the user-scope copies, `digest` the one hash type, and
+//! `error` the one exit-code matrix.
 
 pub mod applog;
 pub mod assess;
@@ -41,7 +41,6 @@ pub mod registry;
 pub mod release_engine;
 pub mod release_state;
 pub mod requirements;
-pub mod self_depend;
 pub mod setup;
 pub mod skills;
 pub mod snapshot;

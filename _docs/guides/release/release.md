@@ -25,7 +25,7 @@ Below 1.0 only the left-most non-zero component is the incompatible one, so a br
 This repository runs its previous release of rk, the one that `flake.nix` pins. After a release publishes, one change moves the pin and the repository's own landing together, as in every consumer.
 
 1. Seat the change with `rk worktree add build/rk-v<version> --base master --apply`. `rk worktree list` names the new seat.
-2. In that worktree, run `rk self-depend sync --apply`. `git diff --stat` names `flake.nix` and `flake.lock` alone.
+2. In that worktree, edit the tag of the `release-kit` URL in `flake.nix` to `v<version>`, then run `nix flake update release-kit`. `git diff --stat` names `flake.nix` and `flake.lock` alone.
 3. Run `direnv exec . rk --version`. It names the new release.
 4. Run `direnv exec . rk upgrade --target . --apply` after its preview. `rk status --check --target .` reports `current`.
 5. Commit the pin, the landed files, and the receipt as one change. The commit hooks pass.

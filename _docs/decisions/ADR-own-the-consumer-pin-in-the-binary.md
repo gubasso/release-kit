@@ -27,4 +27,4 @@ Enforced by `packaging:the-consumer-pin-has-two-facts-and-one-mover`, `packaging
 
 ## Status
 
-Implemented: `src/self_depend.rs`, `src/commands/self_depend.rs`, `blocks/self-depend-*`, `runbooks/setup.md`, `skills/rk-setup/SKILL.md`, `skills/rk-migrate/SKILL.md`.
+Superseded by [installing rk through the project's tool manager](./ADR-install-rk-through-the-projects-tool-manager.md).

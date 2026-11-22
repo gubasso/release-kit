@@ -15,24 +15,12 @@
   - [`packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake](#packagingthe-landable-capability-promises-a-buildable-flake--the-landable-capability-promises-a-buildable-flake)
   - [`packaging:the-operator-selects-the-installed-version` — The operator selects the installed version](#packagingthe-operator-selects-the-installed-version--the-operator-selects-the-installed-version)
   - [`packaging:a-landed-job-takes-rk-by-one-route` — A landed job takes rk by one route](#packaginga-landed-job-takes-rk-by-one-route--a-landed-job-takes-rk-by-one-route)
-  - [`packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover](#packagingthe-consumer-pin-has-two-facts-and-one-mover--the-consumer-pin-has-two-facts-and-one-mover)
-  - [`packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis](#packagingthe-pin-is-read-through-a-manager-axis--the-pin-is-read-through-a-manager-axis)
-  - [`packaging:the-venue-and-the-manager-cross-in-one-matrix` — The venue and the manager cross in one matrix](#packagingthe-venue-and-the-manager-cross-in-one-matrix--the-venue-and-the-manager-cross-in-one-matrix)
-  - [`packaging:a-pin-bump-is-all-or-nothing` — A pin bump is all or nothing](#packaginga-pin-bump-is-all-or-nothing--a-pin-bump-is-all-or-nothing)
-  - [`packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell](#packagingthe-unattended-caller-never-fails-the-shell--the-unattended-caller-never-fails-the-shell)
-  - [`packaging:a-pin-moves-only-on-the-operators-order` — A pin moves only on the operator's order](#packaginga-pin-moves-only-on-the-operators-order--a-pin-moves-only-on-the-operators-order)
-  - [`packaging:add-serves-a-fragment-and-edits-no-owned-file` — Add serves a fragment and edits no owned file](#packagingadd-serves-a-fragment-and-edits-no-owned-file--add-serves-a-fragment-and-edits-no-owned-file)
-  - [`packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism](#packaginga-wired-target-runs-one-bump-mechanism--a-wired-target-runs-one-bump-mechanism)
-  - [`packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge](#packagingthe-cleanup-removes-only-what-it-can-judge--the-cleanup-removes-only-what-it-can-judge)
-  - [`packaging:the-setup-offers-the-freshness-wire` — The setup offers the freshness wire](#packagingthe-setup-offers-the-freshness-wire--the-setup-offers-the-freshness-wire)
-  - [`packaging:the-setup-offers-the-acquisition-route` — The setup offers the acquisition route](#packagingthe-setup-offers-the-acquisition-route--the-setup-offers-the-acquisition-route)
-  - [`packaging:a-host-install-reads-as-a-decision` — A host install reads as a decision](#packaginga-host-install-reads-as-a-decision--a-host-install-reads-as-a-decision)
 
 <!--TOC-->
 
 ## Purpose
 
-Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, the CI proof behind the support claim, and the consumer half — how a project obtains `rk` through the tool manager it already runs, from the venue that manager can consume, read and moved by `rk self-depend`. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
+Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, the CI proof behind the support claim, and the consumer half — how a project obtains `rk` through the tool manager it already runs, by that manager's own commands. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
 
 ## Requirements
 
@@ -146,7 +134,7 @@ Verify: `cargo nextest run -E 'test(nix)'`
 
 ### `packaging:the-operator-selects-the-installed-version` — The operator selects the installed version
 
-The operator and the target's tool manager MUST choose the installed `rk` version before any staging or landing begins, and `rk stage`, `rk init`, `rk upgrade`, `rk adopt`, and `rk status` MUST run from the installed binary alone, with no fetch, resolution, or execution of another release, because acquisition is the manager's workflow, which `rk self-depend` may assist, and a landing that reaches for another release is a second installer inside the tool.
+The operator and the target's tool manager MUST choose the installed `rk` version before any staging or landing begins, and `rk stage`, `rk init`, `rk upgrade`, `rk adopt`, and `rk status` MUST run from the installed binary alone, with no fetch, resolution, or execution of another release, because acquisition is the manager's workflow, and a landing that reaches for another release is a second installer inside the tool.
 
 #### Scenario: A target two releases behind is staged and landed offline
 
@@ -173,151 +161,3 @@ Where a landed job runs `rk`, the job MUST take it from the recorded development
 - THEN the job takes the setup step, installs `rk` at the landing version and appends its directory to `$GITHUB_PATH`, and runs `nix develop --command rk lines mint`
 
 Verify: `cargo nextest run -E 'binary(cli)'`
-
-### `packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover
-
-Where a consumer pins release-kit as a flake input, the binary MUST treat the tag in `flake.nix` as the version and the `flake.lock` node that the root's `release-kit` input resolves to as the content, and `rk self-depend sync` MUST move both in one run, because a tag without its lock is a promise the shell has not kept and nothing else in the tree may name an rk version. Where the wired manager records one fact, the sync MUST move that one fact in place and name the same `from` and `to` in the form the manager records, because the manager's own install takes the version from there and a second file would be a second pin.
-
-#### Scenario: A sync moves the pin
-
-- GIVEN a consumer whose pin is behind the latest release
-- WHEN `rk self-depend sync --apply` runs
-- THEN the tag in `flake.nix` and the locked node in `flake.lock` both name the new release, and the report names the same `from` and `to`
-
-Verify: `cargo nextest run -E 'test(self_depend_sync_apply_rewrites_the_pin_updates_the_lock_and_builds) or test(self_depend_sync_moves_a_mise_pin)'`
-
-### `packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis
-
-The binary MUST read how a target obtains `rk` through one manager enum, and `rk self-depend status` MUST report one entry per manager in the enum's order, absent ones included, each naming whether its file mentions release-kit and the version it records, because a manager list restated in prose drifts at the first new manager. The binary MUST report `.envrc` outside the list, because direnv loads a shell and pins nothing: a host install under an `.envrc` is a reported state with no version to move, never a manager. The status MUST exit 0 for every state it reports, because the verb has no `--check` mode and a report is not a verdict, the same split `landing:status-judges-only-under-check` draws. A new manager is one variant plus its rows in the matrix, and no skill or chapter restates the list.
-
-#### Scenario: A mise target carries no flake
-
-- GIVEN a target whose `mise.toml` pins release-kit and which carries no `flake.nix`
-- WHEN `rk self-depend status --json` runs
-- THEN the mise entry reports `pinned` with its version, the flake entry reports `absent` rather than a fault, `wired` names mise, and the run exits 0
-
-Verify: `cargo nextest run -E 'test(every_manager_in_the_enum_is_detected_once) or test(a_target_with_one_manager_chooses_it) or test(the_envrc_is_reported_outside_the_manager_list) or test(one_detection_serves_both_verbs)'`
-
-### `packaging:the-venue-and-the-manager-cross-in-one-matrix` — The venue and the manager cross in one matrix
-
-The binary MUST hold the venues `rk` publishes to as one enum, crossed with the manager enum in one matrix that classifies every pair as a rendered fragment or as manual with a reason from a closed set, because the venue and the manager are two axes and a venue no manager can consume is an honest row rather than a missing feature. A venue MUST enter the enum only where this repository's own release publishes to it under CI, the same claim `packaging:an-advertised-system-is-a-proven-system` makes for a system, and a venue that no per-project manager can pin, such as a system package built by a distribution service, MUST be recorded by its reason alone and take no variant. Every venue in the enum MUST carry a dated citation from that venue's own documentation in `_docs/reference/REFERENCE-packaging-sources.md`. A new venue is one variant plus its rows, and no fragment is a source literal: every text a pair renders is a file under `blocks/`.
-
-#### Scenario: A pair the matrix cannot wire
-
-- GIVEN a target on asdf, for which no published plugin installs release-kit
-- WHEN `rk self-depend add --manager asdf` runs
-- THEN the report names the pair `manual` with the reason `asdf-plugin-unknown`, nothing is written, and no plugin name is invented
-
-Verify: `cargo nextest run -E 'test(every_pair_in_the_matrix_is_classified_once) or test(every_manual_pair_names_a_closed_reason) or test(the_asdf_rows_are_manual_with_their_reason) or test(every_venue_names_a_dated_citation) or test(no_fragment_is_a_source_literal)'`
-
-### `packaging:a-pin-bump-is-all-or-nothing` — A pin bump is all or nothing
-
-Where any step of a bump fails — the pin rewrite, the lock refresh, the system probe, or the build that fences it — the binary MUST return both files to their previous contents and name the failing step; an interrupted run MUST recover on the next run from its marker, because the crate forbids the signal handler a shell trap would need, and that is the one departure from the shell version.
-
-#### Scenario: The build fails against the consumer's nixpkgs
-
-- GIVEN a pin that does not build against the consumer's own nixpkgs
-- WHEN the sync reaches the build step
-- THEN both files are byte-identical to what they held before, the report names `build` as the failed step, and the next run finds no marker
-
-Verify: `cargo nextest run -E 'test(a_failed_devshell_build_restores_both_files) or test(an_interrupted_transaction_is_recovered_on_the_next_run)'`
-
-### `packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell
-
-The `.envrc` line MUST run `rk self-depend check || true`, and the check MUST exit 0 on every outcome, a configuration it cannot read included, with each finding on stderr, because the line runs on every directory entry and a shell that refuses to start over a stale pin is worse than one that says so. The check MUST read only its cache, one file per checkout under `$XDG_CACHE_HOME/release-kit/self-depend/`, keyed as the state key, holding the time of the last attempt, the time of the last success, the latest release found, and the last error. It MUST read the latest release only where a refresh is due: one hour after a failed attempt, whatever an older success says, and otherwise where the cache is missing, holds no success, or holds a success seven days old or more, with times compared as times. A due refresh MUST take an OS file lock beside the cache without waiting, and a check that finds it held MUST warn from the cache it has and read nothing, because another process is refreshing. Under the lock it MUST record the attempt before it reads, and a warning MUST NOT change the attempt time. It MUST warn on every entry where the cache holds a newer release than the pin, in the pending wording below, and where the cache holds an error, naming it and the next try. Where the cache cannot be written it MUST say so and read nothing. `RK_DEVSHELL_SYNC=0` and a CI variable MUST stop it before it reads anything. It MUST write no file but its cache and its lock, and MUST NOT move a pin.
-
-Where the check cache holds a release newer than the pin, the check, the `next` of `rk self-depend status`, `rk status`, with its `pin` field, and the soft probe `pin-freshness` of `rk doctor` MUST say so in one pending wording, and MUST NOT read the network. The sync preview and apply, the `rk upgrade` preview from a newer binary, and the managed block of `AGENTS.md` MUST route through the rk-setup skill of the devshell rk, read with `rk skill show rk-setup` before the landing, and MUST refuse a host copy and an older skill, because the project copy still describes the old release. Both texts are one wording with sdd. From `flake.lock`, `rk self-depend status` and a current or moved sync MUST name each follows line the rk input lacks and MUST NOT write it: rk's copy of itself and a development-only input the consumer lacks follow `""`, an input the consumer also declares follows it, and every other input keeps its node.
-
-#### Scenario: A week-old success is refreshed once
-
-- GIVEN a cache whose last success is seven days old, and a second check entering at the same moment
-- WHEN both checks run
-- THEN one reads the latest release under the lock, the other warns from the cache without reading, and the tracked files are byte-identical
-
-Verify: `cargo nextest run -E 'test(a_failed_read_warns_with_its_reason_and_exits_zero) or test(the_seeded_envrc_line_is_the_check) or test(a_fresh_cache_reads_no_network) or test(an_update_warns_from_the_cache) or test(check_is_silent_when_current) or test(a_failure_after_an_overdue_success_waits_one_hour) or test(a_failed_first_check_retries_after_one_hour) or test(cached_error_warnings_do_not_postpone_the_retry) or test(an_unwritable_cache_warns_and_reads_no_network) or test(overlapping_checks_read_the_network_once) or test(a_held_lock_warns_from_the_cache_and_reads_nothing) or test(check_writes_no_file_but_its_cache) or test(the_off_switch_stops_check_but_not_an_operator_sync) or test(a_behind_pin_is_reported_by_status_and_doctor_from_the_cache) or test(a_current_pin_is_reported_as_current) or test(the_sync_routes_through_the_new_skill) or test(an_upgrade_preview_from_a_newer_binary_opens_with_the_route) or test(the_missing_follows_lines_are_named_and_never_written) or test(advice::tests)'`
-
-### `packaging:a-pin-moves-only-on-the-operators-order` — A pin moves only on the operator's order
-
-`rk self-depend sync --apply` MUST move the pin only as the operator's act: `--caller envrc` MUST refuse as a usage error that names `rk self-depend check`, and where `DIRENV_IN_ENVRC` is set, which direnv's stdlib exports while it evaluates an `.envrc`, the sync MUST move nothing, warn with the cause and `nix develop -c rk self-depend sync --apply`, and exit 1, because an older `.envrc` line still runs the sync on every entry. The off switch and a CI variable MUST NOT stop it. `rk self-depend status` MUST report an `.envrc` that still carries the retired sync line, and `rk self-depend clean --apply` MUST swap it for the check line.
-
-#### Scenario: An old line runs the sync on directory entry
-
-- GIVEN a consumer whose `.envrc` still runs `rk self-depend sync --apply || true`, and a release newer than its pin
-- WHEN direnv evaluates the `.envrc`
-- THEN the sync moves nothing, warns with the command that moves the pin from a shell, and exits 1, and the shell starts
-
-Verify: `cargo nextest run -E 'test(sync_inside_an_envrc_moves_nothing) or test(sync_apply_from_a_shell_moves_the_pin) or test(the_envrc_caller_is_a_usage_error) or test(the_old_sync_line_is_reported_and_swapped)'`
-
-### `packaging:add-serves-a-fragment-and-edits-no-owned-file` — Add serves a fragment and edits no owned file
-
-`rk self-depend add` MUST print the fragments for one manager and venue pair with their anchors and placements and MUST NOT edit a manager file or an `.envrc` the target owns, seeding a file only where the target has none, because a lexical observation does not justify a write into another project's manager file and the splice into Nix attrsets was rejected by decision. The `.envrc` MUST be seeded for the flake pair alone, because `use flake` is what puts `rk` on the path there and no other manager loads through direnv by default; every other pair prints the check line for the operator to place.
-
-#### Scenario: A target owns its manager file
-
-- GIVEN a target with a `flake.nix`, a `mise.toml`, or a `devbox.json` of its own
-- WHEN `rk self-depend add --apply` runs for that manager
-- THEN the file is byte-identical, the run exits 73 naming the reason, and the fragments still print for the operator or the agent to apply
-
-Verify: `cargo nextest run -E 'test(self_depend_add_apply_refuses_a_manager_file_the_target_owns) or test(self_depend_add_apply_refuses_every_owned_manager_file) or test(self_depend_add_apply_seeds_a_manager_file_the_target_lacks)'`
-
-### `packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism
-
-The binary MUST report a target as `ready` only where the pin is wired and no artifact of a predecessor bump mechanism remains, because two mechanisms over the same two files fight or silently undo each other and the wiring is a replacement, never an addition. `rk self-depend add` MUST refuse a manager other than the one already naming release-kit, because two managers naming one tool are two pins.
-
-#### Scenario: A hand-rolled bump sits beside a wired pin
-
-- GIVEN a target whose `flake.nix` carries the pin and whose `scripts/` still holds the hand-rolled bump
-- WHEN `rk self-depend status` runs
-- THEN the state is `superseded` and the leftovers list names the script, and `ready` follows only once the list is empty
-
-Verify: `cargo nextest run -E 'test(self_depend_status_names_a_predecessor_mechanism_beside_a_wired_pin) or test(a_clean_target_reports_ready_and_an_empty_manual_list) or test(self_depend_add_refuses_a_second_bump_mechanism)'`
-
-### `packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge
-
-`rk self-depend clean` MUST remove a catalog file only when its content matches, rewrite only the `.envrc` line the verb owns, and, where it leaves a leftover in place, name its file, its line, and the reason with the file byte-identical, because a recipe body, a Nix package list, and a CI step carry structure a line scan cannot judge.
-
-#### Scenario: The justfile recipe stays
-
-- GIVEN a target whose justfile carries the hand-rolled bump recipe
-- WHEN `rk self-depend clean --apply` runs
-- THEN the justfile is byte-identical and the report's `manual` list names it by file, line, and reason
-
-Verify: `cargo nextest run -E 'test(self_depend_clean_apply_leaves_the_justfile_and_the_flake_and_names_them) or test(a_catalog_file_matches_on_its_content_and_not_on_its_name_alone)'`
-
-### `packaging:the-setup-offers-the-freshness-wire` — The setup offers the freshness wire
-
-Where a landing records a target for the first time and that target is wired to a manager and carries no check line, the setup skill MUST raise that gap as a decision the operator answers before the task closes, and MUST record the answer, because `packaging:add-serves-a-fragment-and-edits-no-owned-file` refuses the binary an edit into an `.envrc` the target already owns and a capability nobody offers reaches only the operator who already knew about it. The skill MUST read the gap and the manager from `rk self-depend status --json` rather than from a manager list of its own, and MUST raise nothing under this requirement where `wired` names no manager or where the landing is an upgrade of a recorded target.
-
-#### Scenario: A first landing closes over a pin nobody moves
-
-- GIVEN a target with no record, whose manager pins release-kit and whose `.envrc` carries no check line
-- WHEN the landing reaches its last step
-- THEN the skill states what the line does and asks the operator, and a refusal closes the landing as a recorded answer
-
-Verify: `cargo nextest run -E 'test(the_setup_skill_offers_the_freshness_wire_to_a_wired_target)'`
-
-### `packaging:the-setup-offers-the-acquisition-route` — The setup offers the acquisition route
-
-Where a landing records a target for the first time and `rk self-depend status` reports no manager, the setup skill MUST raise how the project obtains `rk` as a decision the operator answers before the task closes, and MUST record the answer, because the same refusal that leaves the check line unplaceable leaves the manager file unchosen: the binary seeds only a file the target lacks, so nothing but the skill can ask which manager the project runs. The decision MUST offer a manager the binary can wire, a host install, and an answer for an operator who wires it themselves, and MUST state that a host install serves one version to every project on that machine. The skill MUST ask once per landing and MUST NOT repeat a question an answer already closed.
-
-#### Scenario: A first landing leaves the target on a host install
-
-- GIVEN a target with no record and no manager file, whose operator opted the Nix capability in
-- WHEN the landing reaches its last step
-- THEN the skill asks how the project obtains `rk`, states what each answer costs, and records the answer it receives
-
-Verify: `cargo nextest run -E 'test(the_setup_skill_offers_the_acquisition_route_to_an_unwired_target) or test(an_unwired_target_takes_the_chosen_manager_and_reports_it_back)'`
-
-### `packaging:a-host-install-reads-as-a-decision` — A host install reads as a decision
-
-Where no manager file names release-kit and `.release-kit/config.toml` records the acquisition answer `source = "host"`, `rk self-depend status` MUST report the state `host` with the recorded minimum, beside `no-manager` and `not-wired`, and `rk self-depend add --host` MUST be the verb that records the answer, refusing where a manager already pins release-kit.
-
-The answer goes into the configuration, every comment kept, at the installed binary's release as the minimum. A target with no configuration yet gets one holding the answer alone, because the configuration is input a landing completes rather than a file it replaces. Spec-driven-docs records the same decision in its own declaration only after a landing, because a declaration written earlier would become a file that landing keeps in place of its seed.
-
-#### Scenario: A project declines a pin before its first landing
-
-- GIVEN a target with no record and no manager file, whose operator chose a host install
-- WHEN `rk self-depend add --host --apply` runs, then `rk init --apply`
-- THEN `rk self-depend status` reports `host` before and after the landing, and no later run asks again
-
-Verify: `cargo nextest run -E 'test(self_depend_status_reads_a_recorded_host_install_as_a_decision) or test(a_host_answer_survives_the_landing_and_keeps_the_configuration) or test(a_host_answer_refuses_where_a_manager_pins_release_kit)'`

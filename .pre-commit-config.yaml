@@ -240,7 +240,7 @@ repos:
       # owner: devshell (project-environment) rk must be the release that this project's environment pins.
       - id: the-devshell-rk-is-the-pinned-release
         name: the devshell rk is the pinned release
-        entry: sh -c 'rk self-depend status --target . | grep -Fq "(same as this binary)" || { echo "the rk on PATH is not the release that flake.nix pins; run the rk of this project through direnv exec ." >&2; exit 1; }'
+        entry: sh -c 'tag=$(sed -n "s|^ *url = \"github:gubasso/release-kit/v\([^\"/]*\)\";.*|\1|p" flake.nix | head -n 1); ver=$(rk --version 2>/dev/null | sed -n "s/^rk //p"); [ -n "$tag" ] && [ "$ver" = "$tag" ] || { echo "the rk on PATH (${ver:-none}) is not the release that flake.nix pins (${tag:-no tag}); run the rk of this project through direnv exec ." >&2; exit 1; }'
         language: system
         files: '^(flake\.(nix|lock)|\.envrc)$'
         pass_filenames: false

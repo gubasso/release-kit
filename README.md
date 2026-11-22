@@ -10,11 +10,59 @@ The design in one sentence: work integrates on one trunk, a bot maintains one re
 
 ## Install
 
+Pick the manager that the project already runs. `X.Y.Z` is the release version, and the binary is `rk`. [REFERENCE-packaging-sources.md](./_docs/reference/REFERENCE-packaging-sources.md) cites the upstream documentation behind each command.
+
+### Nix flake
+
+Add the input to `flake.nix`:
+
+```nix
+release-kit = {
+  url = "github:gubasso/release-kit/vX.Y.Z";
+  inputs.nixpkgs.follows = "nixpkgs";
+  inputs.release-kit.follows = "";
+};
+```
+
+Then add `release-kit.packages.${system}.default` to the packages of the devshell. The empty follows cuts the previous rk release that the flake pins for its own development, so `flake.lock` holds one rk node.
+
+To move the pin, edit the tag in the URL, then run:
+
+```bash
+nix flake update release-kit
+```
+
+`exobrain outdated` warns when a newer release is out.
+
+### mise
+
+```bash
+mise use cargo:release-kit@X.Y.Z
+```
+
+### devbox
+
+```bash
+devbox add github:gubasso/release-kit/vX.Y.Z#default
+```
+
+### asdf
+
+No asdf plugin for release-kit exists. An asdf user installs the binary from the GitHub release.
+
+### The GitHub release
+
+Each release tag carries a prebuilt x86_64 Linux archive and a shell installer. This route serves asdf users and any host with no manager:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/gubasso/release-kit/releases/download/vX.Y.Z/release-kit-installer.sh | sh
+```
+
+### Host install
+
 ```bash
 cargo install release-kit
 ```
-
-The binary is `rk`.
 
 ## Quick paths
 
@@ -27,7 +75,7 @@ The binary is `rk`.
 - Ask a landed project about itself: `rk status`, with `--check` for a CI gate; take this binary's projection with `rk upgrade`, which replaces every recorded generated file, preserves every seeded and state file, removes a generated file this release stops landing where nobody edited it, and rewrites the receipt last; record a pre-record project already at the projection with `rk adopt`; classify a project before anything lands with `rk assess`. Each of these renders afresh from the installed binary and the target, reads no stage and no other release, and refuses an unattributed whole-file collision before its first write.
 - Carry a project off another release tool: `rk migrate inventory` lists the predecessor files, `rk migrate archive --apply` moves them into a workspace and opens the migration, `rk migrate mark` records the map, and `rk migrate close --apply` ends it once nothing is unfinished.
 - See the pinned tools and their freshness: `rk versions`, and `rk versions --check` to compare each pin upstream.
-- Take `rk` through the tool manager a project already runs and keep it fresh: `rk self-depend add` prints the fragments for one manager and venue pair and seeds the file the project lacks; `rk self-depend check` warns from `.envrc` once a newer release is out, and `rk self-depend sync --apply` moves the pin on your order; `rk self-depend clean` removes what a hand-rolled bump left.
+- Take `rk` through the tool manager a project already runs: [Install](#install) gives that manager's own commands, and the manager moves the pin.
 - Check the host and load the whole surface: `rk doctor` and `rk usage`.
 - Read the agent skills: every landing writes one package per skill under the project's `.claude/skills/` and `.agents/skills/`, each carrying the shared gates in its own `references/`. Before a landing, `rk skill show <name>` prints a skill, and `--file <path>` one file of it. `rk skill uninstall --apply` removes the copies an earlier release installed under the home.
 - Follow the recipe: `rk guide setup` once per repository, `rk guide release` for every release, `rk guide backport` for a fix crossing to an older line, `rk guide release-lines` for the line's own life, `rk guide landing` for every landing write from stage to cleanup.

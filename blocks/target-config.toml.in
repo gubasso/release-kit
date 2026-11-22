@@ -83,7 +83,3 @@ squash_option = RK_CONFIG_PROTECTION_GITLAB_SQUASH_OPTION # F: invariant, the sq
 squash_commit_template = RK_CONFIG_PROTECTION_GITLAB_SQUASH_COMMIT_TEMPLATE # F: invariant, references title and description
 push_access_level = RK_CONFIG_PROTECTION_GITLAB_PUSH_ACCESS_LEVEL # F: invariant, the level git.integration names
 merge_access_level = RK_CONFIG_PROTECTION_GITLAB_MERGE_ACCESS_LEVEL # F: floor thirty
-
-[acquisition]
-source = RK_CONFIG_ACQUISITION_SOURCE # P: host where every host installs rk itself; absent where a manager file pins it
-minimum = RK_CONFIG_ACQUISITION_MINIMUM # P: the lowest rk release a host may run against this project

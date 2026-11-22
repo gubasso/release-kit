@@ -7,5 +7,5 @@
 # needed no step, so the authoring gate can tell a deliberate silence from
 # a forgotten file.
 
-since = "0.3.18"
-no_steps = ["0.7.1"]
+since = "0.3.19"
+no_steps = ["0.7.1", "0.11.0"]

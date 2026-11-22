@@ -13,7 +13,7 @@
 
 ## Situation
 
-A GitHub repository with a crate, no release mechanism, no tag, and no `.release-kit/manifest.json`. `rk status --target . --json` reads `classification` `setup` and `git_work_tree` true. `rk self-depend status --target . --json` reads `no-manager`, and no host decision is recorded. The operator asked for the release workflow to be set up, with cleanup.
+A GitHub repository with a crate, no release mechanism, no tag, and no `.release-kit/manifest.json`. `rk status --target . --json` reads `classification` `setup` and `git_work_tree` true. The repository carries a `flake.nix` that pins no `rk`. The operator asked for the release workflow to be set up, with `rk` pinned in the project, and with cleanup.
 
 ## Gate
 
@@ -21,8 +21,8 @@ Present "State: `setup`. Request: set up. Tasks: `provision`, `forge-settings`, 
 
 ## Route
 
-1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
-2. `provision` runs first, because nothing pins `rk` here. Ask the operator how the project obtains it, with the cost of each answer. The operator picks a native host install, so gate `rk self-depend add --host --target . --apply`. An answer already recorded is not asked again.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json` and `rk setup status --target . --json`.
+2. `provision` runs first, because the request asks to pin `rk` here. Ask the operator which tool manager the project runs, with the flake the repository carries as the default. Read the Install section of the release-kit README for that manager, and run its commands as a gated step.
 3. `forge-settings`: list the steps `rk setup status --target . --json` reads as not `satisfied`, preview each with `rk setup step <name> --target . --json`, and run each with `--apply` as a gated step, in the runbook's order. `install-bot` reads `unknown` without the App key, which is no question.
 4. `land` pre-flight: run `rk profile --target . --json` and ask only what it leaves open, one default each: the release style, the integration mode, and each capability, the workflow guards listed before the question.
 5. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --technology rust --release-style trunk --integration local` and hold `<root>`.

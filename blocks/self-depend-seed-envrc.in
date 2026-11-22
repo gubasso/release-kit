@@ -1,2 +1,0 @@
-use flake
-rk self-depend check || true
