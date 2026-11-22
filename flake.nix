@@ -31,8 +31,9 @@
     # consumer. It runs the hooks, rk worktree, rk integrate, and this
     # repository's own landing. The rk built from the tree runs only under
     # test, where a caller names target/debug/rk or cargo run. The tag in
-    # this URL is the version and flake.lock is the content pin, and
-    # rk self-depend sync --apply moves the two together.
+    # this URL is the version and flake.lock is the content pin. The
+    # `exobrain outdated` line of .envrc warns about a newer release, and
+    # `flake-edit update release-kit` moves the tag to it.
     #
     # The pinned release carries a release-kit input of its own, its previous
     # release. The empty string points it at this flake, so a pin move does

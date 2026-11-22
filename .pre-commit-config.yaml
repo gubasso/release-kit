@@ -454,7 +454,7 @@ repos:
   # The rev of each repository of the named sets follows the tag below, and
   # `exobrain hooks sync` alone moves it.
   - repo: https://github.com/gubasso/exobrain-tech
-    rev: v1.2.0
+    rev: v2.0.0
     hooks:
       - id: no-path-flake-reference
       - id: no-hook-runner-in-flake
