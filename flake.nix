@@ -19,7 +19,7 @@
     # a spec-driven-docs input of its own, its previous release; the empty
     # string points it at this flake, so flake.lock holds one sdd node.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.19.1";
+      url = "github:gubasso/spec-driven-docs/v0.20.0";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.spec-driven-docs.follows = "";
       # Its rk serves only its own devShell, so it follows this flake's
@@ -39,7 +39,7 @@
     # release. The empty string points it at this flake, so a pin move does
     # not nest the older release in flake.lock, one node per release.
     release-kit = {
-      url = "github:gubasso/release-kit/v0.10.3";
+      url = "github:gubasso/release-kit/v0.11.0";
       inputs.release-kit.follows = "";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rust-overlay.follows = "rust-overlay";

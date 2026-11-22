@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.19.1",
+  "canon_version": "0.20.0",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -14,12 +14,12 @@
     {
       "source": "skills/sdd-setup/SKILL.md",
       "destination": ".claude/skills/sdd-setup/SKILL.md",
-      "sha256": "0f15d01ac8b814e2c79656ed609a9c4bc66313e81fae910265f080e38a9591b8"
+      "sha256": "c03295fbf3d3c387ecbfc6101c0b5badc260e13561b5bd76025bbf31154ff3c3"
     },
     {
       "source": "skills/sdd-setup/references/land.md",
       "destination": ".claude/skills/sdd-setup/references/land.md",
-      "sha256": "151b691d3da83165a256fe2dafbde298ba7b8a17e63044de7048e10dd7894e1a"
+      "sha256": "5966b24ffdd06a03df73a3adef75a16328a26bb2d6d41ea0265eab05110957a5"
     },
     {
       "source": "skills/sdd-setup/references/landing.md",
@@ -29,7 +29,7 @@
     {
       "source": "skills/sdd-setup/references/migrate.md",
       "destination": ".claude/skills/sdd-setup/references/migrate.md",
-      "sha256": "6166775965d08bca568bb65fa8e81b90402e6598709203ea0a0053826463ef95"
+      "sha256": "6d704ff64f7436e11385eeabb1beaa9c8a8d471ba3eb2308d8185ef1f5f75af2"
     },
     {
       "source": "skill-shared/plan-gate.md",
@@ -44,7 +44,7 @@
     {
       "source": "skills/sdd-setup/references/provision.md",
       "destination": ".claude/skills/sdd-setup/references/provision.md",
-      "sha256": "9d98da7e3aa96feab1b51ef91460880aedfe49f8a6ac4bfcbcd457bd4442d599"
+      "sha256": "015ab7b975502fce86fbb7e87584c94639abf252d9dcf32775e9ba09dd23b2da"
     },
     {
       "source": "skills/sdd-setup/references/repair.md",
@@ -79,12 +79,12 @@
     {
       "source": "skills/sdd-setup/SKILL.md",
       "destination": ".agents/skills/sdd-setup/SKILL.md",
-      "sha256": "0f15d01ac8b814e2c79656ed609a9c4bc66313e81fae910265f080e38a9591b8"
+      "sha256": "c03295fbf3d3c387ecbfc6101c0b5badc260e13561b5bd76025bbf31154ff3c3"
     },
     {
       "source": "skills/sdd-setup/references/land.md",
       "destination": ".agents/skills/sdd-setup/references/land.md",
-      "sha256": "151b691d3da83165a256fe2dafbde298ba7b8a17e63044de7048e10dd7894e1a"
+      "sha256": "5966b24ffdd06a03df73a3adef75a16328a26bb2d6d41ea0265eab05110957a5"
     },
     {
       "source": "skills/sdd-setup/references/landing.md",
@@ -94,7 +94,7 @@
     {
       "source": "skills/sdd-setup/references/migrate.md",
       "destination": ".agents/skills/sdd-setup/references/migrate.md",
-      "sha256": "6166775965d08bca568bb65fa8e81b90402e6598709203ea0a0053826463ef95"
+      "sha256": "6d704ff64f7436e11385eeabb1beaa9c8a8d471ba3eb2308d8185ef1f5f75af2"
     },
     {
       "source": "skill-shared/plan-gate.md",
@@ -109,7 +109,7 @@
     {
       "source": "skills/sdd-setup/references/provision.md",
       "destination": ".agents/skills/sdd-setup/references/provision.md",
-      "sha256": "9d98da7e3aa96feab1b51ef91460880aedfe49f8a6ac4bfcbcd457bd4442d599"
+      "sha256": "015ab7b975502fce86fbb7e87584c94639abf252d9dcf32775e9ba09dd23b2da"
     },
     {
       "source": "skills/sdd-setup/references/repair.md",

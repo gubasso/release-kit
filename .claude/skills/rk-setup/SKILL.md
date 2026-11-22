@@ -30,20 +30,17 @@ An unreadable record never counts as an absent one, so never land over it.
 
 1. Hold these observations for the gate. None of them ends the run. Read `alignment` before `classification`, because a record newer than the binary reads `classification` null.
 
-| Observation                                            | Evidence                                  | Routes to                               |
-| ------------------------------------------------------ | ----------------------------------------- | --------------------------------------- |
-| No `rk` on PATH                                        | `command -v rk`, by hand                  | `provision`, then this pre-flight again |
-| A record newer than the binary                         | `alignment` `target-newer`                | `provision`                             |
-| A pin behind the latest release                        | `pin.behind` in the status report         | `provision`, then `upgrade`             |
-| No pin and no host decision, at `setup` or `migration` | `rk self-depend status --target . --json` | `provision`, offered first              |
-| A pin with no check line, at `setup` or `migration`    | `wired` and `envrc_check` in that report  | `provision`, offered first              |
-| The state of the target                                | `classification`                          | the gate                                |
-| The setup steps and the setup proof                    | `rk setup status --target . --json`       | `forge-settings` and `publish`          |
+| Observation                         | Evidence                            | Routes to                               |
+| ----------------------------------- | ----------------------------------- | --------------------------------------- |
+| No `rk` on PATH                     | `command -v rk`, by hand            | `provision`, then this pre-flight again |
+| A record newer than the binary      | `alignment` `target-newer`          | `provision`                             |
+| The state of the target             | `classification`                    | the gate                                |
+| The setup steps and the setup proof | `rk setup status --target . --json` | `forge-settings` and `publish`          |
 
 1. Hand the gate these inputs. The gate reads nothing else.
    - The status report.
    - Each failed `soft` probe, as a plan constraint.
-   - The self-depend and setup reports.
+   - The setup report.
 
 ## General rules
 

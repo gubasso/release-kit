@@ -27,14 +27,14 @@ An unreadable record never counts as an absent one, so never land seeds over it.
 
 1. Hold these observations for the gate. None of them ends the run. Read `alignment` before `classification`, because an instance newer than the binary reads `classification` `null`.
 
-| Observation                                            | Evidence                                   | Routes to                               |
-| ------------------------------------------------------ | ------------------------------------------ | --------------------------------------- |
-| No `sdd` on PATH                                       | `command -v sdd`, by hand                  | `provision`, then this pre-flight again |
-| An instance newer than the binary                      | `alignment` `instance-newer`               | `provision`                             |
-| No pin and no host decision, at `setup` or `migration` | `sdd self-depend status --target . --json` | `provision`, offered first              |
-| The state of the target                                | `classification`                           | the gate                                |
+| Observation                                                         | Evidence                             | Routes to                               |
+| ------------------------------------------------------------------- | ------------------------------------ | --------------------------------------- |
+| No `sdd` on PATH                                                    | `command -v sdd`, by hand            | `provision`, then this pre-flight again |
+| An instance newer than the binary                                   | `alignment` `instance-newer`         | `provision`                             |
+| No manager file names `spec-driven-docs`, at `setup` or `migration` | the project's manager files, by hand | `provision`, offered first              |
+| The state of the target                                             | `classification`                     | the gate                                |
 
-1. Hand the gate the status report, its `paths`, each failed `soft` probe other than `git` and `prek` as a plan constraint, each failed `git` or `prek` probe as an install step for the operator, and the `self-depend` report. The gate reads nothing else.
+1. Hand the gate the status report, its `paths`, each failed `soft` probe other than `git` and `prek` as a plan constraint, each failed `git` or `prek` probe as an install step for the operator, and the manager files that name `spec-driven-docs`. The gate reads nothing else.
 
 ## General rules
 
@@ -60,7 +60,7 @@ Read the state from `classification`, never from the request, and the intent fro
 | `drift`          | `repair`       | `repair`  | `repair`  | `repair`, then `tune-gates`  | no task   |
 | `current`        | done           | done      | done      | `tune-gates`                 | no task   |
 
-- Put `provision` first where an observation routes to it. With no `sdd`, it is the only task. After it, run the pre-flight again and read this table in the same run. A host answer that `provision` holds for the Stage step settles the pin row for this run.
+- Put `provision` first where an observation routes to it. With no `sdd`, it is the only task. After it, run the pre-flight again and read this table in the same run. The method the operator chose in `provision`, a native host install included, settles the manager-file row for the rest of the run, and no file records that choice.
 - Run `tune-gates` only on an instance at the binary's version, which is why `upgrade` and `repair` come first in their cells.
 - Send "no task" straight to the post-flight, whose environment step does the work.
 - Ask: state the evidence and the options, wait, then read this table again with no new pre-flight. For `needs-decision`, the operator names the home of the documentation.

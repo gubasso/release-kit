@@ -18,7 +18,7 @@ The reserved paths come from the `tune-gates` pre-flight, which runs before the 
 
 Fill the landing pipeline with:
 
-- Stage: `sdd stage --target . --profile <profile> --docs-scratch <scratch> --writing-style <style> --json`, with one `--reserve <path>` per reserved path and `--acquisition host` where `provision` recorded a host decision.
+- Stage: `sdd stage --target . --profile <profile> --docs-scratch <scratch> --writing-style <style> --json`, with one `--reserve <path>` per reserved path.
 - Prepare: no item of its own.
 - Land: `sdd init --stage <root>` to preview, then `sdd init --stage <root> --apply` as the gated step. It reads every choice from the receipt, so the landing cannot differ from the stage.
 
@@ -27,5 +27,5 @@ The ignore entry for the docs scratch is an environment item of the general post
 ## Post-flight
 
 1. The Prove step passed.
-2. `sdd status --target . --json` reads `classification` `current`. Where `provision` held a host answer, `sdd self-depend status --target . --json` reads `host`.
+2. `sdd status --target . --json` reads `classification` `current`.
 3. The report lists the files `sdd init` wrote, with the Prove step and `current` as the proof, and its Next line routes to the `sdd-write-docs` skill to start writing.

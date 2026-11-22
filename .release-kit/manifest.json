@@ -1,6 +1,6 @@
 {
   "schema_version": 12,
-  "rk_version": "0.10.3",
+  "rk_version": "0.11.0",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -89,7 +89,7 @@
     {
       "destination": ".agents/skills/rk-setup/SKILL.md",
       "kind": "rendered",
-      "sha256": "c3a16b3da71c6ffce5c08f197f7d1d9d9371e7b9883926f8f9d0005d7194fbfb"
+      "sha256": "e34f802c48632456844e6bfd8d98975d2a807253957d48d1fa321fc94c3a9b1e"
     },
     {
       "destination": ".agents/skills/rk-setup/references/adopt.md",
@@ -134,7 +134,7 @@
     {
       "destination": ".agents/skills/rk-setup/references/provision.md",
       "kind": "rendered",
-      "sha256": "41faf09fdcca97020e533443bd46938fd9b7ddcb1d47fa6783fb5caefa8e9b1d"
+      "sha256": "5fceb3791b8ac15fff154be68b8ee24002f0d966ee15c7f7fd08db43c33b29a0"
     },
     {
       "destination": ".agents/skills/rk-setup/references/publish.md",
@@ -184,7 +184,7 @@
     {
       "destination": ".claude/skills/rk-setup/SKILL.md",
       "kind": "rendered",
-      "sha256": "c3a16b3da71c6ffce5c08f197f7d1d9d9371e7b9883926f8f9d0005d7194fbfb"
+      "sha256": "e34f802c48632456844e6bfd8d98975d2a807253957d48d1fa321fc94c3a9b1e"
     },
     {
       "destination": ".claude/skills/rk-setup/references/adopt.md",
@@ -229,7 +229,7 @@
     {
       "destination": ".claude/skills/rk-setup/references/provision.md",
       "kind": "rendered",
-      "sha256": "41faf09fdcca97020e533443bd46938fd9b7ddcb1d47fa6783fb5caefa8e9b1d"
+      "sha256": "5fceb3791b8ac15fff154be68b8ee24002f0d966ee15c7f7fd08db43c33b29a0"
     },
     {
       "destination": ".claude/skills/rk-setup/references/publish.md",

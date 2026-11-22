@@ -13,7 +13,7 @@ Archive the old corpus, land a greenfield instance, and rebuild the documentatio
 
 1. Archive. Show the preview of `sdd migrate archive --target .`, then run `sdd migrate archive --target . --apply` as a gated step. Where it refuses a document that differs from the trunk's copy, the operator integrates its edit onto the trunk first. Where the remote's `HEAD` names no trunk, add `--trunk <ref>`. Where this clone holds no workspace for an open migration, run `sdd migrate archive --target . --rebuild --apply`.
 2. Land. Fill the landing pipeline with the choices `land` asks:
-   - Stage: `sdd stage --target . --profile <profile> --docs-scratch <scratch> --writing-style <style> --json`, with one `--reserve <path>` per reserved path and `--acquisition host` where `provision` holds a host answer.
+   - Stage: `sdd stage --target . --profile <profile> --docs-scratch <scratch> --writing-style <style> --json`, with one `--reserve <path>` per reserved path.
    - Land: `sdd init --stage <root>` to preview, then `sdd init --stage <root> --apply` as the gated step.
 3. Map. Read the sources from the workspace in related sets. Tag each decision record of the previous convention by topic, and propose one group per topic and per set that becomes one destination. Present the map and wait for the operator's approval, then record it:
    - `sdd migrate mark <source> mapped --group <group> --tag <topic>`
@@ -30,5 +30,5 @@ A discovery is a document the inventory missed, a split the map did not name, or
 ## Post-flight
 
 1. Run `sdd migrate close --target .`. Where it names an unfinished source, return to the loop.
-2. Run `sdd migrate close --target . --apply` as a gated step, then confirm that `sdd status --target . --json` reads `classification` `current`. Where `provision` held a host answer, `sdd self-depend status --target . --json` reads `host`.
+2. Run `sdd migrate close --target . --apply` as a gated step, then confirm that `sdd status --target . --json` reads `classification` `current`.
 3. List the workspace path under "Saved before changing" in the report. Keeping or removing the archive is the operator's step, by that exact path.
