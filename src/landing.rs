@@ -593,6 +593,7 @@ mod tests {
                                     security_scope: String::new(),
                                     required_check: "gate".to_owned(),
                                     dev_environment: None,
+                                    release_environment: String::new(),
                                 },
                                 files: Vec::new(),
                                 pins: std::collections::BTreeMap::new(),

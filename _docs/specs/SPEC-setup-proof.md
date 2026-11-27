@@ -35,19 +35,19 @@ Verify: `cargo nextest run -E 'test(a_step_found_wrong_now_supersedes_a_compatib
 
 ### `setup-proof:an-unavailable-credential-is-an-observation-boundary` — An unavailable credential is an observation boundary
 
-While `rk setup check` runs, a named key file the runtime cannot reach MUST leave `install-bot` unknown and every other step observed, and a check whose only gaps are unknown steps MUST exit 1 with the reason `observation-incomplete` and prescribe no apply; `rk setup --apply` and `rk setup checkpoint` MUST refuse the same key before any mutation or write.
+While `rk setup check` runs, a key file that the current process cannot read MUST leave `install-bot` and `bot-secrets` `unreadable` and every other step observed, and a check whose only gaps are `unreadable` steps MUST exit 0, name the unmet key requirement, and prescribe no apply. A check with an unknown step MUST still exit 1 with the reason `observation-incomplete` and prescribe no apply for it. `rk setup --apply` and `rk setup checkpoint` MUST refuse the same key before any mutation or write. `bot-key:an-unreadable-key-is-an-unmet-requirement` binds the detail of the state.
 
-#### Scenario: The key lives on the operator's host and not in the container
+#### Scenario: The key file is not readable by this process
 
-- GIVEN a fully set-up target and `RK_BOT_PRIVATE_KEY_FILE` naming a path absent from this runtime
+- GIVEN a fully set-up target and `RK_BOT_PRIVATE_KEY_FILE` naming a path that this process cannot read
 - WHEN `rk setup check` runs
-- THEN `install-bot` reports unknown, `protections-check` reports ok, the verdict says no setup defect was inferred, and no line prescribes `--apply`
+- THEN `install-bot` and `bot-secrets` report unreadable with the path and the remedy, `protections-check` reports ok, the check exits 0, and no line prescribes `--apply`
 
-Verify: `cargo nextest run -E 'test(a_check_reads_an_unreachable_key_as_an_observation_boundary) or test(apply_and_checkpoint_refuse_an_unreachable_key_and_every_mode_refuses_a_wrong_one)'`
+Verify: `cargo nextest run -E 'test(a_check_reports_an_unreadable_key_as_an_unmet_requirement) or test(apply_and_checkpoint_refuse_an_unreachable_key_and_every_mode_refuses_a_wrong_one)'`
 
 ### `setup-proof:a-checkpoint-records-only-a-complete-observation` — A checkpoint records only a complete observation
 
-`rk setup checkpoint` MUST write `.release-kit/setup-proof.json` in one rename, and only where no applicable step is unsatisfied or unknown; an incomplete observation MUST leave an earlier proof byte for byte and create no file where none stood.
+`rk setup checkpoint` MUST write `.release-kit/setup-proof.json` in one rename, and only where no applicable step is unsatisfied, unknown, or unreadable; an incomplete observation MUST leave an earlier proof byte for byte and create no file where none stood.
 
 #### Scenario: A checkpoint runs without the App's credentials
 

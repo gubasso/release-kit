@@ -88,6 +88,12 @@ fn needs_tags(ctx: &Ctx) -> Option<String> {
     })
 }
 
+/// The release branch protection serves the branches a release writes, so
+/// it applies wherever the release mode is not `none`.
+fn needs_release_branches(ctx: &Ctx) -> Option<String> {
+    needs_tags(ctx)
+}
+
 /// The packaging gate reads the release driver's own command, so it
 /// applies where an automatic release names one.
 fn needs_driver(ctx: &Ctx) -> Option<String> {
@@ -192,14 +198,14 @@ pub fn secret_step(name: &str) -> Option<&'static str> {
         .map(|(_, step)| *step)
 }
 
-/// The fifteen steps, with reporting intake last.
+/// The sixteen steps, with reporting intake last.
 ///
 /// `package-check`, `branch-reminder`, and `forge-version` belong to no
 /// forge tree — the first reads its command from the technology binding,
 /// the second writes an embedded hook body into the target's own git
 /// directory, and the third is one read-only API call the observer already
 /// makes — which makes them the three steps outside the parity rule.
-pub const STEPS: [StepSpec; 15] = [
+pub const STEPS: [StepSpec; 16] = [
     StepSpec {
         name: "package-check",
         chapter: "§0",
@@ -331,6 +337,17 @@ pub const STEPS: [StepSpec; 15] = [
         forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_release,
+    },
+    StepSpec {
+        name: "protect-release-branches",
+        chapter: "§3",
+        mutates: Mutates::Forge,
+        proves: "only the release actors create or update a release line or a release request branch",
+        destructive: false,
+        optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
+        prereqs: &[],
+        applies: needs_release_branches,
     },
     StepSpec {
         name: "merge-on-order",
@@ -548,6 +565,30 @@ mod tests {
                 let releasing = ctx(Some(forge), mode);
                 assert_eq!(
                     (spec("protect-tags").expect("the step exists").applies)(&releasing),
+                    None,
+                    "{forge} {mode:?}"
+                );
+            }
+        }
+    }
+
+    /// A release-less target writes no release branch, so
+    /// `protect-release-branches` reports not applicable with the release
+    /// mode that decided it, at either forge.
+    ///
+    /// SATISFIES forge-setup:applicability-follows-the-target-configuration
+    #[test]
+    fn protect_release_branches_is_not_applicable_without_a_release() {
+        let step = spec("protect-release-branches").expect("the step exists");
+        for forge in ["github", "gitlab"] {
+            let reason = (step.applies)(&ctx(Some(forge), ReleaseMode::None))
+                .expect("a release-less target protects no release branch");
+            assert!(reason.contains("profile.release.mode is none"), "{reason}");
+        }
+        for forge in ["github", "gitlab"] {
+            for mode in [ReleaseMode::Automatic, ReleaseMode::External] {
+                assert_eq!(
+                    (step.applies)(&ctx(Some(forge), mode)),
                     None,
                     "{forge} {mode:?}"
                 );

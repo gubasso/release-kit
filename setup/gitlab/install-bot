@@ -66,11 +66,14 @@ stored=0
 if glab api "projects/$project/variables/RELEASE_BOT_TOKEN" >/dev/null 2>&1; then
   stored=1
 fi
+# The token is stored masked and protected: only a pipeline on a protected
+# branch or a protected tag reads it, and the release jobs run on the
+# trunk and the release lines, which the setup protects.
 store() {
   if [ "$stored" = "1" ]; then
-    printf '%s' "$1" | glab variable update RELEASE_BOT_TOKEN --masked --repo "$RK_REPO"
+    printf '%s' "$1" | glab variable update RELEASE_BOT_TOKEN --masked --protected --repo "$RK_REPO"
   else
-    printf '%s' "$1" | glab variable set RELEASE_BOT_TOKEN --masked --repo "$RK_REPO"
+    printf '%s' "$1" | glab variable set RELEASE_BOT_TOKEN --masked --protected --repo "$RK_REPO"
   fi
 }
 token_of() { compact | text_of token; }

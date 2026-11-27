@@ -34,7 +34,7 @@ A target that lands such a workflow reports on no pull request, so the workflow 
 `rk init --scorecard` lands that workflow, and the landing records the answer as `capabilities.scorecard` in `.release-kit/config.toml`. The target gets `.github/workflows/scorecard.yml`, a `rendered` file that release-kit owns. The workflow runs on a push to the recorded trunk and once a week. It computes the score and publishes it to the public Scorecard API, and that publication makes the badge and the site entry resolve. It uploads no SARIF, so it needs neither code scanning nor `security-events: write`. It adds no setup step, because a run needs no forge setting on a public repository. The capability is off by default. A run posts to a public API and reads repository metadata, which is a choice and not a guard. `rk upgrade --scorecard off` drops the destination from the receipt and removes the file where nobody edited it. `ossf/scorecard-action` publishes no moving major tag. So `versions.toml` pins the exact release tag, and only a retag moves the discovery ref.
 
 - The release request is a pull request against the trunk. The trunk is the default branch, which the bot targets with no configuration. On the rust pair, release-plz refreshes the request by force-push while only its own commits sit on the request's branch. Once a human commit lands there, the next refresh closes the request, opens a fresh one, and takes the commit with it. On the bash and python pairs, the rk engine keeps one request per base on `rk-release/<base>`. The engine refreshes that request in place by force-push on every run. So the request keeps its number, and the next refresh drops a commit that a person pushed there. Either way, a changelog correction is the last act before the merge.
-- The gate is the merge of the release request itself, and the trunk's ruleset enforces it. The ruleset allows squash as the only merge method and requires two status checks, matched by name. One is the one job that the project's own workflow reports as its gate. The other is the landed `pr-title` check. Under forge integration, no direct push bypass exists. Under local integration, only the repository-administrator role bypasses those rules, for the deliberate push. The release App stays governed, and the deletion and force-push rules sit in a second ruleset that nobody bypasses. The request must also carry the trunk's tip. `strict_required_status_checks_policy=true` enforces freshness at merge time in both modes, and `rk setup check` faults a false or absent policy. `needs` names job ids inside one workflow file, so that gate reaches no job in another file. A second workflow that reports on a request gates nothing, whatever it proves. That is why the landed workflows report on a request from the title check alone. It is also why the landing configures a generated artifact workflow to report on none.
+- The gate is the merge of the release request itself, and the trunk's ruleset enforces it. The ruleset allows squash as the only merge method and requires two status checks, matched by name. One is the one job that the project's own workflow reports as its gate. The other is the landed `pr-title` check. Under forge integration, no direct push bypass exists. Under local integration, only the repository-administrator role bypasses those rules, for the deliberate push. The release App stays governed, and the deletion and force-push rules sit in a second ruleset that nobody bypasses. A third ruleset carries the update rule alone, with the administrator and the release App as its bypass, so no other identity with write access merges a green request. GitHub lets a bypass actor merge past a rule only where it chooses the bypass, so the merge job passes `--admin` to `gh pr merge`. The App bypasses nothing in the trunk ruleset, so the request rule, the required checks, and the strict policy still refuse a red or a stale request. The request must also carry the trunk's tip. `strict_required_status_checks_policy=true` enforces freshness at merge time in both modes, and `rk setup check` faults a false or absent policy. `needs` names job ids inside one workflow file, so that gate reaches no job in another file. A second workflow that reports on a request gates nothing, whatever it proves. That is why the landed workflows report on a request from the title check alone. It is also why the landing configures a generated artifact workflow to report on none.
 - `gate.needs` is the voting list, by convention and not by proof. A job that must block a merge belongs in the gate's own workflow file and in that list. A job that runs on a pull request and does not appear there does not hold the merge. This matters more here than elsewhere, because the operator who merges the release request reads the named check alone, not the check list. `rk setup check --required-check <name>` judges the shape of the gate. The gate must report in this shape:
 
   - uniquely
@@ -46,15 +46,23 @@ A target that lands such a workflow reports on no pull request, so the workflow 
 - This convention refuses a merge queue and uses the aggregate gate instead. A queued repository holds every request until a check that triggers on `merge_group` reports. The landing ships no workflow that does. So the queue waits on a check that never comes, and drops the request when its CI timeout expires. `rk setup check` faults a queue on the trunk by name and states the remedy: `rk setup step protect-trunk --apply` rewrites the ruleset without it. A project that wants a queue wants a different convention, not a different flag.
 - Protections are rulesets. A ruleset has separate create and update endpoints, so a rerun resolves the ruleset id and updates in place. These are the rulesets:
 
-  - two that cover the trunk
-  - one that covers the `v*` tags
+  - three that cover the trunk
+  - two that cover the release tags
+  - one that covers the release lines and the release request branches
   - one that covers the `release/*` branches, where a project keeps older lines
-- The trunk takes two, because a bypass actor is a ruleset field and excuses every rule in that ruleset. The safety ruleset carries deletion and force-push protection and names nobody. The trunk ruleset carries the request rule and the required checks, and names whoever the integration mode excuses. `protect-trunk` writes the safety ruleset first, so no rerun leaves a window with neither. It writes that empty bypass itself and reads no key for it, so no configuration answer can widen who can rewrite the trunk.
-- The name of a ruleset is the project's own. These keys name the four rulesets:
+- The trunk takes three, because a bypass actor is a ruleset field and excuses every rule in that ruleset. The safety ruleset carries deletion and force-push protection and names nobody. The updates ruleset carries the update rule alone, and names the administrator role and the release App. The trunk ruleset carries the request rule and the required checks, and names whoever the integration mode excuses. `protect-trunk` writes the safety ruleset first, then the updates ruleset, so no rerun leaves a window with neither. It writes the empty bypass of the safety ruleset itself and reads no key for it, so no configuration answer can widen who can rewrite the trunk.
+- The tags take two for the same reason. The immutable ruleset refuses an update or a deletion of `protection.tag_pattern` and names nobody. The creation ruleset carries the creation rule alone, and names the administrator role and the release App. On a Rust target it covers every tag that carries an `x.y.z` version with `refs/tags/**/*[0-9].[0-9]*.[0-9]*`, because the generated artifact workflow starts on such a tag. The pattern covers both release-plz tag shapes, `v1.2.3` and `my-crate-v1.2.3`. A tag with no such version, such as `docs-snapshot`, stays open to every writer.
+- A ruleset pattern matches as `File.fnmatch` with `FNM_PATHNAME`: `*` and a bare `**` stop at `/`, and only the `**/*` form takes any number of segments. So `refs/tags/**` misses `x/1.2.3`, and `refs/heads/release/**` misses `release/a/b`. A proof on 2026-11-26 saw the Actions token create `x/1.2.3` past `refs/tags/**`.
+- `protect-release-branches` installs one ruleset over `<line_prefix>**/*`, `release-plz-*`, `release-plz-*/**/*`, and `rk-release/**/*`, whatever the driver, with the creation and update rules. It names the administrator role and the release App. Without the request prefixes, another identity pushes a commit onto an open release request, and the App merges it with the request.
+- The release App is a bypass actor only where an App ID resolves, from `setup.bot.app_id` or `RK_BOT_APP_ID`. Without one, each of these rulesets names the administrator alone, and the App can neither merge the release request nor push a tag.
+- The name of a ruleset is the project's own. These keys name the seven rulesets:
 
   - `protection.trunk_ruleset`
   - `protection.safety_ruleset`
+  - `protection.updates_ruleset`, `<trunk>-updates` by default
   - `protection.tag_ruleset`
+  - `protection.tag_creation_ruleset`, `release-tag-creation` by default
+  - `protection.release_branch_ruleset`, `release-branches` by default
   - `protection.lines_ruleset`
 
   The setup and its check read the same value, so they cannot disagree about the name of a ruleset. A target that names no trunk ruleset gets `<trunk>-protection`, which is the name the step built before the key existed. A target that names no safety ruleset gets `<trunk>-safety`. A rename after the ruleset exists leaves the old one standing. The forge resolves by name, so the setup creates a second ruleset and does not rename the first. The operator deletes the old one.
@@ -127,9 +135,9 @@ The App does not need the permissions below. Each one is a guess that costs a re
 
 - Issues: release-plz opens pull requests, never issues.
 - Actions, Workflows: `Workflows: write` serves only a write of files under `.github/workflows/`, and the release request never touches them.
-- Administration: release-plz asks for it only where a tag protection blocks tag creation. The convention's tag ruleset restricts `deletion` and `update` on `v*` and leaves creation open, so `Contents: write` carries the tag push. A target that adds a `creation` rule grants Administration here and widens the mint below to match.
+- Administration: release-plz asks for it where a tag protection blocks tag creation. The convention's creation ruleset names the release App as a bypass actor, so `Contents: write` carries the tag push past its `creation` rule. Administration also lets the App edit the rulesets that bind it.
 
-The grant above is the ceiling. Each landed workflow mints a token narrower than it, per job, through the `permission-*` inputs of `actions/create-github-app-token`. Without one, the token inherits every permission that the installation holds. The half that opens the release request takes `permission-contents: write` and `permission-pull-requests: write`. The half that tags and publishes opens no request and takes `permission-contents: write` alone. The merge job that `rk release merge` dispatches adds `permission-checks: read` to the first pair, because it reads the required check before it merges. No other job arms or merges the request. release-plz scopes its own release workflow the same way.
+The grant above is the ceiling. Each landed workflow mints a token narrower than it, per job, through the `permission-*` inputs of `actions/create-github-app-token`. Without one, the token inherits every permission that the installation holds. The half that opens the release request takes `permission-contents: write` and `permission-pull-requests: write`. The half that tags and publishes opens no request and takes `permission-contents: write` alone. The merge job that `rk release merge` dispatches adds `permission-checks: read` to the first pair, because it reads the required check before it merges. No other job arms or merges the request. Any identity with write access dispatches a workflow on a ref that it names. So each dispatch job that mints the App token runs only on its own ref: `release-candidate` on the line that its `line` input names, and the merge job on the trunk. Right after the mint, each reads the caller's role on the repository and refuses every role below the administrator, from one shared step. release-plz scopes its own release workflow the same way.
 
 ### Collect the credentials
 
@@ -137,10 +145,20 @@ On the App's own settings page, which the registration lands on:
 
 1. In the About section, copy the App ID.
    - Copy the numeric id, not the Client ID. The landed workflows pass it through the `client-id` input of `actions/create-github-app-token@v3`, which hands the value to GitHub as the JWT issuer. GitHub accepts the numeric App ID there. The secret keeps its name `RELEASE_BOT_APP_ID`, and a Client ID stored in it works too. `rk setup` reads the numeric App ID to sign its own token and refuses any other value. So this walkthrough copies the App ID.
-2. In the Private keys section, click Generate a private key.
-   - A `.pem` downloads at once. GitHub keeps only the public half and never shows the file again, so store it before you leave the page
-3. Move the file outside every repository. Then run `chmod 600` on it, because `bot-secrets` refuses a group-readable key.
-4. Give `rk setup` the pair. The App ID is a public identifier, so `setup.bot.app_id` in `.release-kit/config.toml` holds it once, and the export is unnecessary. `RK_BOT_APP_ID` still wins where it is set, for a run against another App. `RK_BOT_PRIVATE_KEY_FILE` holds the path to the `.pem`. Commit neither that variable nor the key itself. `install-bot` and `bot-secrets` read the pair, and nothing else identifies the App.
+2. In the left sidebar, click Credentials, then Key pairs. Click New key.
+   - A `.pem` downloads at once. GitHub keeps only the public half and never shows the file again, so import it before you leave the page
+3. Commit the App ID as `setup.bot.app_id` in `.release-kit/config.toml`. The App ID is a public identifier, and the key path names it. `RK_BOT_APP_ID` wins where it is set, for a run against another App.
+4. Run `rk setup import-key --target . <downloaded.pem>`. It checks the file, moves it to the default path with mode 0600, reads it back, and deletes the download. A failed check leaves the download where it was.
+   - check: it prints `${XDG_CONFIG_HOME:-$HOME/.config}/release-kit/bot/github/<app-id>.pem` and the next command
+   - a key already at that path: the import refuses, and `--replace` is the rotation that `rk guide setup` carries
+
+The key path resolves in this order, and the first match wins:
+
+1. `RK_BOT_PRIVATE_KEY_FILE`, for one run against another file.
+2. The entry for the App ID under `[bot.github.private_key_files]` in the user configuration file `${XDG_CONFIG_HOME:-$HOME/.config}/release-kit/config.toml`, an absolute path.
+3. The default path.
+
+Where either override names the key, the import refuses and names that source. The committed configuration holds no key path. `install-bot` and `bot-secrets` read the App ID and the key, and nothing else identifies the App.
 
 ### Install it on this repository
 
@@ -152,16 +170,16 @@ On the App's own settings page, which the registration lands on:
 6. Open `github.com/settings/installations`.
    - check: it lists the App, with the repository under Repository access
 
-From here, every remaining action is a command. `rk setup step install-bot --target . --apply` grants the App this project. `rk setup step bot-secrets --target . --apply` stores the credentials as repository secrets. Both values travel on standard input, so no environment that `rk` builds and no process argument list ever holds either. `rk` checks the path and the mode first. It checks the PEM encoding first too. It refuses anything that is not a PEM private key before it calls the forge, and then sends the same bytes that it checked. GitHub alone answers whether it accepts the encoded key.
+From here, every remaining action is a command. `rk setup step install-bot --target . --apply` grants the App this project. `rk setup step bot-secrets --target . --apply` stores the credentials in the release environment, `release` unless `protection.release_environment` names another. Its deployment policy admits the trunk, the release lines, the release request branches, and the release tags, and nothing else, so a workflow on any other branch reads no bot secret. A python target that publishes also keeps them in `pypi`, the environment that the PyPI trusted publisher names, behind the same policy. The step removes the repository copies once the trunk and every live release line run a workflow that names the environment. Until then it keeps them, and `rk setup check` names the refs that still run the old workflow. Both values travel on standard input, so no environment that `rk` builds and no process argument list ever holds either. `rk` checks the path and the mode first. It checks the PEM encoding first too. It refuses anything that is not a PEM private key before it calls the forge, and then sends the same bytes that it checked. GitHub alone answers whether it accepts the encoded key.
 
-`install-bot` observes and verifies as the App itself. GitHub serves the endpoints that read an installation to App credentials only. Such a credential is an RS256 JWT signed with the App's private key, and no personal access token of any class substitutes for it. So `rk` builds that token from the two exports and signs it in-process with the key bytes. It carries the token to the forge in a header of its own request. So no child process and no argument list holds the key or the token. `rk setup check` reports this step `unknown` until the step runs with the App exports, and no user token settles it. Run it on the host. The key lives there, and a keyring lookup needs a session bus that a container does not have.
+`install-bot` observes and verifies as the App itself. GitHub serves the endpoints that read an installation to App credentials only. Such a credential is an RS256 JWT signed with the App's private key, and no personal access token of any class substitutes for it. So `rk` builds that token from the App ID and signs it in-process with the key at the resolved path. It carries the token to the forge in a header of its own request. So no child process and no argument list holds the key or the token. Where the current process cannot read the key file, `rk setup check` reports this step and `bot-secrets` as `unreadable`, names the path and the remedy, and does not fail on them. No user token settles the step. Run it where the key file is readable.
 
 ### Grant a later repository
 
 One caveat remains, on the write alone. GitHub documents that only a classic personal access token with `repo` scope can add a repository that an existing installation does not yet cover. GitHub mints that token through its web settings only, under Tokens (classic). By hand, the grant is one click per project. Open `github.com/settings/installations`. Click Configure next to the App. Add the repository under Only select repositories. By command, the steps below do three things:
 
 - They mint the token.
-- They run the grant with it beside the two App exports.
+- They run the grant with it where the App key is readable.
 - They delete it.
 
 1. Open `github.com/settings/tokens`.
@@ -195,7 +213,7 @@ One caveat remains, on the write alone. GitHub documents that only a classic per
    # check: prints the account's login; GH_TOKEN overrides the gh login, so a wrong value 401s here
    ```
 
-10. Run the grant with the token beside the two App exports. `rk` reads the installation id as the App, and the grant uses the token.
+10. Run the grant with the token, where the App key is readable. `rk` reads the installation id as the App, and the grant uses the token.
 
     ```bash
     GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" rk setup step install-bot --target . --apply
@@ -204,6 +222,16 @@ One caveat remains, on the write alone. GitHub documents that only a classic per
 
 11. Delete the token at `github.com/settings/tokens`. It has no further job.
 
+## One identity per purpose
+
+The release App serves the release alone. It carries the release request, the release tags, and the release lines, and no other actor's work. Any other automation acts as an identity of its own, never as the release App and never with its key. The rk rulesets refuse every identity outside their bypass these writes:
+
+- an update of the trunk, a merge of a green request included
+- the creation of a release tag
+- the creation or update of a release line or of a release request branch
+
+So a second App with write access pushes topic branches and opens requests, and the operator merges them. A bypass that names such an identity hands it the release, and `protections-check` fails a bypass wider than the administrator and the release App.
+
 ## Mapping
 
 | Purpose                              | Command                                                                                                                                                               |
@@ -211,7 +239,7 @@ One caveat remains, on the write alone. GitHub documents that only a classic per
 | Raw API                              | `gh api`                                                                                                                                                              |
 | Set the default branch               | `gh repo edit --default-branch`                                                                                                                                       |
 | Delete a branch when its merge lands | `gh api -X PATCH /repos/{owner}/{repo}` with `delete_branch_on_merge`                                                                                                 |
-| Store a secret                       | `gh secret set NAME` with the value on stdin                                                                                                                          |
+| Store a secret                       | `gh secret set NAME --env <environment>` with the value on stdin                                                                                                      |
 | List open release requests           | `gh pr list --base <branch> --state open`                                                                                                                             |
 | Merge the trunk's release request    | `rk release merge --target . --apply`                                                                                                                                 |
 | Merge a release line's request       | `gh pr merge --squash --delete-branch`                                                                                                                                |
@@ -225,12 +253,13 @@ One caveat remains, on the write alone. GitHub documents that only a classic per
 | Require the trunk's checks           | a ruleset rule naming a status-check context                                                                                                                          |
 | Restrict the merge method            | a ruleset `pull_request` rule listing `allowed_merge_methods`                                                                                                         |
 | Make the title the squash message    | `gh api -X PATCH /repos/{owner}/{repo}` with `squash_merge_commit_title=PR_TITLE`                                                                                     |
-| Protect tags                         | a ruleset targeting `v*`                                                                                                                                              |
+| Protect tags                         | rulesets targeting `protection.tag_pattern`: one immutable, one for creation                                                                                          |
 | Grant the bot access to a project    | `PUT /user/installations/{id}/repositories/{id}`                                                                                                                      |
 | Find the bot identity                | `GET /repos/{owner}/{repo}/installation`, as the App                                                                                                                  |
 
 ## Limitations
 
 - Rulesets on a private repository require a paid plan. On a free private repository, the protections cannot apply, and `rk setup check` reports each as unsatisfied and does not pretend otherwise.
+- Environment secrets and deployment policies on a private repository require a paid plan too. On a free private repository, `bot-secrets` keeps the bot secrets as repository secrets, which a workflow on any branch reads, and `rk setup check` and `protections-check` name that limitation and do not fail on it.
 - The installation endpoints of the App need App JWT authentication and refuse every user token. The one write that adds a repository takes a classic personal access token alone. No single credential both reads and writes an installation, which is why `install-bot` observes as the App and grants as the user.
 - Pull requests offer no fast-forward merge. The trunk reaches linear history through squash instead: one pull request becomes one commit, which is the shape the method wants anyway.

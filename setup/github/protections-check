@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
-# Verify the rulesets are exactly the ones this setup owns — the two trunk
-# rulesets always, the tag ruleset wherever a release mints tags, and the
-# optional release-line protection when it is applied — and that the
+# Verify the rulesets are exactly the ones this setup owns — the three trunk
+# rulesets always, the two tag rulesets and the release branch ruleset
+# wherever a release mints tags, and the optional release-line protection
+# when it is applied — and that the
 # trunk protection still has the shape a release merge needs: a ruleset that
 # rejects or corrupts that merge is invisible until the release merge, and a
 # ruleset no step owns is protection nothing here can reproduce or explain.
@@ -17,6 +18,15 @@ set -eu
 : "${RK_MERGE_FORM:?rk sets this; run this script through rk setup}"
 : "${RK_MERGE_METHODS:?rk sets this; run this script through rk setup}"
 : "${RK_SAFETY_RULE_TYPES:?rk sets this; run this script through rk setup}"
+# The three rulesets that only the release bypass actors pass: the trunk
+# update, the release tag creation, and the release branch writes. rk
+# computed their patterns and their bypass actors before this ran.
+: "${RK_UPDATES_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_TAG_CREATION_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_TAG_CREATION_PATTERNS:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH_PATTERNS:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
 # The two requirements the profile decides: the release tags are protected
 # wherever a release mints them, and the trunk requires a status check
 # wherever a forge gate lands to report one.
@@ -25,16 +35,20 @@ set -eu
 
 trunk_name="$RK_TRUNK_RULESET"
 safety_name="$RK_SAFETY_RULESET"
+updates_name="$RK_UPDATES_RULESET"
 tags_name=release-tags
+creation_name="$RK_TAG_CREATION_RULESET"
+branches_name="$RK_RELEASE_BRANCH_RULESET"
 lines_name=release-lines
 
 names="$(gh api "repos/$RK_REPO/rulesets" -q '.[].name' | sort)"
 extra="$names"
 status=0
 
-set -- "$trunk_name:protect-trunk" "$safety_name:protect-trunk"
+set -- "$trunk_name:protect-trunk" "$safety_name:protect-trunk" "$updates_name:protect-trunk"
 if [ "$RK_TAG_PROTECTION" = true ]; then
-  set -- "$@" "$tags_name:protect-tags"
+  set -- "$@" "$tags_name:protect-tags" "$creation_name:protect-tags" \
+    "$branches_name:protect-release-branches"
 fi
 for pair in "$@"; do
   name="${pair%%:*}"
@@ -51,7 +65,9 @@ done
 # A release-less target requires no tag ruleset: absent is fine, and one
 # that stands is still this setup's name rather than a stranger.
 if [ "$RK_TAG_PROTECTION" != true ]; then
-  extra="$(printf '%s\n' "$extra" | grep -vxF "$tags_name" || true)"
+  for name in "$tags_name" "$creation_name" "$branches_name"; do
+    extra="$(printf '%s\n' "$extra" | grep -vxF "$name" || true)"
+  done
 fi
 
 # The optional release-line protection: absent is fine, present is owned.
@@ -143,6 +159,118 @@ if [ "$RK_MERGE_FORM" = rebase ]; then
     echo 'remediation: rk setup step protect-trunk --apply' >&2
     status=1
   fi
+fi
+
+# The bypass actors of a ruleset, projected and sorted the way rk builds
+# the release bypass list.
+bypass_query='[.bypass_actors // [] | .[] | {actor_id, actor_type, bypass_mode}]
+  | sort_by(.actor_type, .actor_id, .bypass_mode) | tojson'
+
+# A ruleset that only the release bypass actors pass: exactly its rules,
+# exactly its patterns, no exclusion, and exactly the release bypass
+# actors. A wider bypass hands another identity the release itself.
+release_ruleset() {
+  name="$1"
+  step="$2"
+  rules="$3"
+  patterns="$4"
+  rid="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+  [ -n "$rid" ] || return 0
+  rerun="rk setup step $step --apply"
+  check "$rid" "$name carries exactly $rules" "$rules" "$rerun" '[.rules[].type] | sort | tojson'
+  check "$rid" "$name misses no pattern" '' "$rerun" \
+    "$patterns"' - (.conditions.ref_name.include // []) | join(",")'
+  check "$rid" "$name covers no other pattern" '' "$rerun" \
+    '(.conditions.ref_name.include // []) - '"$patterns"' | join(",")'
+  check "$rid" "$name excludes no ref" 0 "$rerun" '.conditions.ref_name.exclude // [] | length'
+  check "$rid" "$name names exactly the release bypass actors" "$RK_RELEASE_BYPASS_ACTORS" "$rerun" "$bypass_query"
+}
+
+release_ruleset "$updates_name" protect-trunk '["update"]' "[\"refs/heads/$RK_TRUNK_BRANCH\"]"
+if [ "$RK_TAG_PROTECTION" = true ]; then
+  release_ruleset "$creation_name" protect-tags '["creation"]' "$RK_TAG_CREATION_PATTERNS"
+  release_ruleset "$branches_name" protect-release-branches '["creation","update"]' "$RK_RELEASE_BRANCH_PATTERNS"
+  # The immutable tag ruleset holds against every actor, the release
+  # actors included.
+  tid="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$tags_name\") | .id" | head -n 1)"
+  if [ -n "$tid" ]; then
+    check "$tid" "$tags_name names no bypass actor" 0 'rk setup step protect-tags --apply' \
+      '.bypass_actors // [] | length'
+  fi
+fi
+
+# The bot secrets, where an automatic release stores them: in the release
+# environments alone, each behind a policy that admits the release refs and
+# nothing else. A private repository on a plan without environment secrets
+# keeps them at the repository level, which this check names as the open
+# gap and does not fail. A project that stores them nowhere yet is the gap
+# of bot-secrets alone.
+if [ "${RK_AUTOMATIC_RELEASE:-false}" = true ] && [ "${RK_RELEASE_ENVIRONMENTS:-[]}" != "[]" ]; then
+  set -f
+  visibility="$(gh api "repos/$RK_REPO" -q .visibility)"
+  supported=true
+  if [ "$visibility" != public ]; then
+    owner="$(gh api "repos/$RK_REPO" -q .owner.login)"
+    if [ "$(gh api "repos/$RK_REPO" -q .owner.type)" = Organization ]; then
+      plan="$(gh api "orgs/$owner" -q .plan.name 2>/dev/null || true)"
+    else
+      plan="$(gh api user -q 'select(.login == "'"$owner"'") | .plan.name' 2>/dev/null || true)"
+    fi
+    case "$plan" in
+      free)
+        supported=false
+        echo 'note: bot-secrets: on the Free plan a private repository holds no environment secrets, so the bot secrets stay repository secrets that a workflow on any branch reads'
+        ;;
+      '')
+        supported=false
+        echo "note: bot-secrets: the plan of $owner is unreadable, so the bot secrets are not judged"
+        ;;
+    esac
+  fi
+  if [ "$supported" = true ]; then
+    wanted="$({
+      for name in $(printf '%s' "$RK_ENVIRONMENT_BRANCH_PATTERNS" | tr -d '[]"' | tr ',' '\n'); do printf 'branch %s\n' "$name"; done
+      for name in $(printf '%s' "$RK_ENVIRONMENT_TAG_PATTERNS" | tr -d '[]"' | tr ',' '\n'); do printf 'tag %s\n' "$name"; done
+    } | sort)"
+    stored="$(gh secret list --repo "$RK_REPO" | awk '$1 == "RELEASE_BOT_APP_ID" || $1 == "RELEASE_BOT_APP_PRIVATE_KEY" { print $1 }')"
+    faults=""
+    absent=0
+    count=0
+    for environment in $(printf '%s' "$RK_RELEASE_ENVIRONMENTS" | tr -d '[]"' | tr ',' '\n'); do
+      count=$((count + 1))
+      base="repos/$RK_REPO/environments/$environment"
+      policy="$(gh api "$base" -q '.deployment_branch_policy | "\(.protected_branches) \(.custom_branch_policies)"' 2>/dev/null || true)"
+      if [ -z "$policy" ]; then
+        absent=$((absent + 1))
+        faults="$faults
+the environment $environment does not exist"
+        continue
+      fi
+      [ "$policy" = "false true" ] || faults="$faults
+the environment $environment admits more than the release refs"
+      found="$(gh api "$base/deployment-branch-policies?per_page=100" -q '.branch_policies[] | "\(.type) \(.name)"' | sort)"
+      [ "$found" = "$wanted" ] || faults="$faults
+the policy of $environment is not exactly the release refs"
+      held="$(gh secret list --env "$environment" --repo "$RK_REPO" | awk '{ print $1 }')"
+      for name in RELEASE_BOT_APP_ID RELEASE_BOT_APP_PRIVATE_KEY; do
+        printf '%s\n' "$held" | grep -qxF "$name" || faults="$faults
+the environment $environment lacks $name"
+      done
+    done
+    if [ -n "$stored" ]; then
+      echo "FAIL bot-secrets: $(printf '%s' "$stored" | tr '\n' ' ')remain repository secrets, which a workflow on any branch reads" >&2
+      echo 'remediation: rk setup --apply, once every release ref runs the upgraded workflow' >&2
+      status=1
+    fi
+    if [ -n "$faults" ] && { [ -n "$stored" ] || [ "$absent" -lt "$count" ]; }; then
+      printf '%s\n' "$faults" | sed '/^$/d; s/^/FAIL bot-secrets: /' >&2
+      echo 'remediation: rk setup --apply' >&2
+      status=1
+    elif [ -z "$faults" ]; then
+      echo 'ok bot-secrets: the bot secrets live in the release environments alone'
+    fi
+  fi
+  set +f
 fi
 
 lid="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$lines_name\") | .id" | head -n 1)"

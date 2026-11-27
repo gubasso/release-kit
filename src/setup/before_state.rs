@@ -26,14 +26,16 @@ use crate::error::RkError;
 use crate::snapshot::{FORGE_DIR, REFS_DIR, Snapshot};
 
 /// Every step that removes or replaces forge state.
-pub const DESTRUCTIVE: [&str; 7] = [
+pub const DESTRUCTIVE: [&str; 9] = [
     "default-branch",
     "single-trunk",
     "merge-cleanup",
     "protect-trunk",
     "protect-tags",
     "protect-release-lines",
+    "protect-release-branches",
     "merge-on-order",
+    "ci-permissions",
 ];
 
 /// Whether `step` removes or replaces forge state.
@@ -62,7 +64,10 @@ pub fn reads(ctx: &Ctx, step: &str) -> Vec<String> {
                     format!("repos/{repo}/rulesets"),
                     format!("repos/{repo}/branches/{trunk}/protection"),
                 ],
-                "protect-tags" | "protect-release-lines" => vec![format!("repos/{repo}/rulesets")],
+                "protect-tags" | "protect-release-lines" | "protect-release-branches" => {
+                    vec![format!("repos/{repo}/rulesets")]
+                }
+                "ci-permissions" => vec![format!("repos/{repo}/actions/permissions/workflow")],
                 "single-trunk" => candidates(ctx)
                     .iter()
                     .map(|branch| format!("repos/{repo}/git/ref/heads/{branch}"))
@@ -73,7 +78,9 @@ pub fn reads(ctx: &Ctx, step: &str) -> Vec<String> {
         Forge::Gitlab => {
             let project = ctx.repo.replace('/', "%2F");
             match step {
-                "default-branch" | "merge-cleanup" => {
+                // ci-permissions rewrites the pipeline settings of the
+                // project.
+                "default-branch" | "merge-cleanup" | "ci-permissions" => {
                     vec![format!("projects/{project}")]
                 }
                 // merge-on-order asserts the pipeline requirement and
@@ -90,6 +97,20 @@ pub fn reads(ctx: &Ctx, step: &str) -> Vec<String> {
                 "protect-release-lines" => {
                     vec![format!("projects/{project}/protected_branches")]
                 }
+                // Each pattern is one protected branch the step may
+                // delete and create again.
+                "protect-release-branches" => ctx
+                    .release_branch_patterns()
+                    .iter()
+                    .map(|pattern| {
+                        format!(
+                            "projects/{project}/protected_branches/{}",
+                            pattern.replace('/', "%2F").replace('*', "%2A")
+                        )
+                    })
+                    .collect(),
+                // The listing holds the recorded pattern and the stale
+                // one that a widening removes.
                 "protect-tags" => vec![format!("projects/{project}/protected_tags")],
                 "single-trunk" => candidates(ctx)
                     .iter()
@@ -106,9 +127,16 @@ pub fn reads(ctx: &Ctx, step: &str) -> Vec<String> {
 /// one the step finds is read in full by its id.
 fn replaced_rulesets<'c>(ctx: &'c Ctx, step: &str) -> Vec<&'c str> {
     match (ctx.forge, step) {
-        (Some(Forge::Github), "protect-trunk") => vec![ctx.safety_ruleset(), ctx.trunk_ruleset()],
-        (Some(Forge::Github), "protect-tags") => vec![ctx.tag_ruleset()],
+        (Some(Forge::Github), "protect-trunk") => vec![
+            ctx.safety_ruleset(),
+            ctx.updates_ruleset(),
+            ctx.trunk_ruleset(),
+        ],
+        (Some(Forge::Github), "protect-tags") => {
+            vec![ctx.tag_ruleset(), ctx.tag_creation_ruleset()]
+        }
         (Some(Forge::Github), "protect-release-lines") => vec![ctx.lines_ruleset()],
+        (Some(Forge::Github), "protect-release-branches") => vec![ctx.release_branch_ruleset()],
         _ => Vec::new(),
     }
 }

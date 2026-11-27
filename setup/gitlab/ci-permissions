@@ -1,8 +1,17 @@
 #!/usr/bin/env sh
-# Keep pipelines able to run and write. On this forge the release jobs act
-# through the project access token install-bot stores, so there is no
-# per-permission switch to grant; what this step proves is that CI is
+# Keep pipelines able to run and write, and keep merge request pipelines
+# away from the protected variables and runners. On this forge the release
+# jobs act through the project access token install-bot stores, so there is
+# no per-permission switch to grant; what this step proves is that CI is
 # enabled at all, which a fresh or imported project can have off.
+# A merge request pipeline runs the code of its source branch. The setting
+# protect_merge_request_pipelines, "Allow merge request pipelines to access
+# protected variables and runners", came in GitLab 18.1. Its value false
+# keeps the access off. The projects API returns it from GitLab 18.10, and
+# only to a Maintainer or above. An answer with no such attribute from an
+# instance below 18.1 needs nothing, because there a merge request
+# pipeline never reads a protected variable. From 18.1 the access is
+# unproved, and the step names the setting to clear by hand.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 
@@ -12,7 +21,31 @@ project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 # pattern below hold for the compact and the pretty form alike, and no
 # value a pattern touches can carry whitespace of its own.
 compact() { tr -d ' \t\r\n'; }
+# The instance version as "<major> <minor>", or nothing where it cannot be
+# read. The merge request pipeline setting came in GitLab 18.1, and the
+# projects API returns it from 18.10, only to a Maintainer or above.
+version_pair() {
+  glab api version 2>/dev/null | compact | sed -n 's/.*"version":"\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p'
+}
+# Whether a "<major> <minor>" pair is below 18.1.
+before_18_1() { [ "$1" -lt 18 ] || { [ "$1" -eq 18 ] && [ "$2" -lt 1 ]; }; }
 
 glab api -X PUT "projects/$project" -f builds_access_level=enabled >/dev/null
-echo 'check: prints "jobs_enabled":true'
-glab api "projects/$project" | compact | grep -o '"jobs_enabled":[a-z]*'
+if glab api "projects/$project" | compact | grep -q '"protect_merge_request_pipelines":'; then
+  glab api -X PUT "projects/$project" -F protect_merge_request_pipelines=false >/dev/null
+  echo 'ok merge request pipelines cannot reach the protected variables and runners'
+else
+  pair="$(version_pair)"
+  # shellcheck disable=SC2086 # the pair splits into two numbers on purpose
+  if [ -n "$pair" ] && before_18_1 $pair; then
+    echo 'note: this GitLab predates 18.1 and carries no protect_merge_request_pipelines setting; there a merge request pipeline never reads a protected variable'
+  else
+    echo 'FAIL this GitLab does not show protect_merge_request_pipelines to this reader: the projects API returns it from GitLab 18.10, and only to a Maintainer or above. From 18.1 a new project lets its merge request pipelines reach the protected variables and runners, so that access is unproved. Read the project as a Maintainer on GitLab 18.10 or later, or clear "Allow merge request pipelines to access protected variables and runners" under Settings > CI/CD > Variables by hand' >&2
+    exit 1
+  fi
+fi
+
+echo 'check: prints "jobs_enabled":true and the merge request pipeline setting'
+settings="$(glab api "projects/$project" | compact)"
+printf '%s' "$settings" | grep -o '"jobs_enabled":[a-z]*'
+printf '%s' "$settings" | grep -o '"protect_merge_request_pipelines":[a-z]*' || true

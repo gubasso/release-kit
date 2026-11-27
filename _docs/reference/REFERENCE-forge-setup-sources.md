@@ -436,6 +436,8 @@ Two claims in release-kit issue 117 do not survive these sources, and the forge 
 
 GitHub starts a `workflow_dispatch` run through `POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` with a `ref` and its `inputs`, and any collaborator with write access may call it. A `run-name` expression names the run, and a run whose name is empty or only whitespace takes the event's default name. `github.triggering_actor` is the user who started the run, and `GET /repos/{owner}/{repo}/collaborators/{username}/permission` answers that user's role. GitLab creates a pipeline through `POST /projects/:id/pipeline` with a `ref` and `variables`, and passing a variable needs the role the project setting `ci_pipeline_variables_minimum_override_role` names: `no_one_allowed`, `owner`, `maintainer`, or `developer`, with `no_one_allowed` the default for a new project in a new namespace on GitLab.com since 17.7. Its merge call `PUT /projects/:id/merge_requests/:merge_request_iid/merge` refuses where the `sha` it names is not the request's head.
 
+A live proof on a throwaway repository on 2026-11-26: a job with `actions: write` dispatched both dispatch jobs of the release workflow with the Actions token, and GitHub accepted both dispatches. `release-candidate` was dispatched on the trunk for the line `9.9`, so its ref guard skipped it. The merge job ran on the trunk and failed at its caller proof, because the caller `github-actions[bot]` holds no administrator role.
+
 - <https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event>
 - <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#run-name>
 - <https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#github-context>
@@ -445,3 +447,96 @@ GitHub starts a `workflow_dispatch` run through `POST /repos/{owner}/{repo}/acti
 - <https://docs.gitlab.com/api/merge_requests/#merge-a-merge-request>
 
 Bearing: `git:the-release-request-integrates-at-the-forge` and `release-state:the-operator-merges-through-the-verb`. Any writer can dispatch, so the job reads the caller's role; the run name carries the correlation the verb waits on; and the guidance step names the GitLab variable setting, which rk does not observe.
+
+## Merge request pipelines and protected variables
+
+Verified 2026-11-26. The merge request pipelines page names the setting "Allow merge request pipelines to access protected variables and runners", introduced in GitLab 18.1, under the heading "Access protected resources in merge request pipelines". Such a pipeline reaches the protected resources only where both branches are protected, both belong to the same project, and the user who starts it can push or merge to the target branch. A pipeline from a fork never reaches them. The projects API answers the setting as `protect_merge_request_pipelines`, a boolean, which its example responses show as `true`. Neither page states which value allows the access. GitLab's own source states it. The API entity in `lib/api/entities/project.rb` describes the attribute as "If `true`, protected CI/CD variables and runners are available in merge request pipelines", returned "only for users with at least the Maintainer role", and introduced in the API in GitLab 18.10 (issue 584488). `lib/api/helpers/projects_helpers.rb` accepts it on an update. Merge request 188008, "Mark CI Pipelines of MRs between protected branches as protected", added the setting in 18.1, behind the feature flag `protect_merge_request_pipelines`. It is off for existing projects and on for new ones. So `ci-permissions` writes `false`, and an answer without the attribute from 18.1 on leaves the access unproved. A live run on 2026-11-26 against a throwaway gitlab.com project at 19.7 read the attribute `true` after a PUT of `true`, and `false` after `rk setup step ci-permissions --apply`. A second live run on 2026-11-26 observed the effect. It ran a merge request from a protected source branch into the protected trunk of the same project, and its job read a protected variable that holds a plain marker. With the value that `ci-permissions` writes, `false`, the merge request pipeline read the variable as empty, and `CI_COMMIT_REF_PROTECTED` read `false`. With the setting turned to `true`, the next merge request pipeline of the same request read the marker, and `CI_COMMIT_REF_PROTECTED` read `true`. `rk setup step ci-permissions --apply` then wrote `false` again, and `rk setup check` reported `ci-permissions` and `protections-check` as satisfied. So the value `false` keeps a protected variable out of a merge request pipeline, as the entity text and merge request 188008 state. A Developer cannot push the source branch of such a request, because both of its branches are protected.
+
+- <https://docs.gitlab.com/ci/pipelines/merge_request_pipelines/>
+- <https://docs.gitlab.com/api/projects/>
+- <https://docs.gitlab.com/ci/variables/>
+- <https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/api/entities/project.rb>
+- <https://gitlab.com/gitlab-org/gitlab/-/merge_requests/188008>
+
+Bearing: `release-ref-rules:merge-request-pipelines-cannot-read-protected-variables`. The setting decides whether a Developer's merge request pipeline between two protected branches reads the release bot token.
+
+## Protected GitLab CI/CD variables
+
+Verified 2026-11-26. The CI/CD variables page states that a protected variable is "only available in pipelines that run on protected branches or protected tags", and that merge request pipelines can optionally access protected variables, which `protect_merge_request_pipelines` decides. The project-level variables API marks `value` as required on `PUT /projects/:id/variables/:key`, beside the optional `protected` and `masked`, and `GET /projects/:id/variables/:key` answers the stored `value` of a masked variable. A hidden variable cannot be revealed in the UI, and the API page does not state what a read of one answers. `glab variable update` takes the value from standard input, and keeps every attribute that the call does not set, so `--protected` sets the flag and leaves the rest.
+
+A live proof on a throwaway gitlab.com project on 2026-11-26 compared the token before and after the flag. Before it, a Developer's pipeline on a branch of its own read `RELEASE_BOT_TOKEN` and created a release tag with it. After `bot-secrets` set the flag, a Developer's push pipeline on an unprotected branch, pipeline 3120478068, read the token empty, and its attempt to create a release tag with the token was refused. A pipeline that the API started on the protected trunk, pipeline 3120479454, still read the token. Its bot job created a release line, both release request branches, and a `v*` tag, then opened and refreshed both release requests. Each result came from a line whose marker the job built at run time, so no echoed command could match it.
+
+- <https://docs.gitlab.com/ci/variables/>
+- <https://docs.gitlab.com/api/project_level_variables/>
+- <https://docs.gitlab.com/cli/variable/update/>
+
+Bearing: `release-ref-rules:the-gitlab-bot-token-is-protected`. The update needs the value, so `bot-secrets` reads the stored value back to set the flag, and a token that rk stored masked, never hidden, reads back.
+
+## GitHub environments for the bot secrets
+
+Verified 2026-11-26. The deployments and environments reference states that environments, environment secrets, and deployment branch and tag policies are available in every public repository, and in a private or internal one only on GitHub Pro, GitHub Team, or GitHub Enterprise. On Free, environment secrets exist only in public repositories. A policy pattern is a Ruby `File.fnmatch` name matched against the run's `GITHUB_REF`, its wildcard matches no `/`, and branch and tag patterns are set apart. An environment secret reaches only a job that names the environment. The environments API creates or updates an environment with `PUT /repos/{owner}/{repo}/environments/{environment_name}`, whose `deployment_branch_policy` takes `protected_branches` and `custom_branch_policies` as opposite booleans, and null for every branch. The branch policies API lists, creates with `name` and `type` (`branch` or `tag`), and deletes the patterns, and needs `custom_branch_policies` set to `true`.
+
+A live proof on a throwaway repository on 2026-11-26 held the release environment with a policy of six patterns: `master`, `release/*`, `release-plz-*`, `rk-release/master`, `rk-release/release/*`, and the tag pattern `v*`. Both bot secrets lived in the environment, and the repository held no copy. On the trunk, a job that named the environment minted the App token. The same job on a branch outside the policy failed before any step ran, with the annotations "Branch "p5-steal" is not allowed to deploy to release due to environment protection rules." and "The deployment was rejected or didn't satisfy other protection rules." On that branch, a job that named no environment read both secrets empty.
+
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments>
+- <https://docs.github.com/en/rest/deployments/environments>
+- <https://docs.github.com/en/rest/deployments/branch-policies>
+
+Bearing: `release-ref-rules:the-github-bot-secrets-live-in-the-release-environment`. A wildcard that matches no `/` is why the policy names one pattern per request base, and the repository copies of a secret reach every job that names no environment, which is why they go once every release ref names one.
+
+## Rotating the GitHub App private key
+
+Verified 2026-11-26. The page on managing private keys for GitHub Apps states that an App holds up to 25 private keys, and that a key does not expire, so its owner revokes it by hand. A new key comes from the App's settings, under Credentials, then Key pairs, then New key, and the browser downloads it as a PEM file once. GitHub keeps only the public half. The only key of an App cannot be deleted, so a new key comes first. The page advises more than one key, so that a rotation after a compromise costs no downtime.
+
+- <https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps>
+
+Bearing: the rotation subsection of the setup runbook. The old key keeps working until its deletion, so the runbook deletes it last, after `rk setup check` proves the new one.
+
+## Ruleset patterns and nested ref names
+
+Verified 2026-11-26. GitHub's page on creating rulesets for a repository states that a ruleset targets branches or tags with `fnmatch` syntax, that "the `*` wildcard does not match directory separators (`/`)", and that `qa/**/*` takes "any number of slashes" after `qa`. The REST page for rulesets accepts `~ALL` in `conditions.ref_name.include` "to include all branches", and says nothing of tags. Ruby's `File.fnmatch` with `FNM_PATHNAME` gives the same answers: `refs/tags/**` matches `refs/tags/1.2.3` and not `refs/tags/x/1.2.3`, and `refs/tags/**/*` matches both. A live proof on a throwaway repository confirmed it the same day: with `release-tag-creation` over `refs/tags/**`, the Actions token was refused on `1.2.3` with "Cannot create ref due to creations being restricted", and created `x/1.2.3` with no error.
+
+GitLab's page on protected branches lists `*gitlab*` as matching `master/gitlab/production`, so a GitLab wildcard crosses `/`, and `release/*` covers `release/a/b`.
+
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository>
+- <https://docs.github.com/en/rest/repos/rules>
+- <https://docs.gitlab.com/user/project/repository/branches/protected/>
+
+Bearing: `release-ref-rules:only-the-release-actors-create-a-release-tag` and `release-ref-rules:only-the-release-actors-write-a-release-branch`. Every GitHub release pattern takes the `**/*` form, and the GitLab patterns keep their single `*`.
+
+## Release tag names on a Rust target
+
+Verified 2026-11-26. The release-plz configuration page documents `git_tag_name` as the name "of the git tags that release-plz creates". Its default is `"v{{ version }}"` "for projects containing a single crate or workspaces containing just one public package", and `"{{ package }}-v{{ version }}"` "for workspaces containing more than one public package". A `[[package]]` entry can override it. The landed `release-plz.toml` sets `git_tag_name = "v{{ version }}"`.
+
+The release workflow template of cargo-dist starts on a tag push that matches `**[0-9]+.[0-9]+.[0-9]+*`, after an optional `tag_namespace`. Its comment names tags "like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0"". The filter pattern cheat sheet of GitHub Actions states that `*` "does not match the `/` character", that `**` "matches zero or more of any character", that `+` "matches one or more of the preceding character", and that `[]` matches one character "listed in the brackets or included in ranges". So the workflow starts on any tag that carries an `x.y.z` version, in any folder, release-plz's tags included.
+
+GitHub's page on creating rulesets accepts character sets within square brackets, and it matches with Ruby's `File.fnmatch` under `FNM_PATHNAME`. Neither that page nor Ruby's page on filename matching states that `**/` matches zero folders, so a live proof settles it below. Ruby's own `File.fnmatch` with `FNM_PATHNAME` matches `refs/tags/**/*[0-9].[0-9]*.[0-9]*` against `1.2.3`, `x/1.2.3`, `v1.2.3`, `my-crate-v0.12.0`, and `a/b/c-v10.20.30-rc.1`, and not against `docs-snapshot`, `ci/2026`, `v1.2`, or `release/v2`. In the last segment of a tag, `*[0-9].[0-9]*.[0-9]*` takes every name that the cheat sheet reading of the workflow trigger takes, so the pattern is a superset of that trigger.
+
+A live proof on a throwaway repository the same day put `release-tag-creation` over `refs/tags/**/*[0-9].[0-9]*.[0-9]*` through `rk setup step protect-tags --apply`, and read that include back. The Actions token, with `contents: write`, pushed four tags. GitHub refused three with "GH013: Repository rule violations found" and "Cannot create ref due to creations being restricted": a top-level `1.2.3-<lane>`, a nested `x<lane>/1.2.3`, and `v1.2.3-<lane>`. None of the three stood after the push. The top-level refusal shows that `**/` matches zero folders on GitHub. The same token created `docs-snapshot-<lane>`, which carries no `x.y.z` version. A token of the release App, minted with `permission-contents: write` alone, created `v1.2.4-<lane>`, and GitHub answered "Bypassed rule violations". `rk setup check` then reported `protect-tags` and `protections-check` as satisfied.
+
+- <https://release-plz.dev/docs/config>
+- <https://github.com/axodotdev/cargo-dist/blob/main/cargo-dist/templates/ci/github/release.yml.j2>
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#filter-pattern-cheat-sheet>
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository>
+- <https://docs.ruby-lang.org/en/master/file/filename_matching_md.html>
+
+Bearing: `release-ref-rules:only-the-release-actors-create-a-release-tag`. On a Rust target on GitHub, the creation ruleset covers `refs/tags/**/*[0-9].[0-9]*.[0-9]*`, and a tag with no `x.y.z` version stays open.
+
+## A bypass actor merges by choosing the bypass
+
+Verified 2026-11-26. GitHub's page on creating rulesets for a repository states that a bypass actor that must open a pull request "can then choose to bypass any branch protections and merge that pull request". The manual of `gh pr merge` describes `--admin` as "Use administrator privileges to merge a pull request that does not meet requirements", and `--match-head-commit` as the head the request must match for the merge. A live proof on a throwaway repository the same day: the release App, a bypass actor of the updates ruleset alone, dispatched the merge of a green release request with `gh pr merge` and no `--admin`. Every guard of the merge job passed, and `gh` refused with "the base branch policy prohibits the merge" and the hint to add `--admin`. The request read `mergeStateStatus` `BLOCKED` and `mergeable` `MERGEABLE`, with both required checks green. In the same run the repository administrator merged a green request through `PUT /repos/{owner}/{repo}/pulls/{number}/merge`, and the Actions token got HTTP 405 there, "Cannot update this protected ref".
+
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository>
+- <https://cli.github.com/manual/gh_pr_merge>
+
+Bearing: `release-ref-rules:only-the-release-actors-update-the-trunk`. The merge job passes `--admin` beside `--match-head-commit`, and the trunk ruleset, which names no App, still holds the request rule, the required checks, and the strict policy against it.
+
+## The release App creates a tag without Administration
+
+Verified 2026-11-26. The `actions/create-github-app-token` action takes one `permission-*` input per permission, and a token minted with none carries every permission that the installation holds. A live proof on a throwaway repository the same day: a job in the release environment asked the release App for `permission-administration: read`, and the mint failed. A token of the same App minted with `permission-contents: write` alone created a release tag by `git push`. The push passed the `creation` rule of `release-tag-creation`, which names the App as a bypass actor. These proofs ran while that ruleset covered every tag, with `refs/tags/**/*`. The record "Release tag names on a Rust target" carries the proof under the narrowed pattern, where the App still creates a release tag. A second live proof the same day took the path of a release that the REST API creates with a new tag, through `POST /repos/{owner}/{repo}/releases`. In run 45853632886 the same narrow App token got HTTP 201 with a published release, and the tag then stood. In run 45853704217 the Actions token, with `contents: write`, got HTTP 422: "Validation Failed", "pre_receive Repository rule violations found" with "Cannot create ref due to creations being restricted.", and "Published releases must have a valid tag". No tag and no release stood after it.
+
+- <https://github.com/actions/create-github-app-token>
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository>
+- <https://docs.github.com/en/rest/releases/releases#create-a-release>
+
+Bearing: `release-ref-rules:only-the-release-actors-create-a-release-tag`, and the Administration bullet of `forges/github.md`. The creation rule stands without Administration, so the App holds no permission that edits the rulesets that bind it.

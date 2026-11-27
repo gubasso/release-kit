@@ -4,15 +4,13 @@ This repository's instance of the one-time bootstrap. The procedure — every st
 
 ## Coordinates
 
-Export these once; the rendered runbook's commands read `$OWNER/$REPO` through `--repo`, and the remaining exports feed the bot steps. [README.md](./README.md) says what each one is.
+Export these once; the rendered runbook's commands read `$OWNER/$REPO` through `--repo`, and `$APP` names the App in the walkthrough. [README.md](./README.md) says what each one is.
 
 ```bash
 export OWNER=<account or organization that owns the repository>
 export REPO=<repository name>
 export CRATE=<package name as published to the registry>
 export APP=<the bot App's name>
-export APP_ID=<the bot App's numeric id>
-export KEY=<absolute path to the App's .pem, outside every repository>
 ```
 
 ## The procedure
@@ -21,7 +19,7 @@ export KEY=<absolute path to the App's .pem, outside every repository>
 rk guide setup --forge github --technology rust --repo "$OWNER/$REPO"
 ```
 
-The bot-App walkthrough it routes to is `rk forge github`; the registry forms are in `rk binding rust`. The bot steps read the credentials as `RK_BOT_APP_ID="$APP_ID"` and `RK_BOT_PRIVATE_KEY_FILE="$KEY"`.
+The bot-App walkthrough it routes to is `rk forge github`; the registry forms are in `rk binding rust`. The bot steps read the App ID from the committed `setup.bot.app_id`, and the key from the default path, `${XDG_CONFIG_HOME:-$HOME/.config}/release-kit/bot/github/<app-id>.pem`, where `rk setup import-key` puts the downloaded `.pem`. The runbook's step 2b states the two overrides.
 
 ## What this repository settles
 

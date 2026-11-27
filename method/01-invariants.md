@@ -22,6 +22,8 @@ One workflow file publishes, and only that file carries the OIDC token permissio
 
 The registry refuses a second upload of the same version, and a moved tag serves two artifacts under one name. A defect ships as the next version, and the defective one is withdrawn so new consumers stop resolving to it. [Recovery](./04-recovery.md) owns the sequence.
 
+A pushed release tag starts the publish, so only the release actors create one: the repository administrator and the release bot. On GitHub, the creation rule sits in a ruleset of its own that names both, beside the immutable ruleset that names nobody.
+
 ## Git and trunk-based development are requirements
 
 Every target is a non-bare Git repository with one main working tree, and trunk-based development is the one development method: one configured trunk receives short-lived topic branches, each validated and merged with no merge commit. Neither is a parameter, so the target configuration carries no key that selects either. What varies per target is recorded under `[git]`: the trunk's name, the checkout mode that says where a topic branch opens, `linked-worktree` or `main-worktree`, the integration mode that says which authority carries a branch onto the trunk, `local` or `forge`, and the merge form that says how its commits arrive, `squash` or `rebase`. A checkout mode changes the working tree a branch uses and nothing about branching, rebasing, or merging. [The Git specification](../_docs/specs/SPEC-git.md) binds these rules, and [integration](./12-integration.md) owns the second axis.
@@ -35,6 +37,10 @@ The trunk's name is the project's own. `master` is the default, and a project st
 ## A forge-integrated trunk merges through a checked request
 
 Where the recorded integration mode is `forge`, the trunk takes no direct push at all: every change arrives through a request that carries the named passing check, tested against the trunk it merges into. Review policy above that floor is the project's to raise and never to lower. A locally integrated GitHub trunk keeps the same request and strict required-check rules; the repository administrator alone bypasses the ruleset holding them, for the direct push this mode exists to make. That bypass does not include the release App, so its request still carries the tested trunk atomically, and it does not reach the deletion and force-push rules, which hold in a ruleset naming nobody.
+
+## Only the release actors change the release refs
+
+The operator alone updates the trunk, and the release bot merges the release request that the operator orders. Beside the administrator, the release bot alone creates a release tag and writes a release line or the branch of a release request. Every other identity with write access is refused there, an automation of the project's own included, so that automation acts as an identity of its own and never as the bot. On GitHub, each restriction is a ruleset of its own, for the reason the safety ruleset states: a bypass excuses every rule of its ruleset. The trunk update rule sits in an updates ruleset that names the administrator and the release App. The App merges with an explicit bypass of that rule alone, and the request rule and the required checks still bind it. On GitLab, each of these refs takes a push, a merge, or a creation at Maintainer alone, and the release bot holds Maintainer. The bot secrets reach only a job on these refs.
 
 The release request integrates at the forge in both modes. Merging it is the only event that authorizes the tag, the publish, the provenance, and the artifacts, so a local-integration target still owns every protection that request rides through.
 

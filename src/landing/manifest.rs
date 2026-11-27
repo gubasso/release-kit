@@ -422,6 +422,12 @@ pub struct Parameters {
         deserialize_with = "read_dev_environment"
     )]
     pub dev_environment: Option<crate::config::dev_environment::DevEnvironment>,
+    /// The GitHub environment that every job minting the release App
+    /// token names. A record predating the field reads as empty, which
+    /// renders the default, and the default omits the key, so the record's
+    /// bytes do not change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub release_environment: String,
 }
 
 /// A recorded development environment, held to the configuration's own
@@ -946,6 +952,7 @@ mod tests {
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                 security_scope: String::new(),
                 required_check: String::new(),
+                release_environment: String::new(),
                 dev_environment: None,
             },
             files: vec![
@@ -1001,6 +1008,7 @@ mod tests {
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                 security_scope: String::new(),
                 required_check: String::new(),
+                release_environment: String::new(),
                 dev_environment: None,
             },
             files: vec![],

@@ -26,7 +26,7 @@
 
 ## Purpose
 
-Rules governing how `rk` configures a remote forge on the operator's behalf, once per repository: the setup steps `rk setup` executes, the scripts that implement them, and the credentials they handle. Its subject is calling a remote API, which is neither carrying the embedded sources — `SPEC-distribution.md` — nor writing into a target repository. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The forge documentation these rules rest on is in `../reference/REFERENCE-forge-setup-sources.md`, which also records what each forge does not offer. What a complete observation leaves behind, and how a check reads a credential it cannot reach, is bound by `SPEC-setup-proof.md`. Which bot identity a run creates, and what it may reach, is bound by `SPEC-bot-identity.md`.
+Rules governing how `rk` configures a remote forge on the operator's behalf, once per repository: the setup steps `rk setup` executes, the scripts that implement them, and the credentials they handle. Its subject is calling a remote API, which is neither carrying the embedded sources — `SPEC-distribution.md` — nor writing into a target repository. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The forge documentation these rules rest on is in `../reference/REFERENCE-forge-setup-sources.md`, which also records what each forge does not offer. What a complete observation leaves behind, and how a check reads a credential it cannot reach, is bound by `SPEC-setup-proof.md`. Which bot identity a run creates, and what it may reach, is bound by `SPEC-bot-identity.md`. Where the bot App's key file is, and how a downloaded key gets there, is bound by `SPEC-bot-key.md`.
 
 ## Requirements
 
@@ -80,15 +80,15 @@ An environment block is readable from outside the process and every later child 
 
 #### Scenario: The bot private key is stored as a repository secret
 
-- GIVEN `RK_BOT_PRIVATE_KEY_FILE` naming an owner-only PEM private key outside the repository
+- GIVEN an owner-only PEM private key outside the repository, at a path that `RK_BOT_PRIVATE_KEY_FILE`, the user configuration file, or the default path names, in that order
 - WHEN `rk setup step bot-secrets --apply` runs
 - THEN the bytes `rk` validated reach the forge CLI on the step's standard input, no environment `rk` constructs holds them or the path, and a group-readable file, one that is not a PEM private key by kind and encoding, or a stale `RK_BOT_PRIVATE_KEY` export refuses before any forge call
 
 #### Scenario: The install-bot observation signs with the key and tells no child its path
 
-- GIVEN `RK_BOT_APP_ID` and `RK_BOT_PRIVATE_KEY_FILE` in the operator's environment
+- GIVEN a resolved App ID and a key file from any of the three sources
 - WHEN `rk setup check` observes `install-bot`
-- THEN the validated bytes reach the signing child on standard input alone and its argument list names no key file, while an absent export leaves the step unknown with both exports named
+- THEN rk signs with the validated bytes in-process and no child learns the key file, while a missing App ID or key leaves the step unknown with the missing fact named
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

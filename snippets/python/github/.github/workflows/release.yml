@@ -82,6 +82,7 @@ jobs:
   release-request:
     if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: RK_RELEASE_ENVIRONMENT
     permissions:
       contents: read
     concurrency:
@@ -145,6 +146,7 @@ jobs:
     if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: pypi # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY     environment: RK_RELEASE_ENVIRONMENT
     permissions:
       contents: read
       # Minting the build-provenance attestation: the OIDC token identifies
@@ -157,9 +159,10 @@ jobs:
       # This half creates the release, whose publication creates the tag, and
       # reads the pull request the pushed commit merges, because only that
       # merge releases a final version. It opens no pull request, so it takes
-      # contents and a read of pull-requests. A target whose tag ruleset
-      # blocks creation needs administration here too. The convention's
-      # ruleset restricts deletion and update only.
+      # contents and a read of pull-requests. The tag creation ruleset names
+      # the release App as a bypass actor, so its contents write carries a
+      # tag push, or the release that the REST API creates with its tag,
+      # past the creation rule.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
@@ -242,7 +245,9 @@ jobs:
       github.repository_owner == 'OWNER'
       && github.event_name == 'workflow_dispatch'
       && inputs.action == 'candidate'
+      && github.ref == format('refs/heads/RK_LINE_PREFIX{0}', inputs.line)
     runs-on: ubuntu-latest
+    environment: RK_RELEASE_ENVIRONMENT
     permissions:
       contents: read
     concurrency:
@@ -269,6 +274,8 @@ jobs:
           client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
           permission-contents: write
+# RK_CALLER_PROOF_BEGIN
+# RK_CALLER_PROOF_END
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: RK_LINE_PREFIX${{ inputs.line }}

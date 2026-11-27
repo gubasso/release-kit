@@ -377,6 +377,7 @@ pub struct Params {
     security_scope: String,
     required_check: String,
     dev_environment: Option<DevEnvironment>,
+    release_environment: String,
 }
 
 /// Explicit invocation answers; absence falls through to configuration.
@@ -534,6 +535,7 @@ impl Params {
             // compiled default is what such a landing renders now.
             required_check: gate_answer(record),
             dev_environment: record.parameters.dev_environment.clone(),
+            release_environment: environment_answer(&record.parameters.release_environment),
         }
     }
 
@@ -725,6 +727,24 @@ impl Params {
         &self.required_check
     }
 
+    /// The GitHub environment that every job minting the release App
+    /// token names.
+    #[must_use]
+    pub fn release_environment(&self) -> &str {
+        &self.release_environment
+    }
+
+    /// The release environment as the record keeps it: empty for the
+    /// default, so a record that takes the default keeps its bytes.
+    #[must_use]
+    pub fn recorded_release_environment(&self) -> &str {
+        if self.release_environment == crate::config::RELEASE_ENVIRONMENT_DEFAULT {
+            ""
+        } else {
+            &self.release_environment
+        }
+    }
+
     /// How a command runs in the project's own development environment,
     /// `None` where the project gives no answer.
     #[must_use]
@@ -877,6 +897,7 @@ impl Params {
             security_scope: String::new(),
             required_check: "gate".to_owned(),
             dev_environment: None,
+            release_environment: crate::config::RELEASE_ENVIRONMENT_DEFAULT.to_owned(),
         }
     }
 
@@ -993,6 +1014,16 @@ pub fn gate_defaults(profile: &ProfileSnapshot) -> Option<&'static str> {
 
 /// The required check read back from a record, falling to the compiled
 /// default where the record predates the field.
+/// The release environment a recorded or configured answer names: the
+/// answer itself, or the default where it is empty.
+fn environment_answer(answer: &str) -> String {
+    if answer.is_empty() {
+        crate::config::RELEASE_ENVIRONMENT_DEFAULT.to_owned()
+    } else {
+        answer.to_owned()
+    }
+}
+
 fn gate_answer(record: &manifest::Manifest) -> String {
     let recorded = &record.parameters.required_check;
     if recorded.is_empty() {
@@ -1719,6 +1750,35 @@ pub fn resolve(
     ])
     .unwrap_or((String::new(), Source::Default));
     sources.insert("setup.required_check", source);
+    // The release environment has no flag and no observation. The
+    // configuration answers it, then the record, then the default.
+    let (release_environment, source) = answered([
+        (None, Source::Flag),
+        (
+            config
+                .map(|c| c.protection.release_environment.clone())
+                .filter(|name| !name.is_empty()),
+            Source::Config,
+        ),
+        (
+            record
+                .map(|r| r.parameters.release_environment.clone())
+                .filter(|name| !name.is_empty()),
+            Source::Record,
+        ),
+        (None, Source::Observation),
+        (
+            Some(crate::config::RELEASE_ENVIRONMENT_DEFAULT.to_owned()),
+            Source::Default,
+        ),
+    ])
+    .unwrap_or_else(|| {
+        (
+            crate::config::RELEASE_ENVIRONMENT_DEFAULT.to_owned(),
+            Source::Default,
+        )
+    });
+    sources.insert("protection.release_environment", source);
     // The development environment has no flag and no observation: only the
     // operator answers it, and nothing reads a manager file to propose one.
     // A table whose run is empty states no answer and clears the record's.
@@ -1795,6 +1855,7 @@ pub fn resolve(
             security_scope,
             required_check,
             dev_environment,
+            release_environment,
         },
         sources,
         unknown,

@@ -67,6 +67,29 @@ pub(super) fn github_bypass_actors(values: &[String]) -> serde_json::Value {
     )
 }
 
+/// The release bypass actors as GitHub API objects: the release App, where
+/// `app_id` names one, and the repository administrator role, each with
+/// `bypass_mode` `always`, sorted by type, then id, then mode.
+pub(super) fn release_bypass_actors(app_id: Option<&str>) -> serde_json::Value {
+    let mut actors: Vec<(String, u64, &str)> = vec![("RepositoryRole".to_owned(), 5, "always")];
+    if let Some(id) = app_id.and_then(|id| id.parse::<u64>().ok()) {
+        actors.push(("Integration".to_owned(), id, "always"));
+    }
+    actors.sort();
+    serde_json::Value::Array(
+        actors
+            .into_iter()
+            .map(|(kind, id, mode)| {
+                serde_json::json!({
+                    "actor_id": id,
+                    "actor_type": kind,
+                    "bypass_mode": mode,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// One GitHub ruleset's `rules` array, as JSON.
 ///
 /// Every rule comes from `protection.owned_trunk_rules`, which the floor
@@ -349,6 +372,19 @@ pub struct Ctx {
     tag_ruleset: String,
     /// The ruleset that protects the release lines.
     lines_ruleset: String,
+    /// The ruleset that lets only the release bypass actors update the
+    /// trunk.
+    updates_ruleset: String,
+    /// The ruleset that lets only the release bypass actors create a
+    /// release tag.
+    tag_creation_ruleset: String,
+    /// The ruleset that lets only the release bypass actors create or
+    /// update a release branch.
+    release_branch_ruleset: String,
+    /// The GitHub environments that hold the release bot secrets, read
+    /// from the jobs of the rendered release workflow that mint the App
+    /// token. Empty where no GitHub release workflow lands.
+    release_environments: Vec<String>,
     /// The context the landed forge gate reports under: the title job under
     /// `squash`, the commit gate's job under `rebase`.
     title_check: String,
@@ -482,6 +518,10 @@ impl Ctx {
             safety_ruleset: protection.safety_ruleset(&trunk),
             tag_ruleset: protection.tag_ruleset.clone(),
             lines_ruleset: protection.lines_ruleset.clone(),
+            updates_ruleset: protection.updates_ruleset(&trunk),
+            tag_creation_ruleset: protection.tag_creation_ruleset.clone(),
+            release_branch_ruleset: protection.release_branch_ruleset.clone(),
+            release_environments: crate::projection::release_environments(&resolved),
             title_check: gate_check(&protection, merge_form),
             protection,
             tag_protection: effective.tag_protection,
@@ -631,6 +671,14 @@ impl Ctx {
             safety_ruleset: format!("{}-safety", crate::config::TRUNK_DEFAULT),
             tag_ruleset: defaults.tag_ruleset.clone(),
             lines_ruleset: defaults.lines_ruleset.clone(),
+            updates_ruleset: defaults.updates_ruleset(crate::config::TRUNK_DEFAULT),
+            tag_creation_ruleset: defaults.tag_creation_ruleset.clone(),
+            release_branch_ruleset: defaults.release_branch_ruleset.clone(),
+            release_environments: if forge == Forge::Github && tech.is_some() {
+                vec![defaults.release_environment.clone()]
+            } else {
+                Vec::new()
+            },
             title_check: defaults.title_check.clone(),
             protection: defaults,
         }
@@ -774,6 +822,162 @@ impl Ctx {
         &self.lines_ruleset
     }
 
+    /// The ruleset that lets only the release bypass actors update the
+    /// trunk.
+    #[must_use]
+    pub fn updates_ruleset(&self) -> &str {
+        &self.updates_ruleset
+    }
+
+    /// The ruleset that lets only the release bypass actors create a
+    /// release tag.
+    #[must_use]
+    pub fn tag_creation_ruleset(&self) -> &str {
+        &self.tag_creation_ruleset
+    }
+
+    /// The ruleset that lets only the release bypass actors create or
+    /// update a release branch.
+    #[must_use]
+    pub fn release_branch_ruleset(&self) -> &str {
+        &self.release_branch_ruleset
+    }
+
+    /// The branch patterns a release writes to, in the forge's own
+    /// pattern form: the release lines, then the head branches of both
+    /// release requests.
+    ///
+    /// Both request prefixes are covered whatever the driver, so a target
+    /// that changes its driver keeps every request branch protected. The
+    /// prefixes come from the code that names each request branch.
+    ///
+    /// A GitLab wildcard crosses `/`, so one `<prefix>*` covers a nested
+    /// name. A GitHub ruleset matches with `File.fnmatch` under
+    /// `FNM_PATHNAME`, where `*` and a bare `**` stop at `/`, and only the
+    /// `**/*` form takes any number of segments. So a prefix that ends in
+    /// `/` takes `<prefix>**/*`, and any other prefix takes `<prefix>*`
+    /// beside `<prefix>*/**/*`.
+    #[must_use]
+    pub fn release_branch_patterns(&self) -> Vec<String> {
+        self.release_branch_prefixes()
+            .iter()
+            .flat_map(|prefix| match self.forge {
+                Some(Forge::Gitlab) => vec![format!("{prefix}*")],
+                _ if prefix.ends_with('/') => vec![format!("refs/heads/{prefix}**/*")],
+                _ => vec![
+                    format!("refs/heads/{prefix}*"),
+                    format!("refs/heads/{prefix}*/**/*"),
+                ],
+            })
+            .collect()
+    }
+
+    /// The prefixes of the branches a release writes to: the release
+    /// lines, then the head branches of both release requests. One list
+    /// serves the release branch protection and the release environment.
+    const fn release_branch_prefixes(&self) -> [&str; 3] {
+        [
+            self.line_prefix.as_str(),
+            crate::release_state::RELEASE_PLZ_PREFIX,
+            crate::release_engine::REQUEST_PREFIX,
+        ]
+    }
+
+    /// The GitHub environments that hold the release bot secrets.
+    #[must_use]
+    pub fn release_environments(&self) -> &[String] {
+        &self.release_environments
+    }
+
+    /// The branch patterns the release environment's deployment policy
+    /// admits: the trunk, then each release branch prefix.
+    ///
+    /// A policy pattern is a `File.fnmatch` name whose wildcard matches no
+    /// `/`, so a prefix that ends in `/` takes one more segment, and the
+    /// engine's request branch takes one pattern per base it heads from:
+    /// the trunk, and each release line.
+    #[must_use]
+    pub fn environment_branch_patterns(&self) -> Vec<String> {
+        let [lines, release_plz, request] = self.release_branch_prefixes();
+        vec![
+            self.trunk.clone(),
+            format!("{lines}*"),
+            format!("{release_plz}*"),
+            format!("{request}{}", self.trunk),
+            format!("{request}{lines}*"),
+        ]
+    }
+
+    /// The tag patterns the release environment's deployment policy
+    /// admits: the recorded release tag pattern, as a tag name.
+    #[must_use]
+    pub fn environment_tag_patterns(&self) -> Vec<String> {
+        let pattern = self.protection.tag_pattern.as_str();
+        vec![
+            pattern
+                .strip_prefix("refs/tags/")
+                .unwrap_or(pattern)
+                .to_owned(),
+        ]
+    }
+
+    /// The tag patterns that only the release bypass actors may create, in
+    /// the forge's own pattern form.
+    ///
+    /// The list covers every tag that starts a release. Elsewhere that is
+    /// `protection.tag_pattern`, which the immutable tag ruleset covers
+    /// too. On a Rust target on GitHub, two tag shapes start a release.
+    /// release-plz names its tag `v{{ version }}` for one package and
+    /// `{{ package }}-v{{ version }}` in a workspace. The artifact workflow
+    /// that the artifact builder generates starts on any tag that matches
+    /// `**[0-9]+.[0-9]+.[0-9]+*`, such as `1.2.3` or `x/1.2.3`. No ruleset
+    /// pattern states that trigger exactly, so the list is the `fnmatch`
+    /// superset `refs/tags/**/*[0-9].[0-9]*.[0-9]*`, which covers both
+    /// release-plz shapes too. Its `**/` takes any number of `/`, none
+    /// included, and a tag with no `x.y.z` version, such as
+    /// `docs-snapshot`, stays open to every writer. A bare `**` stops at
+    /// `/` and misses `x/1.2.3`.
+    #[must_use]
+    pub fn tag_creation_patterns(&self) -> Vec<String> {
+        if self.forge == Some(Forge::Github) && self.driver() == Some("rust") {
+            vec!["refs/tags/**/*[0-9].[0-9]*.[0-9]*".to_owned()]
+        } else {
+            vec![self.protection.tag_pattern.clone()]
+        }
+    }
+
+    /// The recorded release tag pattern, in the forge's own pattern form:
+    /// the ref pattern on GitHub, and the tag name GitLab protects, which
+    /// carries no `refs/tags/` prefix, such as `v*` or `*`.
+    #[must_use]
+    pub fn tag_pattern(&self) -> &str {
+        let pattern = self.protection.tag_pattern.as_str();
+        match self.forge {
+            Some(Forge::Gitlab) => pattern.strip_prefix("refs/tags/").unwrap_or(pattern),
+            _ => pattern,
+        }
+    }
+
+    /// The release App's numeric ID where the release automation selects
+    /// a bot and an ID resolves, by the one resolution every reader of the
+    /// App ID takes.
+    #[must_use]
+    pub fn release_app_id(&self) -> Option<String> {
+        if !self.automatic_release() {
+            return None;
+        }
+        super::app_jwt::app_id(self.bot_app_id()).ok().flatten()
+    }
+
+    /// The actors a release ruleset lets past it on GitHub: the repository
+    /// administrator role, and the release App where one resolves. The
+    /// list is sorted by type, then id, then mode, the order every reader
+    /// compares in.
+    #[must_use]
+    pub fn release_bypass_actors(&self) -> serde_json::Value {
+        release_bypass_actors(self.release_app_id().as_deref())
+    }
+
     /// The context the landed forge gate reports under: the title job under
     /// `squash`, the commit gate's job under `rebase`.
     #[must_use]
@@ -881,6 +1085,12 @@ impl Ctx {
         put("safety_ruleset", self.safety_ruleset.clone());
         put("tag_ruleset", self.tag_ruleset.clone());
         put("lines_ruleset", self.lines_ruleset.clone());
+        put("updates_ruleset", self.updates_ruleset.clone());
+        put("tag_creation_ruleset", self.tag_creation_ruleset.clone());
+        put(
+            "release_branch_ruleset",
+            self.release_branch_ruleset.clone(),
+        );
         put("title_check", self.title_check.clone());
         put("protection", canonical(&self.protection));
         fields
@@ -955,6 +1165,59 @@ impl Ctx {
             ),
             ("RK_TAG_RULESET".into(), self.tag_ruleset.clone().into()),
             ("RK_LINES_RULESET".into(), self.lines_ruleset.clone().into()),
+            (
+                "RK_UPDATES_RULESET".into(),
+                self.updates_ruleset.clone().into(),
+            ),
+            (
+                "RK_TAG_CREATION_RULESET".into(),
+                self.tag_creation_ruleset.clone().into(),
+            ),
+            (
+                "RK_RELEASE_BRANCH_RULESET".into(),
+                self.release_branch_ruleset.clone().into(),
+            ),
+            // The branches a release writes to, and the actors the release
+            // rulesets let past them: the administrator role, and the
+            // release App where one resolves.
+            (
+                "RK_RELEASE_BRANCH_PATTERNS".into(),
+                serde_json::Value::from(self.release_branch_patterns())
+                    .to_string()
+                    .into(),
+            ),
+            (
+                "RK_TAG_CREATION_PATTERNS".into(),
+                serde_json::Value::from(self.tag_creation_patterns())
+                    .to_string()
+                    .into(),
+            ),
+            // The environments that hold the bot secrets, and the refs
+            // their deployment policy admits. Each name holds to a shape
+            // with no quote, comma, or space, so a script splits a list
+            // with no JSON parser.
+            (
+                "RK_RELEASE_ENVIRONMENTS".into(),
+                serde_json::Value::from(self.release_environments.clone())
+                    .to_string()
+                    .into(),
+            ),
+            (
+                "RK_ENVIRONMENT_BRANCH_PATTERNS".into(),
+                serde_json::Value::from(self.environment_branch_patterns())
+                    .to_string()
+                    .into(),
+            ),
+            (
+                "RK_ENVIRONMENT_TAG_PATTERNS".into(),
+                serde_json::Value::from(self.environment_tag_patterns())
+                    .to_string()
+                    .into(),
+            ),
+            (
+                "RK_RELEASE_BYPASS_ACTORS".into(),
+                self.release_bypass_actors().to_string().into(),
+            ),
             // The context the landed forge gate reports under, which the
             // trunk ruleset requires: the title job under `squash` and the
             // commit gate's job under `rebase`.
@@ -971,12 +1234,18 @@ impl Ctx {
                 bool_word(self.tag_protection).into(),
             ),
             ("RK_FORGE_GATE".into(), bool_word(self.forge_gate).into()),
+            // Whether the release is automatic, where the release
+            // automation and its pipeline settings apply.
+            (
+                "RK_AUTOMATIC_RELEASE".into(),
+                bool_word(self.automatic_release()).into(),
+            ),
             // The floored policy, already judged against the floor table
             // at load. A step receives values, never a judgment: one
             // owner decides what passes, and it is not a shell script.
             (
                 "RK_TAG_PATTERN".into(),
-                self.protection.tag_pattern.clone().into(),
+                self.tag_pattern().to_owned().into(),
             ),
             (
                 "RK_REVIEW_COUNT".into(),
@@ -1081,6 +1350,14 @@ impl Ctx {
                 if let Some(value) = secrets::value_of(name) {
                     env.push((name.into(), value));
                 }
+            }
+            // The App ID resolves as every reader resolves it: where the
+            // variable is unset, the committed `setup.bot.app_id` stands.
+            if self.forge == Some(Forge::Github)
+                && secrets::value_of("RK_BOT_APP_ID").is_none()
+                && let Some(app_id) = &self.bot_app_id
+            {
+                env.push(("RK_BOT_APP_ID".into(), app_id.clone().into()));
             }
         }
         env
@@ -1502,5 +1779,151 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The tag creation patterns cover every tag that starts a release: on
+    /// a Rust target on GitHub every tag that carries an `x.y.z` version,
+    /// because the generated artifact workflow starts on such a tag, and
+    /// elsewhere `protection.tag_pattern`.
+    ///
+    /// SATISFIES release-ref-rules:only-the-release-actors-create-a-release-tag
+    #[test]
+    fn the_tag_creation_patterns_cover_every_release_tag_trigger() {
+        let ctx = |forge, tech| {
+            super::Ctx::for_tests(
+                camino::Utf8PathBuf::from("/tmp/target"),
+                "acme/widget".to_owned(),
+                forge,
+                std::path::PathBuf::from("gh"),
+                tech,
+            )
+        };
+        let github = crate::detect::Forge::Github;
+        assert_eq!(
+            ctx(github, Some("rust")).tag_creation_patterns(),
+            ["refs/tags/**/*[0-9].[0-9]*.[0-9]*"]
+        );
+        for tech in [Some("python"), Some("bash"), None] {
+            assert_eq!(
+                ctx(github, tech).tag_creation_patterns(),
+                ["refs/tags/v*"],
+                "{tech:?}"
+            );
+        }
+        let mut wide = ctx(github, Some("python"));
+        wide.protection.tag_pattern = "refs/tags/*".to_owned();
+        assert_eq!(wide.tag_creation_patterns(), ["refs/tags/*"]);
+    }
+
+    /// GitLab protects a tag by its name, so the recorded ref pattern
+    /// reaches a GitLab step without its `refs/tags/` prefix, and GitHub
+    /// takes it whole.
+    #[test]
+    fn the_tag_pattern_takes_the_form_of_the_forge() {
+        let mut ctx = super::Ctx::for_tests(
+            camino::Utf8PathBuf::from("/tmp/target"),
+            "acme/widget".to_owned(),
+            crate::detect::Forge::Github,
+            std::path::PathBuf::from("gh"),
+            Some("python"),
+        );
+        assert_eq!(ctx.tag_pattern(), "refs/tags/v*");
+        ctx.forge = Some(crate::detect::Forge::Gitlab);
+        assert_eq!(ctx.tag_pattern(), "v*");
+        ctx.protection.tag_pattern = "refs/tags/*".to_owned();
+        assert_eq!(ctx.tag_pattern(), "*");
+    }
+
+    /// The release branch patterns name the line prefix and both release
+    /// request prefixes, in each forge's own pattern form, from the code
+    /// that names each request branch.
+    #[test]
+    fn the_release_branch_patterns_follow_the_request_prefixes_of_the_code() {
+        let plz = crate::release_state::RELEASE_PLZ_PREFIX;
+        let engine = crate::release_engine::REQUEST_PREFIX;
+        let line = crate::config::LINE_PREFIX_DEFAULT;
+        let mut ctx = super::Ctx::for_tests(
+            camino::Utf8PathBuf::from("/tmp/target"),
+            "acme/widget".to_owned(),
+            crate::detect::Forge::Github,
+            std::path::PathBuf::from("gh"),
+            Some("python"),
+        );
+        assert_eq!(
+            ctx.release_branch_patterns(),
+            [
+                format!("refs/heads/{line}**/*"),
+                format!("refs/heads/{plz}*"),
+                format!("refs/heads/{plz}*/**/*"),
+                format!("refs/heads/{engine}**/*"),
+            ]
+        );
+        assert_eq!(
+            ctx.release_branch_patterns(),
+            [
+                "refs/heads/release/**/*",
+                "refs/heads/release-plz-*",
+                "refs/heads/release-plz-*/**/*",
+                "refs/heads/rk-release/**/*"
+            ]
+        );
+        // A line prefix with no closing `/` takes the flat and the nested
+        // form, as the release request prefix does.
+        ctx.line_prefix = "maint-".to_owned();
+        assert_eq!(
+            ctx.release_branch_patterns()[..2],
+            ["refs/heads/maint-*", "refs/heads/maint-*/**/*"]
+        );
+        ctx.line_prefix = line.to_owned();
+        ctx.forge = Some(crate::detect::Forge::Gitlab);
+        ctx.line_prefix = "maint/".to_owned();
+        assert_eq!(
+            ctx.release_branch_patterns(),
+            ["maint/*", "release-plz-*", "rk-release/*"]
+        );
+        // The prefixes stand whatever the driver, so a target that changes
+        // its driver keeps every request branch protected.
+        ctx.tech = Some("rust");
+        ctx.profile.release.driver = Some("rust".to_owned());
+        assert_eq!(
+            ctx.release_branch_patterns(),
+            ["maint/*", "release-plz-*", "rk-release/*"]
+        );
+    }
+
+    /// The release bypass names the administrator role and the release App
+    /// where an App ID resolves, sorted by type, then id, then mode, and the
+    /// administrator role alone where none does.
+    ///
+    /// SATISFIES bot-identity:the-bot-identity-serves-the-release-alone
+    #[test]
+    fn the_release_bypass_names_the_admin_role_and_the_release_app() {
+        assert_eq!(
+            super::release_bypass_actors(Some("314159")),
+            serde_json::json!([
+                {"actor_id": 314_159, "actor_type": "Integration", "bypass_mode": "always"},
+                {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"},
+            ])
+        );
+        let admin_alone = serde_json::json!([
+            {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"},
+        ]);
+        assert_eq!(super::release_bypass_actors(None), admin_alone);
+        assert_eq!(
+            super::release_bypass_actors(Some("not-a-number")),
+            admin_alone
+        );
+        // A target with no automatic release selects no bot, so its App ID
+        // names no bypass actor.
+        let mut ctx = super::Ctx::for_tests(
+            camino::Utf8PathBuf::from("/tmp/target"),
+            "acme/widget".to_owned(),
+            crate::detect::Forge::Github,
+            std::path::PathBuf::from("gh"),
+            Some("rust"),
+        );
+        ctx.bot_app_id = Some("314159".to_owned());
+        ctx.profile.release.mode = crate::profile::ReleaseMode::External;
+        assert_eq!(ctx.release_bypass_actors(), admin_alone);
     }
 }

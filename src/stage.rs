@@ -148,6 +148,10 @@ pub struct Parameters {
     /// absent where the project gives no answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dev_environment: Option<crate::config::dev_environment::DevEnvironment>,
+    /// The GitHub environment of the release bot secrets, omitted where it
+    /// is the default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub release_environment: String,
 }
 
 impl From<&Params> for Parameters {
@@ -162,6 +166,7 @@ impl From<&Params> for Parameters {
             security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
             dev_environment: params.dev_environment().cloned(),
+            release_environment: params.recorded_release_environment().to_owned(),
         }
     }
 }
@@ -1028,6 +1033,7 @@ mod tests {
             security_contact: String::new(),
             required_check: String::new(),
             dev_environment: None,
+            release_environment: String::new(),
             security_response: "best-effort".into(),
             security_scope: String::new(),
         }

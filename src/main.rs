@@ -176,7 +176,7 @@ const fn wants_json(command: &Commands) -> bool {
                 | SetupAction::Status { json, .. }
                 | SetupAction::Step { json, .. },
             ) => *json,
-            Some(SetupAction::Script { .. }) => false,
+            Some(SetupAction::Script { .. } | SetupAction::ImportKey { .. }) => false,
             None => args.json,
         },
         Commands::Branches(args) => match &args.action {

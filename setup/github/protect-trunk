@@ -1,7 +1,17 @@
 #!/usr/bin/env sh
-# Protect the trunk, in two rulesets. A bypass actor is recorded on a
+# Protect the trunk, in three rulesets. A bypass actor is recorded on a
 # ruleset and never on a rule, so anything that may be bypassed is kept
 # apart from anything that may not.
+#
+# RK_UPDATES_RULESET carries the update rule alone, and only the release
+# bypass actors pass it: the repository administrator, and the release App
+# where one is named. The administrator merges a request. The release App
+# merges the ordered release request with an explicit bypass of the update
+# rule alone, and the request rule and the required checks, which it does
+# not bypass, still bind it. Every other identity with
+# write access is refused twice: a push meets the request rule, and a
+# merge meets the update rule. The method's invariants chapter owns the
+# reason.
 #
 # RK_SAFETY_RULESET carries deletion and force-push protection and names no
 # bypass actor, so those hold against every actor including the operator.
@@ -33,6 +43,8 @@ set -eu
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_RULESET:?rk sets this; run this script through rk setup}"
 : "${RK_SAFETY_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_UPDATES_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
 : "${RK_TITLE_CHECK:?rk sets this; run this script through rk setup}"
 # The policy below. rk judged every value against the floor table before
 # this ran, so this script substitutes and never decides.
@@ -68,8 +80,11 @@ JSON
 
 # The safety ruleset first. A run that moved the deletion and force-push
 # rules out of the trunk ruleset before installing the ruleset that
-# receives them would leave a window with neither.
+# receives them would leave a window with neither. The updates ruleset
+# comes next, so the trunk refuses a stranger's merge before the trunk
+# ruleset changes.
 upsert "$RK_SAFETY_RULESET" '[]' "$RK_SAFETY_RULES"
+upsert "$RK_UPDATES_RULESET" "$RK_RELEASE_BYPASS_ACTORS" '[{ "type": "update" }]'
 upsert "$RK_TRUNK_RULESET" "$RK_BYPASS_ACTORS" "$RK_TRUNK_RULES"
 
 # The squash title source is a repository setting, not a ruleset rule: on a
@@ -83,9 +98,9 @@ else
   gh api -X PATCH "repos/$RK_REPO" -F allow_rebase_merge=true >/dev/null
 fi
 
-echo "check: prints both ruleset names, then the squash message sources under the squash form, or the rebase switch under the rebase form"
+echo "check: prints the three ruleset names, then the squash message sources under the squash form, or the rebase switch under the rebase form"
 gh api "repos/$RK_REPO/rulesets" \
-  -q ".[] | select(.name == \"$RK_SAFETY_RULESET\" or .name == \"$RK_TRUNK_RULESET\") | .name"
+  -q ".[] | select(.name == \"$RK_SAFETY_RULESET\" or .name == \"$RK_UPDATES_RULESET\" or .name == \"$RK_TRUNK_RULESET\") | .name"
 if [ "$RK_MERGE_FORM" = squash ]; then
   gh api "repos/$RK_REPO" -q .squash_merge_commit_title
   gh api "repos/$RK_REPO" -q .squash_merge_commit_message

@@ -189,9 +189,13 @@ pub fn classify(command: &Commands) -> Option<Gated> {
                 .target
                 .as_deref()
                 .and_then(|target| gated(PreLanding, effect(args.apply), target)),
-            Some(SetupAction::Check { target, .. } | SetupAction::Status { target, .. }) => {
-                gated(PreLanding, Reads, target)
-            }
+            // The import writes outside the target and reads only its
+            // configuration.
+            Some(
+                SetupAction::Check { target, .. }
+                | SetupAction::Status { target, .. }
+                | SetupAction::ImportKey { target, .. },
+            ) => gated(PreLanding, Reads, target),
             Some(SetupAction::Checkpoint { target, .. }) => gated(PreLanding, Writes, target),
             Some(SetupAction::Step { target, apply, .. }) => {
                 gated(PreLanding, effect(*apply), target)

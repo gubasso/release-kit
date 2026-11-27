@@ -1,0 +1,16 @@
+      # Any write identity can dispatch a workflow, so the caller's role is
+      # what keeps this job to the administrator's order alone. The proof
+      # runs right after the mint, because the read takes the app token,
+      # and before any step that writes.
+      - name: refuse a caller who is not an administrator
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          CALLER: ${{ github.triggering_actor }}
+        run: |
+          set -eu
+          role="$(gh api "repos/{owner}/{repo}/collaborators/$CALLER/permission" --jq .permission)"
+          if [ "$role" != "admin" ]; then
+            echo "::error::$CALLER holds the $role role, and only an administrator dispatches this job; nothing changed."
+            exit 1
+          fi

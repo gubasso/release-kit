@@ -209,6 +209,10 @@ pub struct Security {
 /// policy promises no window at all.
 pub const RESPONSE_DEFAULT: &str = "best-effort";
 
+/// The GitHub environment that holds the release bot secrets where the
+/// target names none.
+pub const RELEASE_ENVIRONMENT_DEFAULT: &str = "release";
+
 /// The one GitHub ruleset bypass local integration owns.
 ///
 /// GitHub identifies its built-in repository administrator role as role 5.
@@ -306,6 +310,27 @@ pub fn bot_name_shape(raw: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "setup.bot.name must be empty or a username: a letter or a digit, then letters, digits, '.', '_', or '-', at most 255 characters; found {name:?}"
+        ))
+    }
+}
+
+/// Whether a release environment name has the shape the setup scripts
+/// carry in a list, or why not: a letter or a digit, then letters,
+/// digits, `.`, `_`, or `-`, at most 255 characters.
+///
+/// # Errors
+/// The refusal text, naming the key and the shape.
+pub fn release_environment_shape(name: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    let shaped = chars.next().is_some_and(|first| {
+        first.is_ascii_alphanumeric()
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    });
+    if shaped && name.len() <= 255 {
+        Ok(())
+    } else {
+        Err(format!(
+            "protection.release_environment must be a letter or a digit, then letters, digits, '.', '_', or '-', at most 255 characters; found {name:?}"
         ))
     }
 }
@@ -420,6 +445,18 @@ pub struct Protection {
     pub tag_ruleset: String,
     /// N: release-line ruleset name.
     pub lines_ruleset: String,
+    /// N: trunk updates ruleset name. Absent derives `<trunk>-updates`.
+    /// It carries the update rule alone, and only the release bypass
+    /// actors pass it.
+    pub updates_ruleset: Option<String>,
+    /// N: release tag creation ruleset name.
+    pub tag_creation_ruleset: String,
+    /// N: release branch ruleset name.
+    pub release_branch_ruleset: String,
+    /// N: the GitHub environment that holds the release bot secrets. Its
+    /// deployment policy admits the release refs alone, and every job
+    /// that mints the release App token names it.
+    pub release_environment: String,
     /// N: title job context.
     pub title_check: String,
     /// F: invariant, covers every published version.
@@ -457,6 +494,10 @@ impl Default for Protection {
             safety_ruleset: None,
             tag_ruleset: "release-tags".into(),
             lines_ruleset: "release-lines".into(),
+            updates_ruleset: None,
+            tag_creation_ruleset: "release-tag-creation".into(),
+            release_branch_ruleset: "release-branches".into(),
+            release_environment: RELEASE_ENVIRONMENT_DEFAULT.into(),
             title_check: "pr-title".into(),
             tag_pattern: "refs/tags/v*".into(),
             bypass_actors: Vec::new(),
@@ -499,6 +540,15 @@ impl Protection {
         self.safety_ruleset
             .clone()
             .unwrap_or_else(|| format!("{trunk}-safety"))
+    }
+
+    /// The trunk updates ruleset's name: the target's own answer, or the
+    /// derived `<trunk>-updates`.
+    #[must_use]
+    pub fn updates_ruleset(&self, trunk: &str) -> String {
+        self.updates_ruleset
+            .clone()
+            .unwrap_or_else(|| format!("{trunk}-updates"))
     }
 }
 
@@ -831,6 +881,7 @@ fn parse(text: &str) -> Result<Config, RkError> {
         canonical_scope(scope).map_err(invalid)?;
     }
     bot_name_shape(&config.setup.bot.name).map_err(invalid)?;
+    release_environment_shape(&config.protection.release_environment).map_err(invalid)?;
     exclusions(&config.setup.excluded_steps)?;
     accepted_drift(&config.landing.accepted_drift)?;
     if let Some(answer) = &config.dev_environment {
@@ -1312,15 +1363,18 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
     Ok(fields)
 }
 
-/// The template tokens only a release reads: the tag protection keys and
-/// the bot's App identifier and name. A configuration whose release mode is
+/// The template tokens only a release reads: the tag protection keys, the
+/// release branch ruleset, and the bot's App identifier and name. A configuration whose release mode is
 /// `none` leaves each one out.
 ///
 /// SATISFIES target-config:a-release-less-template-carries-no-release-table
-const RELEASE_ONLY_TOKENS: [&str; 5] = [
+const RELEASE_ONLY_TOKENS: [&str; 8] = [
     "RK_CONFIG_PROTECTION_TAG_RULESET",
     "RK_CONFIG_PROTECTION_TAG_PATTERN",
     "RK_CONFIG_PROTECTION_LINES_RULESET",
+    "RK_CONFIG_PROTECTION_TAG_CREATION_RULESET",
+    "RK_CONFIG_PROTECTION_RELEASE_BRANCH_RULESET",
+    "RK_CONFIG_PROTECTION_RELEASE_ENVIRONMENT",
     "RK_CONFIG_SETUP_BOT_APP_ID",
     "RK_CONFIG_SETUP_BOT_NAME",
 ];
@@ -1403,6 +1457,10 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
     Ok(bytes)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one row per key of the template's protection table, which a split would scatter"
+)]
 fn protection_fields(
     protection: &Protection,
     trunk: &str,
@@ -1423,6 +1481,22 @@ fn protection_fields(
         (
             "RK_CONFIG_PROTECTION_LINES_RULESET",
             protection.lines_ruleset.clone().into(),
+        ),
+        (
+            "RK_CONFIG_PROTECTION_UPDATES_RULESET",
+            protection.updates_ruleset(trunk).into(),
+        ),
+        (
+            "RK_CONFIG_PROTECTION_TAG_CREATION_RULESET",
+            protection.tag_creation_ruleset.clone().into(),
+        ),
+        (
+            "RK_CONFIG_PROTECTION_RELEASE_BRANCH_RULESET",
+            protection.release_branch_ruleset.clone().into(),
+        ),
+        (
+            "RK_CONFIG_PROTECTION_RELEASE_ENVIRONMENT",
+            protection.release_environment.clone().into(),
         ),
         (
             "RK_CONFIG_PROTECTION_TITLE_CHECK",
@@ -2543,6 +2617,7 @@ mod tests {
             protection: super::Protection {
                 trunk_ruleset: Some(format!("{}-protection", super::TRUNK_DEFAULT)),
                 safety_ruleset: Some(format!("{}-safety", super::TRUNK_DEFAULT)),
+                updates_ruleset: Some(format!("{}-updates", super::TRUNK_DEFAULT)),
                 ..super::local_protection()
             },
             ..Config::default()
@@ -2767,6 +2842,9 @@ mod tests {
         config.protection.safety_ruleset = Some("guardrail".into());
         config.protection.tag_ruleset = "versions".into();
         config.protection.lines_ruleset = "maintenance".into();
+        config.protection.updates_ruleset = Some("merges".into());
+        config.protection.tag_creation_ruleset = "minting".into();
+        config.protection.release_branch_ruleset = "releasing".into();
         config.protection.title_check = "intent".into();
         config.protection.tag_pattern = "refs/tags/*".into();
         config

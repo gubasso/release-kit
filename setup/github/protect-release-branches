@@ -1,0 +1,45 @@
+#!/usr/bin/env sh
+# Protect the branches a release writes to: the release lines and the head
+# branches of both release requests. Only the release bypass actors create
+# or update such a branch: the repository administrator, and the release
+# App where one is named. Every other identity with write access is
+# refused, so no commit reaches a release request that the release App
+# merges on the operator's order. The optional release-line ruleset keeps
+# its own deletion and force-push rules beside this one. Rerunning updates
+# in place.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH_PATTERNS:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
+
+case "$RK_RELEASE_BYPASS_ACTORS" in
+  *Integration*) ;;
+  *) echo 'note: no release App ID resolves, so the release App is not named as a bypass actor' ;;
+esac
+
+name="$RK_RELEASE_BRANCH_RULESET"
+id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+
+if [ -n "$id" ]; then
+  gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
+else
+  gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
+fi <<JSON
+{
+  "name": "$name",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": $RK_RELEASE_BYPASS_ACTORS,
+  "conditions": {
+    "ref_name": { "include": $RK_RELEASE_BRANCH_PATTERNS, "exclude": [] }
+  },
+  "rules": [
+    { "type": "creation" },
+    { "type": "update" }
+  ]
+}
+JSON
+
+echo "check: prints $name"
+gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"

@@ -75,6 +75,7 @@ jobs:
   release-plz-release:
     if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: RK_RELEASE_ENVIRONMENT
     permissions:
       contents: read
       id-token: write # RK_IF_REGISTRY
@@ -86,8 +87,8 @@ jobs:
       # The mint is scoped, not blanket: without a permission-* input the token
       # carries every permission the installation holds. The release command
       # tags and publishes and opens no pull request, so contents alone carries
-      # it. A target whose tag ruleset blocks creation needs administration
-      # here too; the convention's ruleset restricts deletion and update only.
+      # it. The tag creation ruleset names the release App as a bypass actor,
+      # so its contents write carries a tag push past the creation rule.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
@@ -109,6 +110,7 @@ jobs:
   release-plz-pr:
     if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: RK_RELEASE_ENVIRONMENT
     permissions:
       contents: read
     concurrency:
@@ -219,7 +221,9 @@ jobs:
       github.repository_owner == 'OWNER'
       && github.event_name == 'workflow_dispatch'
       && inputs.action == 'candidate'
+      && github.ref == format('refs/heads/RK_LINE_PREFIX{0}', inputs.line)
     runs-on: ubuntu-latest
+    environment: RK_RELEASE_ENVIRONMENT
     permissions:
       contents: read
       id-token: write # RK_IF_REGISTRY
@@ -249,6 +253,8 @@ jobs:
           # before it reads release_always, and that lookup needs this read
           # on a private repository.
           permission-pull-requests: read
+# RK_CALLER_PROOF_BEGIN
+# RK_CALLER_PROOF_END
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: RK_LINE_PREFIX${{ inputs.line }}

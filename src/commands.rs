@@ -8,6 +8,7 @@ pub mod completions;
 pub mod doctor;
 pub mod forge;
 pub mod guide;
+pub mod import_key;
 pub mod init;
 pub mod integrate;
 pub mod issue;

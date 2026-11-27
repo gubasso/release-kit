@@ -12,8 +12,8 @@ The two operating pages open with a shell block exporting these; fill it in once
 - `REPO`: the repository name
 - `CRATE`: the package name as published to the registry
 - `APP`: the bot App's name, setup only
-- `APP_ID`: the bot App's numeric id, setup only
-- `KEY`: absolute path to the App's `.pem`, outside every repository, setup only
+
+The App ID is no coordinate, because `setup.bot.app_id` in `.release-kit/config.toml` commits it. The key is none either, because it resolves from the default path that `rk setup import-key` writes.
 
 A variable here is something a project is free to choose. Everything the convention fixes is written literally in the runbooks instead, because changing it means changing the embedded sources rather than the page; each entry below names where the sources fix it.
 
@@ -29,14 +29,17 @@ A variable here is something a project is free to choose. Everything the convent
   - fixed by the snippet that lands it, and it runs on `pull_request_target` so the forge executes the trunk's copy
 - Squash title source: `PR_TITLE`, with `PR_BODY` as the message
   - fixed by `setup/github/protect-trunk`, which sets both on the repository
-- Trunk rulesets: `master-protection` and `master-safety`
+- Trunk rulesets: `master-protection`, `master-updates`, and `master-safety`
   - `master-protection` is fixed by `setup/github/protect-trunk`. It carries the pull-request rule and the strict required checks, with the repository-administrator bypass that admits the recorded local integration
   - `master-safety` is fixed by the same step. It refuses deletion and force-push for every actor and names no bypass
+  - `master-updates` is fixed by the same step. It carries the update rule alone, and only the repository administrator and the release App bypass it
   - the strict policy makes a request carry the trunk's tip. A request the forge reports as `BEHIND` takes `gh pr update-branch` and one more `gate` run before it merges
-- Tag and line rulesets: `release-tags`, `release-lines`
-  - fixed by `setup/github/protect-tags` and `setup/github/protect-release-lines`
-- Bot secrets: `RELEASE_BOT_APP_ID`, `RELEASE_BOT_APP_PRIVATE_KEY`
-  - fixed by the landed `release-plz.yml`
+- Tag and branch rulesets: `release-tags`, `release-tag-creation`, `release-branches`, and `release-lines`
+  - fixed by `setup/github/protect-tags`, `setup/github/protect-release-branches`, and `setup/github/protect-release-lines`
+  - `release-tag-creation` covers every tag with an `x.y.z` version on this Rust target with `refs/tags/**/*[0-9].[0-9]*.[0-9]*`, and `release-branches` covers `release/**/*`, `release-plz-*`, `release-plz-*/**/*`, and `rk-release/**/*`, each with the administrator and the release App as the bypass
+- Bot secrets: `RELEASE_BOT_APP_ID`, `RELEASE_BOT_APP_PRIVATE_KEY`, in the environment `release`
+  - fixed by the landed `release-plz.yml`, whose App-token jobs name the environment
+  - this repository lands its own files with its pinned release, so its `release-plz.yml` names the environment only from the next own landing on. Until then the repository copies of both secrets stay, and `rk setup check` names the refs that still run the old workflow
 - Publish workflow: `release-plz.yml`
   - fixed by the snippet that lands it
 - Artifact workflow: `release.yml`

@@ -192,13 +192,37 @@ gh api "repos/<repo>/actions/permissions/workflow"
 # check: prints "default_workflow_permissions": "write" and "can_approve_pull_request_reviews": true
 ```
 
+On gitlab:
+
+The step also keeps merge request pipelines away from the protected variables and runners, because such a pipeline runs the code of its source branch.
+
+```bash
+glab api "projects/:id" --jq '.protect_merge_request_pipelines'
+# check: prints false
+# prints null: the instance is older than GitLab 18.1, where a merge request pipeline never reads a protected variable; the step notes it and writes nothing
+```
+
 ### 2b. Create the bot identity
 
 One action stays manual, on one forge, once per account ever.
 
 On github:
 
-The bot App needs a browser to create, because the manifest flow redirects through one. It happens once in the lifetime of an account, never per project. `rk forge github` carries the walkthrough field by field and the credentials to collect. It also carries the warning about the private key, which downloads exactly once. It ends with `RK_BOT_APP_ID` and `RK_BOT_PRIVATE_KEY_FILE` exported for the substeps below.
+The bot App needs a browser to create, because the manifest flow redirects through one. It happens once in the lifetime of an account, never per project. `rk forge github` carries the walkthrough field by field and the credentials to collect. It also carries the warning about the private key, which downloads exactly once. Commit the numeric App ID as `setup.bot.app_id` in `.release-kit/config.toml`. Then import the downloaded key:
+
+```bash
+rk setup import-key --target . <downloaded.pem>
+# check: prints the written path and the next command; the download is gone
+# a key already stands there: the import refuses, and --replace is the rotation below
+# refused naming RK_BOT_PRIVATE_KEY_FILE or the user configuration: that source names the key, so the import writes nothing
+```
+
+The key lands at `${XDG_CONFIG_HOME:-$HOME/.config}/release-kit/bot/github/<app-id>.pem`, with mode 0600 in a folder with mode 0700. A key that already stands at that path needs no import. Two overrides name another path, and the first match wins:
+
+1. `RK_BOT_PRIVATE_KEY_FILE`, for one run against another file.
+2. The user configuration file `${XDG_CONFIG_HOME:-$HOME/.config}/release-kit/config.toml`, table `[bot.github.private_key_files]`, one entry `"<app-id>" = "<absolute path>"` per App.
+
+`RK_BOT_APP_ID` wins over `setup.bot.app_id` for a run against another App. The committed configuration never holds a key path.
 
 On gitlab:
 
@@ -210,7 +234,7 @@ Nothing is manual: 2c does the whole bootstrap. It reads the tier of the namespa
 
 ### 2c. Grant the bot this repository
 
-Automated, with the exports of 2b in the environment. Run it on the host, not in a container, because the key and the keyring live there.
+Automated. On github, the step reads the key at the path that 2b resolves. Run it where the key file is readable. Where the current process cannot read it, `rk setup check` reports this step and 2d as `unreadable`, and names the path and the remedy.
 
 ```bash
 rk setup step install-bot --target . --apply
@@ -222,7 +246,18 @@ rk setup step install-bot --target . --apply
 
 ### 2d. Store the bot credentials
 
-Automated, with the same exports. The values travel on stdin and land as repository secrets.
+Automated. On github, the step reads the same key as 2c. The values travel on stdin.
+
+On github, the step stores both secrets in the release environment, `release` unless `protection.release_environment` names another. A python target that publishes also keeps them in `pypi`. The deployment policy of each environment admits these refs alone:
+
+- the trunk
+- the release lines
+- the release request branches
+- the release tags
+
+The step removes the repository copies once the trunk and every live release line run a workflow that names the environment. Until then it keeps them, and `rk setup check` names each ref that still runs the old workflow. A private repository on the Free plan holds no environment secrets, so there the repository copies stay, and the check names that limitation.
+
+On gitlab, the step stores `RELEASE_BOT_TOKEN` masked and protected, so only a pipeline on a protected branch or tag reads it. A token stored before the flag is protected in place, with its stored value, and nothing is minted.
 
 ```bash
 rk setup step bot-secrets --target . --apply
@@ -233,11 +268,20 @@ rk setup step bot-secrets --target . --apply
 On github:
 
 ```bash
-gh secret list --repo <repo>
+gh secret list --repo <repo> --env release
 # check: lists RELEASE_BOT_APP_ID and RELEASE_BOT_APP_PRIVATE_KEY
+gh secret list --repo <repo>
+# check: lists neither, once every live release ref runs the upgraded workflow
 ```
 
-## 3. Protect the trunk and the tags
+On gitlab:
+
+```bash
+glab api "projects/:id/variables/RELEASE_BOT_TOKEN" --jq '{masked, protected}'
+# check: prints true for both; the value never reaches the output
+```
+
+## 3. Protect the trunk, the tags, and the release branches
 
 ### 3a. Prove the required checks exist
 
@@ -342,12 +386,35 @@ rk setup step forge-version --target . --apply
 
 Automated: `rk setup step protect-trunk --apply --required-check <name>`. On GitHub, run it only after 3a passes, per the order of the chapter. On GitLab, run it only after 3b passes. A rerun updates the protection in place. The recorded merge form names the one merge method that the protection allows. Under `squash`, GitHub takes the squash merge with the title and body of the request as its message. Under that form, GitLab squashes every merge request. Under `rebase`, GitHub takes the rebase merge alone, with the linear-history rule in the ruleset that no actor bypasses. GitLab sets the `ff` method with squash off. After `rk upgrade --merge-form <form> --apply`, rerun this substep. The forge holds the settings of the old form until you do.
 
-### 3d. Protect the tags and the release lines
+On github, the step installs three rulesets, in this order:
 
-Automated: `rk setup step protect-tags --apply`. Only when an older line exists, also `rk setup step protect-release-lines --apply`. Under `release.mode = "none"`, the release mints no tag. So these three things follow:
+1. The safety ruleset, `<trunk>-safety`, refuses a deletion and a force-push to every actor.
+2. The updates ruleset, `<trunk>-updates`, carries the update rule alone. Only the repository administrator and the release App bypass it, so no other identity with write access updates the trunk.
+3. The trunk ruleset, `<trunk>-protection`, requires the request and the checks.
 
-- `protect-tags` reports not applicable.
-- A run that names it by hand refuses.
+The release App merges an ordered release request with an explicit bypass of the update rule alone. The request rule and the required checks still bind it. `setup.bot.app_id` or `RK_BOT_APP_ID` names the App. Without one, the updates ruleset names the administrator alone, and the App cannot merge the release request.
+
+On gitlab, the trunk takes a push at No one and a merge at Maintainer. A Developer neither pushes the trunk nor merges into it. A recorded `protection.gitlab.merge_access_level` below 40 refuses before any forge call.
+
+### 3d. Protect the tags and the release branches
+
+Automated: `rk setup step protect-tags --apply`, then `rk setup step protect-release-branches --apply`. Only when an older line exists, also `rk setup step protect-release-lines --apply`.
+
+On github:
+
+- `protect-tags` installs the immutable `release-tags`, which refuses an update or a deletion of a release tag to every actor.
+- `protect-tags` installs `release-tag-creation` beside it. Only the administrator and the release App create a release tag. On rust, it covers every tag that carries an `x.y.z` version with `refs/tags/**/*[0-9].[0-9]*.[0-9]*`, because the generated artifact workflow starts on such a tag, `x/1.2.3` included. A tag with no such version stays open.
+- `protect-release-branches` installs the ruleset `release-branches` over the release lines, `release/**/*` by default, and over `release-plz-*`, `release-plz-*/**/*`, and `rk-release/**/*`. The `**/*` form covers a nested name such as `release/a/b`, which a bare `**` misses. Only the administrator and the release App create or update such a branch. So no other identity pushes a commit onto an open release request.
+
+On gitlab:
+
+- `protect-tags` protects the tag name of `protection.tag_pattern`, `v*` or `*`, with one create grant at Maintainer.
+- `protect-release-branches` protects the release lines, `release-plz-*`, and `rk-release/*`, each at Maintainer for a push and a merge, with force pushes off.
+
+Under `release.mode = "none"`, the release mints no tag. So these three things follow:
+
+- `protect-tags` and `protect-release-branches` report not applicable.
+- A run that names either by hand refuses.
 - 3f requires no tag protection.
 
 A full apply skips the release-lines step until `setup.release_lines` is true in `.release-kit/config.toml`. A project that keeps lines sets it once.
@@ -379,7 +446,10 @@ rk setup check --target .
 # check: the protection steps report satisfied — protect-trunk reads back strict_required_status_checks_policy=true with required checks on GitHub, or merge_method=ff on GitLab; merge-on-order reports no armed release request, and protect-release-lines is skipped while no line exists
 # private-vulnerability-reporting unsatisfied or unknown: continue at 3g before calling setup ready
 # protect-trunk unsatisfied: return to 3c; a loose or absent strict policy faults even when checks are required
-# install-bot unknown: this runtime cannot read the App's installation, which proves nothing wrong. Rerun with 2b's exports where the key lives, or read rk setup status where it does not; rk forge <forge> owns why only the bot reads its own installation
+# protections-check unsatisfied naming a ruleset, a pattern, or a bypass actor: rerun the substep that the remedy names
+# bot-secrets unsatisfied naming refs: those refs still run a workflow that names no environment; bring the upgraded workflow there, then rerun 2d
+# install-bot and bot-secrets unreadable: this process cannot read the key file; the detail names the path and the remedy, so run the check where the key file is readable, or read rk setup status
+# install-bot unknown: this runtime cannot read the App's installation, which proves nothing wrong. Read rk setup status; rk forge <forge> owns why only the bot reads its own installation
 ```
 
 Where the forge enforces less than a step claims, the check names the weaker guarantee and does not pass. Tag protection on GitLab is the case for this, per `rk forge gitlab`.
@@ -719,3 +789,18 @@ An upgrade or a new answer that moves the setup contract takes the same order. L
 ## 8. Require trusted publishing
 
 Skip this step for a project that publishes to no registry. This step is manual, in the registry web UI, which has no API. Do it once per package. Do it only after step 7 proved one OIDC release. The binding names the switch and what it rejects from here on. It also names the recovery escape, which starts when you turn the switch off.
+
+## Rotate the bot key
+
+Rotate the key of the GitHub release App once a year. Rotate it at once on any suspicion of a leak. These steps apply to a key that `rk` manages, a regular file at the default path or at an override. The App holds up to 25 keys, so the old key works until the last step.
+
+1. Open the App's settings. Under Credentials, then Key pairs, click New key (check: a `.pem` downloads, once).
+2. For a key at the default path, run `rk setup import-key --target . --replace <downloaded.pem>` (check: it prints the written path, and the download is gone).
+3. For a key at an override, replace the file at that path with the download, with mode 0600 (check: `ls -l` on the path shows `-rw-------`).
+4. Run `rk setup step bot-secrets --target . --apply` (check: it reports the credentials stored).
+5. Run `rk setup check --target .` (check: `install-bot` and `bot-secrets` read satisfied).
+6. On the App's settings, under Key pairs, delete the old key (check: the page lists the new key alone).
+
+If the check at step 5 fails, keep the old key, and repair the new one first. `rk setup import-key --replace` refuses a default path that is a symbolic link, because such a key is managed elsewhere. Rotate that key where it is managed, then run steps 4 to 6.
+
+`rk` records no rotation date. The date is a fact of the App and of the machine that holds the key, not of a project, and a tool that manages the file can rewrite its time at any moment. Keep the yearly date where the key is kept.

@@ -9,7 +9,8 @@ use clap::{Args, Subcommand};
 /// `--apply`; `--list` prints the ordered steps and what each proves.
 #[derive(Debug, Args)]
 pub struct SetupArgs {
-    /// The read-only companions: check, one step, one script.
+    /// The companions: check, checkpoint, status, one step, the key
+    /// import, and one script.
     #[command(subcommand)]
     pub action: Option<SetupAction>,
 
@@ -123,6 +124,18 @@ pub enum SetupAction {
         /// Emit NDJSON events on stdout instead of the human report.
         #[arg(long)]
         json: bool,
+    },
+    /// Import a downloaded bot App private key to its default path,
+    /// owner-only, and delete the download once the written key reads back.
+    ImportKey {
+        /// The downloaded .pem.
+        file: Utf8PathBuf,
+        /// The repository whose configuration names the App ID.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
+        /// Replace a key already at the default path, to rotate it.
+        #[arg(long)]
+        replace: bool,
     },
     /// Print one embedded setup script, for audit.
     Script {

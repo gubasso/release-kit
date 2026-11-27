@@ -51,9 +51,9 @@ const SHARED: &[Floor] = &[
     },
     Floor {
         key: "protection.gitlab.merge_access_level",
-        minimum: "at least 30",
+        minimum: "at least 40, Maintainer",
         heading: LINEAR_TRUNK,
-        accepts: |p| p.gitlab.merge_access_level >= 30,
+        accepts: |p| p.gitlab.merge_access_level >= 40,
     },
 ];
 

@@ -1,0 +1,64 @@
+#!/usr/bin/env sh
+# Protect the branches a release writes to: the release lines and the head
+# branches of both release requests. Each pattern is one protected branch
+# with exactly one push grant and one merge grant at Maintainer, and force
+# pushes off, so a Developer can neither push nor merge such a branch, and
+# no commit reaches a release request that the release bot merges on the
+# operator's order. A protected wildcard exposes no update endpoint for its
+# levels, so a rerun that must change them is delete-then-create, and the
+# pattern stands unprotected between the two calls.
+set -eu
+# A pattern carries a wildcard, which the shell must not expand against the
+# files of the working directory.
+set -f
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH_PATTERNS:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+
+# rk passes a JSON array of plain names, which carry no quote, comma, or
+# whitespace, so one name per line needs no JSON parser.
+patterns="$(printf '%s' "$RK_RELEASE_BRANCH_PATTERNS" | tr -d '[]"' | tr ',' '\n')"
+
+protect() {
+  glab api -X POST "projects/$project/protected_branches" \
+    -f "name=$1" -F push_access_level=40 -F merge_access_level=40 \
+    -F allow_force_push=false >/dev/null
+}
+
+for pattern in $patterns; do
+  encoded="$(printf '%s' "$pattern" | sed 's|/|%2F|g; s|\*|%2A|g')"
+  path="projects/$project/protected_branches/$encoded"
+  if glab api "$path" >/dev/null 2>&1; then
+    current="$(glab api "$path" | compact)"
+    levels="$(printf '%s' "$current" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
+    merge_levels="$(printf '%s' "$current" | grep -o '"merge_access_levels":\[[^]]*\]' || true)"
+    grants="$(printf '%s' "$levels" | grep -o '{' | grep -c . || true)"
+    merge_grants="$(printf '%s' "$merge_levels" | grep -o '{' | grep -c . || true)"
+    if [ "$grants" = "1" ] && printf '%s' "$levels" | grep -q '"access_level":40' \
+      && [ "$merge_grants" = "1" ] && printf '%s' "$merge_levels" | grep -q '"access_level":40'; then
+      glab api -X PATCH "$path" -F allow_force_push=false >/dev/null
+      echo "ok $pattern protection re-asserted"
+    else
+      glab api -X DELETE "$path" >/dev/null
+      protect "$pattern"
+      echo "ok $pattern protection re-created with the owned grants"
+    fi
+  else
+    protect "$pattern"
+    echo "ok $pattern protected"
+  fi
+done
+
+echo 'check: prints each protected pattern with force pushes off'
+for pattern in $patterns; do
+  encoded="$(printf '%s' "$pattern" | sed 's|/|%2F|g; s|\*|%2A|g')"
+  current="$(glab api "projects/$project/protected_branches/$encoded" | compact)"
+  printf '%s' "$current" | grep -o '"name":"[^"]*"' | head -n 1
+  printf '%s' "$current" | grep -o '"allow_force_push":[a-z]*'
+done

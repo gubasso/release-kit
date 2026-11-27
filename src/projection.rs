@@ -1535,6 +1535,10 @@ pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
 /// The check the trunk ruleset requires before a release request merges.
 pub const REQUIRED_CHECK_TOKEN: &[u8] = b"RK_REQUIRED_CHECK";
 
+/// The GitHub environment that every job minting the release App token
+/// names, whose deployment policy admits the release refs alone.
+pub const RELEASE_ENVIRONMENT_TOKEN: &[u8] = b"RK_RELEASE_ENVIRONMENT";
+
 /// The head-branch shape the release driver gives its own request.
 pub const BRANCH_SHAPE_TOKEN: &[u8] = b"RK_BRANCH_SHAPE";
 
@@ -1549,11 +1553,105 @@ pub fn release_driver_shape(driver: Option<&str>) -> Option<&'static str> {
     match driver {
         // release-plz names its own branch, and the release half already
         // recognizes a bump by this prefix.
-        Some("rust") => Some("release-plz-"),
+        Some("rust") => Some(crate::release_state::RELEASE_PLZ_PREFIX),
         // The engine keeps one request per base on rk-release/<base>.
         Some("bash" | "python") => Some(crate::release_engine::REQUEST_PREFIX),
         _ => None,
     }
+}
+
+/// Each job of a GitHub workflow that mints the release App token, with
+/// the environment it names, in file order.
+///
+/// A job opens at a line of two spaces, an id, and a colon, and runs to the
+/// next such line. A job mints the token where it uses
+/// `actions/create-github-app-token`. Its environment is the value of its
+/// `environment:` line at the job's own key level, unquoted, with a
+/// trailing comment dropped. A job with no such line names none.
+#[must_use]
+pub fn app_token_jobs(workflow: &str) -> Vec<(String, Option<String>)> {
+    let mut jobs: Vec<(String, String)> = Vec::new();
+    let mut inside = false;
+    for line in workflow.lines() {
+        if line == "jobs:" {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let opens = line.len() > 3
+            && line.starts_with("  ")
+            && !line.starts_with("   ")
+            && line.ends_with(':')
+            && line[2..line.len() - 1]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+        if opens {
+            jobs.push((line[2..line.len() - 1].to_owned(), String::new()));
+        } else if let Some((_, text)) = jobs.last_mut() {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    jobs.into_iter()
+        .filter(|(_, text)| text.contains("actions/create-github-app-token@"))
+        .map(|(id, text)| {
+            let environment = text.lines().find_map(|line| {
+                let value = line.strip_prefix("    environment: ")?;
+                let value = value.split(" #").next().unwrap_or(value).trim();
+                let value = serde_json::from_str::<String>(value)
+                    .unwrap_or_else(|_| value.trim_matches('\'').to_owned());
+                (!value.is_empty()).then_some(value)
+            });
+            (id, environment)
+        })
+        .collect()
+}
+
+/// The GitHub release workflow a driver lands, where it lands one.
+#[must_use]
+pub fn release_workflow_destination(driver: Option<&str>) -> Option<&'static str> {
+    match driver {
+        Some("rust") => Some(".github/workflows/release-plz.yml"),
+        Some("python" | "bash") => Some(".github/workflows/release.yml"),
+        _ => None,
+    }
+}
+
+/// The environments that hold the bot secrets, from the rendered jobs.
+///
+/// They are the GitHub environments that the jobs minting the release App
+/// token name in this parameter set's release workflow, each once, in
+/// file order.
+///
+/// It renders the pair's release workflow and reads it, so an environment
+/// that one job names for its own reason, such as the registry's, is
+/// found where the workflow names it. A target with no GitHub release
+/// workflow names none.
+#[must_use]
+pub fn release_environments(params: &Params) -> Vec<String> {
+    if params.forge() != Some("github") {
+        return Vec::new();
+    }
+    let Some(destination) = release_workflow_destination(params.driver()) else {
+        return Vec::new();
+    };
+    let driver = params.driver().unwrap_or_default();
+    let Some(source) = crate::embedded::SNIPPETS.get_file(format!("{driver}/github/{destination}"))
+    else {
+        return Vec::new();
+    };
+    let rendered = render(source.contents(), params);
+    let mut names: Vec<String> = Vec::new();
+    for (_, environment) in app_token_jobs(&String::from_utf8_lossy(&rendered)) {
+        if let Some(name) = environment
+            && !names.contains(&name)
+        {
+            names.push(name);
+        }
+    }
+    names
 }
 
 /// The merge job's GitHub block, added to every GitHub release workflow.
@@ -1570,6 +1668,38 @@ pub const RELEASE_MERGE_GITLAB: &str = "blocks/release-merge-job.gitlab.yaml.in"
 /// front of it, so a rendering that adds no job strips the pair and leaves
 /// the authored bytes exactly.
 pub const RELEASE_MERGE_SPAN: (&[u8], &[u8]) = (b"\n# RK_MERGE_JOB_BEGIN", b"\n# RK_MERGE_JOB_END");
+
+/// The administrator proof of the GitHub dispatch jobs, which
+/// `release-merge` and `release-candidate` both take right after their
+/// mint.
+pub const CALLER_PROOF_GITHUB: &str = "blocks/release-caller-proof.github.yaml.in";
+
+/// The administrator proof's span in a GitHub dispatch job, as its ordered
+/// begin and end marker.
+///
+/// The markers are YAML comments at column zero, so a reader may open the
+/// snippet before any landing renders it. A GitHub release workflow holds
+/// the span twice, once in each dispatch job, and each takes the same
+/// block. A rendering for another forge strips the pair.
+pub const CALLER_PROOF_SPAN: (&[u8], &[u8]) =
+    (b"\n# RK_CALLER_PROOF_BEGIN", b"\n# RK_CALLER_PROOF_END");
+
+/// The administrator proof for this parameter set's forge, or `None`
+/// where the forge proves the caller through its own grants.
+///
+/// # Errors
+///
+/// A block this binary does not embed, a defect in the binary.
+fn caller_proof_replacement(params: &Params) -> Result<Option<Vec<u8>>, RkError> {
+    if params.forge() != Some("github") {
+        return Ok(None);
+    }
+    let text = embedded_block(CALLER_PROOF_GITHUB)?;
+    Ok(Some(substitute_tokens(
+        format!("\n{}", text.trim_end_matches('\n')).as_bytes(),
+        params,
+    )))
+}
 
 /// The merge job for this parameter set's forge, or `None` where the
 /// parameters name no forge that ships one.
@@ -1974,6 +2104,17 @@ pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
     let (begin, end) = RELEASE_MERGE_SPAN;
     let merge = release_merge_replacement(params).ok().flatten();
     out = replace_span(&out, begin, end, merge.as_deref());
+    // The administrator proof resolves after the merge job, whose block
+    // carries one of its spans, and it stands once in each dispatch job.
+    let (begin, end) = CALLER_PROOF_SPAN;
+    let proof = caller_proof_replacement(params).ok().flatten();
+    loop {
+        let next = replace_span(&out, begin, end, proof.as_deref());
+        if next == out {
+            break;
+        }
+        out = next;
+    }
     // The development environment's spans resolve after the tokens and
     // before the policy's, and each replacement carries the same token
     // pass, so a composed block answers the same parameters the authored
@@ -2045,11 +2186,14 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     let escaped = params.line_prefix().replace('/', "\\/");
     out = substitute(&out, LINE_PREFIX_RE_TOKEN, escaped.as_bytes());
     out = substitute(&out, LINE_PREFIX_TOKEN, params.line_prefix().as_bytes());
-    // JSON strings are valid YAML double-quoted scalars. Rendering the two
+    // JSON strings are valid YAML double-quoted scalars. Rendering the
     // operator-owned names through that encoding keeps spaces, comments,
     // quotes, and backslashes data rather than YAML structure.
     let required_check = serde_json::Value::String(params.required_check().to_owned()).to_string();
     out = substitute(&out, REQUIRED_CHECK_TOKEN, required_check.as_bytes());
+    let environment =
+        serde_json::Value::String(params.release_environment().to_owned()).to_string();
+    out = substitute(&out, RELEASE_ENVIRONMENT_TOKEN, environment.as_bytes());
     out = substitute(
         &out,
         SELF_VERSION_TOKEN,

@@ -1,9 +1,14 @@
   # The operator's order to release, and nothing else. rk release merge
   # dispatches this job with the request, the trunk tip, and the head it
-  # read; no push and no other event reaches it. It runs as the release
-  # app, which is no bypass actor of the trunk ruleset, so the ruleset's
-  # strict check still decides at the write whether the request carries the
-  # trunk it was tested against.
+  # read, on the trunk; no push, no other event, and no other ref reaches
+  # it. It runs as the release app, which is no bypass actor of the trunk
+  # ruleset, so the ruleset's strict check still decides at the write
+  # whether the request carries the trunk it was tested against. The app
+  # bypasses the updates ruleset alone, whose one rule refuses a trunk
+  # update to every other identity. GitHub lets a bypass actor merge past a
+  # rule only by choosing the bypass, so the merge passes --admin, and the
+  # request rule and the required checks of the trunk ruleset still bind
+  # it, because the app bypasses nothing there.
   #
   # It trusts no value the dispatch carries beyond what it compares. Every
   # fact it acts on is read back from the forge: the caller holds the admin
@@ -16,7 +21,9 @@
       github.repository_owner == 'OWNER'
       && github.event_name == 'workflow_dispatch'
       && inputs.action == 'merge'
+      && github.ref == 'refs/heads/RK_TRUNK_BRANCH'
     runs-on: ubuntu-latest
+    environment: RK_RELEASE_ENVIRONMENT
     permissions: {}
     concurrency:
       group: release-merge
@@ -35,12 +42,13 @@
           permission-contents: write
           permission-pull-requests: write
           permission-checks: read
+# RK_CALLER_PROOF_BEGIN
+# RK_CALLER_PROOF_END
       - name: merge the release request the operator ordered
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
-          CALLER: ${{ github.triggering_actor }}
           REQUEST: ${{ inputs.request }}
           BASE: ${{ inputs.base }}
           HEAD: ${{ inputs.head }}
@@ -64,12 +72,6 @@
           done
           if [ -z "$GATE_CHECK" ]; then
             refuse "the record names no required check for the trunk"
-          fi
-          # Any write collaborator can dispatch a workflow, so the caller's
-          # role is what makes this job serve the operator's order alone.
-          role="$(gh api "repos/{owner}/{repo}/collaborators/$CALLER/permission" --jq .permission)"
-          if [ "$role" != "admin" ]; then
-            refuse "$CALLER holds the $role role, and only an administrator orders a release"
           fi
           # The request, read back from the forge. The REST answer is what
           # states the app's login as the app's own slug with the bot
@@ -103,6 +105,9 @@
           [ "$verdict" = "completed success" ] || refuse "the check $GATE_CHECK at $HEAD reads: $verdict"
           # The match moves the stale-head proof into the write itself, and
           # the trunk's strict rule makes the base proof part of the same
-          # write. This job holds no bypass of either.
-          gh pr merge "$REQUEST" --match-head-commit "$HEAD" RK_MERGE_FLAG --delete-branch
+          # write. --admin chooses the app's one bypass, of the update rule
+          # alone: this job holds no bypass of the request rule, the
+          # required checks, or the strict rule, so the forge still refuses
+          # a red or a stale request.
+          gh pr merge "$REQUEST" --match-head-commit "$HEAD" RK_MERGE_FLAG --admin --delete-branch
           echo "merged pull request #$REQUEST at $HEAD."

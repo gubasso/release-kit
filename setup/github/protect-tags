@@ -1,35 +1,54 @@
 #!/usr/bin/env sh
-# Make release tags immutable: v* can be created but never moved or deleted.
-# A published version is immutable is a method invariant, so the pattern
-# is floored rather than free: it must cover every published version, and
-# the project's own configuration key states it. Rerunning updates in
-# place.
+# Protect the release tags, in two rulesets. A bypass actor is recorded on
+# a ruleset and never on a rule, so the rule that the release actors pass
+# is kept apart from the rules that hold against everyone.
+#
+# RK_TAG_RULESET makes a published tag immutable: no actor moves or deletes
+# a tag that matches RK_TAG_PATTERN, so it names no bypass actor. A
+# published version is immutable is a method invariant, so the pattern is
+# floored rather than free: it must cover every published version, and the
+# project's own configuration key states it.
+#
+# RK_TAG_CREATION_RULESET refuses the creation of a tag that starts a
+# release to every identity but the release bypass actors: the repository
+# administrator, and the release App where one is named. rk computes its
+# patterns, RK_TAG_CREATION_PATTERNS, to cover every tag trigger that the
+# target's release workflows carry. Rerunning updates in place.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TAG_RULESET:?rk sets this; run this script through rk setup}"
 : "${RK_TAG_PATTERN:?rk sets this; run this script through rk setup}"
+: "${RK_TAG_CREATION_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_TAG_CREATION_PATTERNS:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
 
-name="$RK_TAG_RULESET"
-id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
-
-if [ -n "$id" ]; then
-  gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
-else
-  gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
-fi <<JSON
+upsert() {
+  name="$1"
+  bypass="$2"
+  include="$3"
+  rules="$4"
+  id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+  if [ -n "$id" ]; then
+    gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
+  else
+    gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
+  fi <<JSON
 {
   "name": "$name",
   "target": "tag",
   "enforcement": "active",
+  "bypass_actors": $bypass,
   "conditions": {
-    "ref_name": { "include": ["$RK_TAG_PATTERN"], "exclude": [] }
+    "ref_name": { "include": $include, "exclude": [] }
   },
-  "rules": [
-    { "type": "deletion" },
-    { "type": "update" }
-  ]
+  "rules": $rules
 }
 JSON
+}
 
-echo "check: prints $name"
-gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"
+upsert "$RK_TAG_RULESET" '[]' "[\"$RK_TAG_PATTERN\"]" '[{ "type": "deletion" }, { "type": "update" }]'
+upsert "$RK_TAG_CREATION_RULESET" "$RK_RELEASE_BYPASS_ACTORS" "$RK_TAG_CREATION_PATTERNS" '[{ "type": "creation" }]'
+
+echo "check: prints $RK_TAG_RULESET and $RK_TAG_CREATION_RULESET"
+gh api "repos/$RK_REPO/rulesets" \
+  -q ".[] | select(.name == \"$RK_TAG_RULESET\" or .name == \"$RK_TAG_CREATION_RULESET\") | .name"

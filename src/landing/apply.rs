@@ -1423,6 +1423,7 @@ fn receipt(
             security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
             dev_environment: params.dev_environment().cloned(),
+            release_environment: params.recorded_release_environment().to_owned(),
         },
         files,
         pins: crate::registry::pins_for(&projection.capabilities)

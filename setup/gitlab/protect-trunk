@@ -13,6 +13,11 @@
 # keeps its own message and no squash template applies. The method's
 # invariants chapter owns these facts. Rerunning re-asserts: the protection
 # updates in place where the forge allows and is re-created where it does not.
+# The push level 0 and the merge level 40 refuse every member below
+# Maintainer: a Developer neither pushes the trunk nor merges into it. The
+# floor of the merge level is 40, so no configuration widens the merge to a
+# Developer. Under local integration the push level is the one that the
+# recorded integration authority names.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"

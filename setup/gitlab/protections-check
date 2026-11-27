@@ -3,7 +3,16 @@
 # shapes a release needs, and state what the forge actually enforces rather
 # than passing on a claim it cannot meet: tag protection here stops accident,
 # not authority, and a check that hides that difference is worse than none.
+# It judges the trunk, with its push and merge grants and its merge
+# settings; the release tags under RK_TAG_PATTERN, with one create grant at
+# Maintainer; each release branch pattern of RK_RELEASE_BRANCH_PATTERNS,
+# with one push and one merge grant at Maintainer and force pushes off; the
+# merge request pipeline setting, which keeps those pipelines away from the
+# protected variables and runners; and the protected flag of the bot token.
 set -eu
+# A pattern carries a wildcard, which the shell must not expand against the
+# files of the working directory.
+set -f
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 # The merge settings of the recorded merge form, which rk derived from the
@@ -20,6 +29,13 @@ set -eu
 # a forge gate lands to run in it.
 : "${RK_TAG_PROTECTION:?rk sets this; run this script through rk setup}"
 : "${RK_FORGE_GATE:?rk sets this; run this script through rk setup}"
+# The recorded tag pattern and the release branch patterns, in this forge's
+# own pattern form.
+: "${RK_TAG_PATTERN:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH_PATTERNS:?rk sets this; run this script through rk setup}"
+# Whether the release is automatic, where ci-permissions applies and owns
+# the merge request pipeline setting.
+: "${RK_AUTOMATIC_RELEASE:?rk sets this; run this script through rk setup}"
 case "$RK_FORGE_GATE" in
   true | false) ;;
   *)
@@ -34,6 +50,19 @@ project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 # pattern below hold for the compact and the pretty form alike, and no
 # value a pattern touches can carry whitespace of its own.
 compact() { tr -d ' \t\r\n'; }
+# The instance version as "<major> <minor>", or nothing where it cannot be
+# read. The merge request pipeline setting came in GitLab 18.1, and the
+# projects API returns it from 18.10, only to a Maintainer or above.
+version_pair() {
+  glab api version 2>/dev/null | compact | sed -n 's/.*"version":"\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p'
+}
+# Whether a "<major> <minor>" pair is below 18.1.
+before_18_1() { [ "$1" -lt 18 ] || { [ "$1" -eq 18 ] && [ "$2" -lt 1 ]; }; }
+encode() { printf '%s' "$1" | sed 's|/|%2F|g; s|\*|%2A|g'; }
+# The number of grants in one access level list, and whether its one grant
+# is at the level named.
+grants() { printf '%s' "$1" | grep -o '{' | grep -c . || true; }
+one_grant_at() { [ "$(grants "$1")" = "1" ] && printf '%s' "$1" | grep -q "\"access_level\":$2[,}]"; }
 status=0
 
 assert() {
@@ -96,20 +125,100 @@ fi
 assert "$squash_label" "\"squash_option\":\"$RK_GITLAB_SQUASH_OPTION\"" "$settings" \
   'rk setup step protect-trunk --apply'
 
-if [ "$RK_TAG_PROTECTION" = true ]; then
-  tags="$(glab api "projects/$project/protected_tags/v%2A" 2>/dev/null | compact || true)"
-  assert 'v* is protected' '"name":"v\*"' "$tags" \
-    'rk setup step protect-tags --apply'
-  echo 'note: tag protection here stops git clients and non-privileged users; an Owner or Maintainer can still delete a protected tag through the UI or API'
+# On an automatic release, the merge request pipelines keep away from the
+# protected variables and runners: the value false, or no such attribute on
+# an instance older than 18.1. From 18.1, an answer with no attribute
+# leaves the access unproved, which fails.
+if [ "$RK_AUTOMATIC_RELEASE" != true ]; then
+  :
+elif printf '%s' "$settings" | grep -q '"protect_merge_request_pipelines":'; then
+  assert 'merge request pipelines cannot reach the protected variables and runners' \
+    '"protect_merge_request_pipelines":false' "$settings" \
+    'rk setup step ci-permissions --apply'
 else
-  echo 'ok no tag protection is required: the release mode is none, so no release tag is minted'
+  pair="$(version_pair)"
+  # shellcheck disable=SC2086 # the pair splits into two numbers on purpose
+  if [ -n "$pair" ] && before_18_1 $pair; then
+    echo 'ok merge request pipelines cannot reach the protected variables: this GitLab predates the setting'
+  elif [ -n "$pair" ]; then
+    echo 'FAIL this GitLab does not show protect_merge_request_pipelines to this reader: the projects API returns it from GitLab 18.10, and only to a Maintainer or above. From 18.1 a new project lets its merge request pipelines reach the protected variables and runners, so that access is unproved. Read the project as a Maintainer on GitLab 18.10 or later, or clear "Allow merge request pipelines to access protected variables and runners" under Settings > CI/CD > Variables by hand' >&2
+    echo 'remediation: clear the setting by hand, then rk setup step protections-check --apply' >&2
+    status=1
+  else
+    echo 'FAIL the project answer carries no protect_merge_request_pipelines, and the GitLab version cannot be read, so the merge request pipeline access is unproved' >&2
+    status=1
+  fi
 fi
 
-# The optional release-line protection: absent is fine, present is owned.
-lines="$(glab api "projects/$project/protected_branches/release%2F%2A" 2>/dev/null | compact || true)"
-if [ -n "$lines" ]; then
-  assert 'release/* refuses force pushes' '"allow_force_push":false' "$lines" \
-    'rk setup step protect-release-lines --apply'
+# On an automatic release, the bot token is protected: only a pipeline on
+# a protected branch or a protected tag reads it. Only the flag leaves the
+# read, so the token value never lands in a variable. A variable that is
+# not stored is the gap of the bot-secrets step, which judges it.
+if [ "$RK_AUTOMATIC_RELEASE" = true ]; then
+  flag="$(glab api "projects/$project/variables/RELEASE_BOT_TOKEN" 2>/dev/null | compact | grep -o '"protected":[a-z]*' || true)"
+  case "$flag" in
+    '"protected":true')
+      echo 'ok RELEASE_BOT_TOKEN is protected, so only a pipeline on a protected branch or tag reads it'
+      ;;
+    '"protected":false')
+      echo 'FAIL RELEASE_BOT_TOKEN is not protected, so a pipeline on any branch reads it' >&2
+      echo 'remediation: rk setup --apply' >&2
+      status=1
+      ;;
+    *)
+      echo 'note: RELEASE_BOT_TOKEN is not stored or not readable here; bot-secrets judges it'
+      ;;
+  esac
+fi
+
+if [ "$RK_TAG_PROTECTION" = true ]; then
+  tags="$(glab api "projects/$project/protected_tags/$(encode "$RK_TAG_PATTERN")" 2>/dev/null | compact || true)"
+  tag_levels="$(printf '%s' "$tags" | grep -o '"create_access_levels":\[[^]]*\]' || true)"
+  if [ -z "$tags" ]; then
+    echo "FAIL $RK_TAG_PATTERN is not protected" >&2
+    echo 'remediation: rk setup step protect-tags --apply' >&2
+    status=1
+  elif one_grant_at "$tag_levels" 40; then
+    echo "ok $RK_TAG_PATTERN is created at Maintainer alone"
+  else
+    echo "FAIL $RK_TAG_PATTERN create grants: the setup owns exactly one at Maintainer, found $(grants "$tag_levels")" >&2
+    echo 'remediation: rk setup step protect-tags --apply' >&2
+    status=1
+  fi
+  echo 'note: tag protection here stops git clients and non-privileged users; an Owner or Maintainer can still delete a protected tag through the UI or API'
+
+  # rk passes a JSON array of plain names, which carry no quote, comma, or
+  # whitespace, so one name per line needs no JSON parser.
+  patterns="$(printf '%s' "$RK_RELEASE_BRANCH_PATTERNS" | tr -d '[]"' | tr ',' '\n')"
+  for pattern in $patterns; do
+    branch="$(glab api "projects/$project/protected_branches/$(encode "$pattern")" 2>/dev/null | compact || true)"
+    if [ -z "$branch" ]; then
+      echo "FAIL $pattern is not protected" >&2
+      echo 'remediation: rk setup step protect-release-branches --apply' >&2
+      status=1
+      continue
+    fi
+    assert "$pattern refuses force pushes" '"allow_force_push":false' "$branch" \
+      'rk setup step protect-release-branches --apply'
+    push="$(printf '%s' "$branch" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
+    merge="$(printf '%s' "$branch" | grep -o '"merge_access_levels":\[[^]]*\]' || true)"
+    if one_grant_at "$push" 40 && one_grant_at "$merge" 40; then
+      echo "ok $pattern takes a push or a merge at Maintainer alone"
+    else
+      echo "FAIL $pattern grants: the setup owns exactly one push and one merge at Maintainer, found $(grants "$push") and $(grants "$merge")" >&2
+      echo 'remediation: rk setup step protect-release-branches --apply' >&2
+      status=1
+    fi
+  done
+else
+  echo 'ok no tag protection is required: the release mode is none, so no release tag is minted'
+  # With no release, the release branches are not judged, and the optional
+  # release-line protection is: absent is fine, present is owned.
+  lines="$(glab api "projects/$project/protected_branches/release%2F%2A" 2>/dev/null | compact || true)"
+  if [ -n "$lines" ]; then
+    assert 'release/* refuses force pushes' '"allow_force_push":false' "$lines" \
+      'rk setup step protect-release-lines --apply'
+  fi
 fi
 
 [ "$status" -eq 0 ] || exit 1

@@ -255,12 +255,16 @@ pub struct Pair {
     pub registry_answer: Option<crate::profile::RegistryAnswer>,
 }
 
+/// The head branch prefix of release-plz's own release request, which
+/// release-plz names itself.
+pub const RELEASE_PLZ_PREFIX: &str = "release-plz-";
+
 impl Pair {
     /// The head branch prefix the driver's release request carries.
     #[must_use]
     pub fn request_prefix(&self) -> Option<&'static str> {
         match self.driver.as_str() {
-            "rust" => Some("release-plz-"),
+            "rust" => Some(RELEASE_PLZ_PREFIX),
             // The engine keeps one request per base on `rk-release/<base>`.
             "python" | "bash" => Some(crate::release_engine::REQUEST_PREFIX),
             _ => None,

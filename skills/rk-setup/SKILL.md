@@ -48,7 +48,7 @@ An unreadable record never counts as an absent one, so never land over it.
 2. Decide from the `--json` output of a verb, never from its human text. Never read "already current" from the words of an upgrade preview.
 3. Leave rendered bytes to release-kit. Never edit a file or a region that `rk` renders. Never hand-edit a generated artifact workflow. Change its configuration, as the binding directs. Then regenerate it. Never author a tag.
 4. Use an `rk` verb first. Where no verb covers a step, use the forge CLI. Say that the step runs outside the convention.
-5. Report from observation. Report each step's outcome from what a check observed, never from the operator's word alone. A credential this runtime cannot reach leaves a step `unknown`, which is an observation boundary. Never ask for a secret so that a check can pass.
+5. Report from observation. Report each step's outcome from what a check observed, never from the operator's word alone. A credential this runtime cannot reach leaves a step `unknown`, which is an observation boundary. Where `rk setup check --json` reports `install-bot` or `bot-secrets` as `unreadable`, stop before those steps and run every other step. End the report with the unmet key requirement and its remedy, as the JSON states them. Never ask for the key, its path, or its contents, and never ask for a secret so that a check can pass.
 6. Keep one record per repository. Every landing carries the skills beside it. No step installs a skill under the home.
 7. Let the repository record how it obtains `rk`. The `provision` task proposes the method, the operator picks it, and every install runs as a gated step.
 8. Keep no state of your own, with one exception. These are the records:

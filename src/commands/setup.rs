@@ -41,13 +41,20 @@ use crate::setup::steps::{Mutates, STEPS, StepSpec, spec};
 pub fn run(args: &SetupArgs) -> Result<(), RkError> {
     // Every action that reads a target reads it with git; printing a step
     // script and listing the steps read nothing.
-    let reads_nothing = matches!(args.action, Some(SetupAction::Script { .. }))
-        || (args.action.is_none() && args.list);
+    let reads_nothing = matches!(
+        args.action,
+        Some(SetupAction::Script { .. } | SetupAction::ImportKey { .. })
+    ) || (args.action.is_none() && args.list);
     if !reads_nothing {
         crate::requirements::require("rk setup", &[crate::requirements::Tool::Git])?;
     }
     match &args.action {
         Some(SetupAction::Script { name, forge }) => script(name, forge.as_deref()),
+        Some(SetupAction::ImportKey {
+            file,
+            target,
+            replace,
+        }) => crate::commands::import_key::run(Output::human(), file, target, *replace),
         Some(SetupAction::Check {
             target,
             repo,
@@ -372,8 +379,11 @@ struct Engine {
     /// Whether an unreachable key file is an observation boundary rather
     /// than a refusal: true for a read-only check alone.
     key_boundary: bool,
-    /// Why the named key file was unreachable, once a check found it so.
+    /// The unmet key requirement, once a check found the key file not
+    /// readable by the current process.
     key_unavailable: Option<String>,
+    /// What to do where no key is there to read, once a lookup found so.
+    key_absent: Option<String>,
     seq: u64,
     command: &'static str,
     run_id: String,
@@ -433,6 +443,7 @@ impl Engine {
             app_jwt: None,
             key_boundary: false,
             key_unavailable: None,
+            key_absent: None,
             seq: 0,
             command,
             run_id,
@@ -596,7 +607,8 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
         // not use is a preview failure: the operator learns it here rather
         // than one flag later, and before an invocation is claimed.
         if step.name == "bot-secrets" && engine.ctx.forge == Some(Forge::Github) {
-            secrets::resolve_key_file(&engine.ctx.target)?;
+            let app_id = app_jwt::app_id(engine.ctx.bot_app_id())?;
+            secrets::resolve_key_file(&engine.ctx.target, app_id.as_deref())?;
         }
         out.result_line(format!("  {}", render_invocation(&engine.ctx, step)));
         // The name is asked for only where a rule consumes it. It feeds the
@@ -689,15 +701,41 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             // The ruleset a protection step installs is the one
             // per-target fact the operator most needs to see before an
             // apply, because a renamed ruleset leaves the old one standing.
+            let github = ctx.forge == Some(Forge::Github);
             let ruleset = match name {
+                "protect-trunk" if github => format!(
+                    " RK_TRUNK_RULESET={} RK_SAFETY_RULESET={} RK_UPDATES_RULESET={} RK_TITLE_CHECK={}",
+                    ctx.trunk_ruleset(),
+                    ctx.safety_ruleset(),
+                    ctx.updates_ruleset(),
+                    ctx.title_check()
+                ),
                 "protect-trunk" => format!(
                     " RK_TRUNK_RULESET={} RK_SAFETY_RULESET={} RK_TITLE_CHECK={}",
                     ctx.trunk_ruleset(),
                     ctx.safety_ruleset(),
                     ctx.title_check()
                 ),
-                "protect-tags" => format!(" RK_TAG_RULESET={}", ctx.tag_ruleset()),
+                "protect-tags" if github => format!(
+                    " RK_TAG_RULESET={} RK_TAG_CREATION_RULESET={}",
+                    ctx.tag_ruleset(),
+                    ctx.tag_creation_ruleset()
+                ),
+                // GitLab protects the recorded pattern by its name.
+                "protect-tags" => format!(" RK_TAG_PATTERN={}", ctx.tag_pattern()),
                 "protect-release-lines" => format!(" RK_LINES_RULESET={}", ctx.lines_ruleset()),
+                // GitLab protects each pattern by name, and GitHub puts
+                // them all in one ruleset.
+                "protect-release-branches" => match ctx.forge {
+                    Some(Forge::Gitlab) => format!(
+                        " RK_RELEASE_BRANCH_PATTERNS={}",
+                        ctx.release_branch_patterns().join(",")
+                    ),
+                    _ => format!(
+                        " RK_RELEASE_BRANCH_RULESET={}",
+                        ctx.release_branch_ruleset()
+                    ),
+                },
                 _ => String::new(),
             };
             format!(
@@ -992,13 +1030,15 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                         .step(step.name),
                     ))
                 }
-                StepState::Unknown { detail } => Err(RkError::subprocess(
-                    Diagnostic::new(
-                        Reason::SubprocessFailed,
-                        format!("package-check could not run: {detail}"),
-                    )
-                    .step(step.name),
-                )),
+                StepState::Unknown { detail } | StepState::Unreadable { detail } => {
+                    Err(RkError::subprocess(
+                        Diagnostic::new(
+                            Reason::SubprocessFailed,
+                            format!("package-check could not run: {detail}"),
+                        )
+                        .step(step.name),
+                    ))
+                }
             }
         }
         // The step mutates nothing, so apply and check read the same answer
@@ -1021,13 +1061,15 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                         .step(step.name),
                 ))
             }
-            StepState::Unknown { detail } => Err(RkError::refusal(
-                Diagnostic::new(Reason::ForgeTemporary, detail)
-                    .expected("a readable forge version")
-                    .action("glab auth login, then rerun")
-                    .target_state("unchanged")
-                    .step(step.name),
-            )),
+            StepState::Unknown { detail } | StepState::Unreadable { detail } => {
+                Err(RkError::refusal(
+                    Diagnostic::new(Reason::ForgeTemporary, detail)
+                        .expected("a readable forge version")
+                        .action("glab auth login, then rerun")
+                        .target_state("unchanged")
+                        .step(step.name),
+                ))
+            }
         },
         "branch-reminder" => {
             use crate::setup::branch_reminder::{HookState, hook_body, hook_path, observe_hook};
@@ -1094,7 +1136,8 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 StepState::Satisfied { .. } => {}
                 StepState::Unsatisfied { detail }
                 | StepState::Inapplicable { detail }
-                | StepState::Unknown { detail } => {
+                | StepState::Unknown { detail }
+                | StepState::Unreadable { detail } => {
                     return Err(RkError::refusal(
                         Diagnostic::new(
                             Reason::DestructiveRefusal,
@@ -1125,8 +1168,12 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             };
             let provided = match adapter {
                 // Both halves of an App identity, or neither: a run holding
-                // only one of them would store half a credential.
-                Forge::Github => secrets::value_of("RK_BOT_APP_ID").is_some() && key.is_some(),
+                // only one of them would store half a credential. The App
+                // ID resolves as every reader resolves it: the variable,
+                // then the committed configuration.
+                Forge::Github => {
+                    app_jwt::app_id(engine.ctx.bot_app_id())?.is_some() && key.is_some()
+                }
                 Forge::Gitlab => secrets::value_of("RK_BOT_TOKEN").is_some(),
             };
             let state = observe_with(engine, step.name)?;
@@ -1159,26 +1206,35 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             } else {
                 false
             };
-            let runs = provided || rotates || (mints && !state.satisfied());
+            // A stored token that a pipeline on any branch reads is
+            // protected in place: the step keeps the value and sets the
+            // flag, and mints nothing. A value supplied or a rotation
+            // stores the new token protected anyway.
+            let protects = adapter == Forge::Gitlab && !provided && !rotates && {
+                let ctx = clone_ctx(&engine.ctx);
+                let mut runner = |exec: &Exec| engine.exec(exec, false);
+                observe::gitlab_bot_variable_state(&ctx, &mut runner)?
+                    == observe::BotVariable::Unprotected
+            };
+            let runs = provided || rotates || protects || (mints && !state.satisfied());
             if !runs {
                 if state.satisfied() {
                     return Ok(Done::Satisfied(state_detail(&state)));
                 }
                 let wanted = match adapter {
-                    Forge::Github => {
-                        "export RK_BOT_APP_ID and RK_BOT_PRIVATE_KEY_FILE, the second naming the .pem; rk forge github carries the walkthrough"
-                    }
-                    Forge::Gitlab => {
-                        "rk setup step install-bot --apply stores the token, or export RK_BOT_TOKEN to rotate one"
-                    }
+                    Forge::Github => engine.key_absent.clone().map_or_else(
+                        || app_jwt::REMEDIATION.to_owned(),
+                        |absent| format!("{absent}; rk forge github carries the walkthrough"),
+                    ),
+                    Forge::Gitlab => "rk setup step install-bot --apply stores the token, or export RK_BOT_TOKEN to rotate one".to_owned(),
                 };
                 return Err(RkError::refusal(
                     Diagnostic::new(
                         Reason::PrerequisiteUnmet,
                         "bot-secrets has no credentials to store",
                     )
-                    .expected("the bot credentials in the environment, the key as a path")
-                    .action(wanted.to_owned())
+                    .expected("the bot App ID and the key file, or the bot token")
+                    .action(wanted)
                     .step(step.name),
                 ));
             }
@@ -1188,6 +1244,12 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                         journal.record_secret(name, true, "environment");
                     }
                 }
+                if adapter == Forge::Github
+                    && secrets::value_of("RK_BOT_APP_ID").is_none()
+                    && engine.ctx.bot_app_id().is_some()
+                {
+                    journal.record_secret("RK_BOT_APP_ID", true, "configuration");
+                }
                 if key.is_some() {
                     journal.record_secret(secrets::PRIVATE_KEY_FILE, true, "file");
                 }
@@ -1196,7 +1258,15 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             // the bytes the redactor holds: one read, one value, so nothing
             // can be substituted between the check and the forge.
             let stdin = key;
-            run_forge_step_with(engine, step, stdin, Vec::new())
+            if adapter == Forge::Github {
+                return github_bot_secrets(engine, step, stdin);
+            }
+            let extra = if protects {
+                vec![(OsString::from("RK_BOT_PROTECT"), OsString::from("1"))]
+            } else {
+                Vec::new()
+            };
+            run_forge_step_with(engine, step, stdin, extra)
         }
         "protections-check" => {
             let (outcome, _) = run_script(engine, step)?;
@@ -1225,7 +1295,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 }
                 // An unreadable readback is a retryable outage, not drift,
                 // exactly as the postcondition lifecycle classifies it.
-                StepState::Unknown { detail } => Err(RkError::refusal(
+                StepState::Unknown { detail } | StepState::Unreadable { detail } => Err(RkError::refusal(
                     Diagnostic::new(
                         Reason::ForgeTemporary,
                         format!(
@@ -1249,7 +1319,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                     return Ok(Done::Satisfied(detail));
                 }
                 StepState::Unsatisfied { .. } | StepState::Inapplicable { .. } => {}
-                StepState::Unknown { detail } => {
+                StepState::Unknown { detail } | StepState::Unreadable { detail } => {
                     return Err(RkError::refusal(
                         Diagnostic::new(
                             Reason::ForgeTemporary,
@@ -1293,7 +1363,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                         return Ok(Done::Skipped(detail));
                     }
                     StepState::Unsatisfied { .. } | StepState::Inapplicable { .. } => {}
-                    StepState::Unknown { detail } => {
+                    StepState::Unknown { detail } | StepState::Unreadable { detail } => {
                         return Err(RkError::refusal(
                             Diagnostic::new(
                                 Reason::ForgeTemporary,
@@ -1353,7 +1423,7 @@ fn github_installation_id(engine: &mut Engine, step: &StepSpec) -> Result<String
                 return body["id"].as_i64().map(|id| id.to_string()).ok_or_else(|| {
                     refuse(
                         format!("the forge answered {path} without an installation id"),
-                        "check RK_BOT_APP_ID and the key file name the same App",
+                        "check the App ID and the key file name the same App",
                     )
                 });
             }
@@ -1361,7 +1431,7 @@ fn github_installation_id(engine: &mut Engine, step: &StepSpec) -> Result<String
             AppApi::Refused(detail) => {
                 return Err(refuse(
                     detail,
-                    "check RK_BOT_APP_ID and the key file name the same App",
+                    "check the App ID and the key file name the same App",
                 ));
             }
             AppApi::Failed(detail) => {
@@ -1403,6 +1473,12 @@ fn run_forge_step_with(
         return Err(classify_failure(engine, step, &outcome));
     }
     let state = observe_with(engine, step.name)?;
+    proven(engine, step, state)
+}
+
+/// The outcome of a step whose script ran, from the state read back after
+/// it: a change where the postcondition holds, and a refusal otherwise.
+fn proven(engine: &Engine, step: &StepSpec, state: StepState) -> Result<Done, RkError> {
     match state {
         StepState::Satisfied { detail, limitation } => Ok(Done::Changed(detail, limitation)),
         StepState::Inapplicable { detail } if step.name == "private-vulnerability-reporting" => {
@@ -1424,7 +1500,7 @@ fn run_forge_step_with(
         // The lifecycle ends with a proven postcondition; a readback that
         // cannot run leaves the step unproven, and an unproven apply is a
         // failure a retry can cure, never a success.
-        StepState::Unknown { detail } => Err(RkError::refusal(
+        StepState::Unknown { detail } | StepState::Unreadable { detail } => Err(RkError::refusal(
             Diagnostic::new(
                 Reason::ForgeTemporary,
                 format!(
@@ -1439,6 +1515,107 @@ fn run_forge_step_with(
             ))
             .step(step.name),
         )),
+    }
+}
+
+/// The environment of one invocation of the GitHub `bot-secrets` script:
+/// where it stores the secrets, or that it removes the repository copies.
+fn secret_scope(scope: &str, environment: Option<&str>) -> Vec<(OsString, OsString)> {
+    let mut env = vec![(
+        OsString::from("RK_BOT_SECRETS_SCOPE"),
+        OsString::from(scope),
+    )];
+    if let Some(name) = environment {
+        env.push((
+            OsString::from("RK_BOT_SECRETS_ENVIRONMENT"),
+            OsString::from(name),
+        ));
+    }
+    env
+}
+
+/// Store the GitHub bot secrets where this repository can hold them.
+///
+/// A repository that holds environment secrets takes them in each release
+/// environment, behind its deployment policy, one script run per
+/// environment, because the key arrives on standard input once per run.
+/// The repository copies go last, and only once every release ref runs a
+/// workflow that names the environment: before that, a release job on an
+/// older workflow would lose its secrets. Until then the apply reports the
+/// copies as its limitation, and the check stays unsatisfied. A private
+/// repository on a plan without environment secrets keeps the repository
+/// copies, and the step reports that limitation by name.
+fn github_bot_secrets(
+    engine: &mut Engine,
+    step: &StepSpec,
+    key: Option<Zeroizing<Vec<u8>>>,
+) -> Result<Done, RkError> {
+    let ctx = clone_ctx(&engine.ctx);
+    let support = {
+        let mut runner = |exec: &Exec| engine.exec(exec, false);
+        observe::github_environment_support(&ctx, &mut runner)?
+    };
+    let incomplete = |detail: String| {
+        RkError::refusal(
+            Diagnostic::new(
+                Reason::ObservationIncomplete,
+                format!("bot-secrets cannot tell where the bot secrets belong: {detail}"),
+            )
+            .expected("the repository's visibility and its owner's plan")
+            .step(step.name),
+        )
+    };
+    match support {
+        observe::EnvironmentSupport::Unknown(detail) => Err(incomplete(detail)),
+        observe::EnvironmentSupport::Unsupported(_) => {
+            run_forge_step_with(engine, step, key, secret_scope("repository", None))
+        }
+        observe::EnvironmentSupport::Supported => {
+            for environment in ctx.release_environments() {
+                let scope = secret_scope("environment", Some(environment));
+                let (outcome, _) = run_script_with(engine, step, key.clone(), scope)?;
+                if !outcome.success() {
+                    return Err(classify_failure(engine, step, &outcome));
+                }
+            }
+            let old_refs = {
+                let mut runner = |exec: &Exec| engine.exec(exec, false);
+                observe::github_stale_workflow_refs(&ctx, &mut runner)?
+            }
+            .map_err(incomplete)?;
+            if old_refs.is_empty() {
+                let scope = secret_scope("remove-repository", None);
+                let (outcome, _) = run_script_with(engine, step, None, scope)?;
+                if !outcome.success() {
+                    return Err(classify_failure(engine, step, &outcome));
+                }
+            }
+            let state = observe_with(engine, step.name)?;
+            if let StepState::Unsatisfied { detail } = &state {
+                let faults = {
+                    let mut runner = |exec: &Exec| engine.exec(exec, false);
+                    observe::github_bot_secret_faults(&ctx, &mut runner)?
+                };
+                // The one gap the apply leaves on purpose: the copies wait
+                // for the release refs to run the upgraded workflow.
+                if let Ok(faults) = faults
+                    && faults.environments.is_empty()
+                    && faults
+                        .repository
+                        .as_ref()
+                        .is_some_and(|(_, stale)| !stale.is_empty())
+                {
+                    return Ok(Done::Changed(
+                        format!(
+                            "both bot secrets are stored in {}",
+                            ctx.release_environments().join(" and ")
+                        ),
+                        Some(detail.clone()),
+                    ));
+                }
+            }
+            proven(engine, step, state)
+        }
     }
 }
 
@@ -1631,6 +1808,17 @@ pub fn proof_word(target: &camino::Utf8PathBuf) -> Result<&'static str, RkError>
 /// engine can mint once and register the redaction needles — rather than
 /// through the credential-free name dispatch in [`observe::observe`].
 fn observe_with(engine: &mut Engine, step: &str) -> Result<StepState, RkError> {
+    // Both key steps need the key on GitHub. Where a check finds it not
+    // readable by the current process, each reports that requirement
+    // rather than an answer it could not get.
+    if matches!(step, "install-bot" | "bot-secrets") && engine.ctx.forge == Some(Forge::Github) {
+        key_file_for(engine)?;
+        if let Some(detail) = &engine.key_unavailable {
+            return Ok(StepState::Unreadable {
+                detail: detail.clone(),
+            });
+        }
+    }
     if step == "install-bot" && engine.ctx.forge == Some(Forge::Github) {
         let jwt = match app_jwt_for(engine)? {
             Ok(jwt) => jwt,
@@ -1649,19 +1837,21 @@ fn observe_with(engine: &mut Engine, step: &str) -> Result<StepState, RkError> {
 /// no replacement between steps can split the two. The bytes become a
 /// redaction needle the moment they are read.
 fn key_file_for(engine: &mut Engine) -> Result<Option<&secrets::KeyFile>, RkError> {
-    if engine.key.is_none() && engine.key_unavailable.is_none() {
-        match secrets::look_up_key_file(&engine.ctx.target)? {
-            secrets::KeyLookup::Absent => {}
+    if engine.key.is_none() && engine.key_unavailable.is_none() && engine.key_absent.is_none() {
+        let app_id = app_jwt::app_id(engine.ctx.bot_app_id())?;
+        match secrets::look_up_key_file(&engine.ctx.target, app_id.as_deref())? {
+            secrets::KeyLookup::Absent(remedy) => engine.key_absent = Some(remedy),
             secrets::KeyLookup::Found(key) => {
                 engine.secrets.push(key.bytes.clone());
                 engine.key = Some(key);
             }
-            // A check reads the forge and changes nothing, so a key this
-            // runtime cannot reach leaves the one step that needs it
-            // undecided and lets every other step run. A run that would
-            // mutate, or record a proof, still needs the key and refuses.
+            // A check reads the forge and changes nothing, so a key the
+            // current process cannot read leaves the steps that need it
+            // with an unmet requirement and lets every other step run. A
+            // run that would mutate, or record a proof, still needs the
+            // key and refuses.
             secrets::KeyLookup::Unavailable(unavailable) if engine.key_boundary => {
-                engine.key_unavailable = Some(unavailable.message);
+                engine.key_unavailable = Some(unavailable.requirement());
             }
             secrets::KeyLookup::Unavailable(unavailable) => return Err(unavailable.refusal()),
         }
@@ -1676,7 +1866,7 @@ fn key_file_for(engine: &mut Engine) -> Result<Option<&secrets::KeyFile>, RkErro
 /// token, whose nine-minute life covers a run's contiguous step easily.
 ///
 /// The inner value is `Err` with a one-line detail where no token can
-/// exist — absent exports, or a signer that failed — which an observation
+/// exist — an absent App ID or key, or a signer that failed — which an observation
 /// reports as `unknown` and an apply turns into a refusal.
 fn app_jwt_for(engine: &mut Engine) -> Result<Result<String, String>, RkError> {
     if let Some(jwt) = &engine.app_jwt {
@@ -1684,16 +1874,13 @@ fn app_jwt_for(engine: &mut Engine) -> Result<Result<String, String>, RkError> {
     }
     let app_id = app_jwt::app_id(engine.ctx.bot_app_id())?;
     let key_bytes = key_file_for(engine)?.map(|key| key.bytes.clone());
-    if let Some(unreachable) = &engine.key_unavailable {
-        return Ok(Err(format!(
-            "the installation is readable only to the App itself, and this runtime cannot reach the key {} names: {unreachable}; a host that holds the key re-verifies it",
-            secrets::PRIVATE_KEY_FILE
-        )));
+    if let Some(requirement) = &engine.key_unavailable {
+        return Ok(Err(requirement.clone()));
     }
     let (Some(app_id), Some(key_bytes)) = (app_id, key_bytes) else {
         return Ok(Err(format!(
             "the installation is readable only to the App itself; {}",
-            app_jwt::REMEDIATION
+            engine.key_absent.as_deref().unwrap_or(app_jwt::REMEDIATION)
         )));
     };
     let credentials = app_jwt::AppCredentials { app_id, key_bytes };
@@ -1906,13 +2093,27 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
         event.detail = Some(milestone.detail);
         engine.emit(&event);
     }
-    if !report.checkpointable() {
+    if !report.passes_check() {
         let error = verdict(&engine.ctx, &report);
         return Err(fail(&mut engine, error));
     }
-    engine
-        .out
-        .next(&["rk guide release orders the first release".to_owned()]);
+    // A key the current process cannot read is an unmet requirement with
+    // a remedy, not a setup defect: the check names it and passes.
+    let unreadable = report.unreadable();
+    if unreadable > 0 {
+        engine.out.result_line(format!(
+            "unmet requirement: the bot private key is not readable by this process, so {} read unreadable; no setup defect was inferred",
+            step_count(unreadable)
+        ));
+        engine.out.next(&[
+            "rk setup import-key <file> puts the App's .pem at its default path, or point RK_BOT_PRIVATE_KEY_FILE at it".to_owned(),
+            "rk guide release orders the first release".to_owned(),
+        ]);
+    } else {
+        engine
+            .out
+            .next(&["rk guide release orders the first release".to_owned()]);
+    }
     engine.finish(0, None);
     Ok(())
 }

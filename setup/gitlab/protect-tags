@@ -1,29 +1,97 @@
 #!/usr/bin/env sh
-# Protect release tags as far as this forge allows: v* can be created only by
-# Maintainers and cannot be touched by git clients or non-privileged users.
+# Protect the release tags as far as this forge allows: only a Maintainer
+# creates a tag that matches RK_TAG_PATTERN, the recorded pattern, and no
+# git client or member below Maintainer can touch one. The protection
+# carries exactly one create grant, at Maintainer.
 # What this cannot promise, and says so: an Owner or Maintainer can still
 # delete a protected tag through the UI or the API, so this is protection
 # against accident, not against authority; the forge document carries the
-# fact. Protected tags expose no update endpoint, so a rerun that must change
-# the protection is delete-then-create and is briefly not atomic.
+# fact.
+# Protected tags expose no update endpoint, only protect and unprotect, so
+# the script handles two cases apart. Where the recorded pattern differs
+# from the one that stands, it protects the recorded pattern first, reads
+# it back, and only then unprotects the stale one. Where the recorded
+# pattern stands with a wrong create grant, it unprotects the pattern and
+# protects it again, and the pattern stands unprotected between the two
+# calls. Neither case is atomic.
 set -eu
+# A pattern carries a wildcard, which the shell must not expand against the
+# files of the working directory.
+set -f
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_TAG_PATTERN:?rk sets this; run this script through rk setup}"
 
 project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+pattern="$RK_TAG_PATTERN"
 
 # The forge CLI may pretty-print JSON; stripping whitespace makes every
 # pattern below hold for the compact and the pretty form alike, and no
 # value a pattern touches can carry whitespace of its own.
 compact() { tr -d ' \t\r\n'; }
+encode() { printf '%s' "$1" | sed 's|/|%2F|g; s|\*|%2A|g'; }
+path="projects/$project/protected_tags/$(encode "$pattern")"
 
-if glab api "projects/$project/protected_tags/v%2A" >/dev/null 2>&1; then
-  echo 'ok v* is already protected; leaving it in place'
-else
+exists() { glab api "$1" >/dev/null 2>&1; }
+
+# The protection that this step owns: exactly one create grant, at
+# Maintainer. A second grant beside it widens the protection, because the
+# forge honors the most permissive one.
+owned() {
+  current="$(glab api "$path" 2>/dev/null | compact)" || return 1
+  levels="$(printf '%s' "$current" | grep -o '"create_access_levels":\[[^]]*\]' || true)"
+  grants="$(printf '%s' "$levels" | grep -o '{' | grep -c . || true)"
+  [ "$grants" = "1" ] && printf '%s' "$levels" | grep -q '"access_level":40[,}]'
+}
+
+protect() {
   glab api -X POST "projects/$project/protected_tags" \
-    -f 'name=v*' -F create_access_level=40 >/dev/null
-  echo 'ok v* protected'
+    -f "name=$pattern" -F create_access_level=40 >/dev/null
+}
+
+failed=0
+if exists "$path"; then
+  if owned; then
+    echo "ok $pattern is already protected at Maintainer; leaving it in place"
+  else
+    glab api -X DELETE "$path" >/dev/null
+    protect || failed=1
+    echo "ok $pattern protection re-created with the owned grant"
+  fi
+else
+  protect || failed=1
+  echo "ok $pattern protected"
 fi
 
+# The final read requires the owned grant. Where it fails, or the protect
+# call failed, the script protects once more, reads again, and fails with
+# the state that stands.
+if [ "$failed" = 1 ] || ! owned; then
+  if ! owned; then
+    glab api -X DELETE "$path" >/dev/null 2>&1 || true
+    protect || true
+  fi
+  if owned; then
+    standing='it now stands protected with one create grant at Maintainer'
+  elif exists "$path"; then
+    standing='it stands protected, but not with one create grant at Maintainer alone'
+  else
+    standing='it stands unprotected'
+  fi
+  echo "FAIL $pattern: the protection did not stand on the first attempt; $standing" >&2
+  echo 'remediation: rk setup step protect-tags --apply' >&2
+  exit 1
+fi
+
+# The recorded pattern stands with the owned grant, so the stale one can go.
+for stale in 'v*' '*'; do
+  [ "$stale" = "$pattern" ] && continue
+  stale_path="projects/$project/protected_tags/$(encode "$stale")"
+  if exists "$stale_path"; then
+    glab api -X DELETE "$stale_path" >/dev/null
+    echo "ok $stale protection removed: the recorded pattern is $pattern"
+  fi
+done
+
 echo 'check: prints the protected pattern'
-glab api "projects/$project/protected_tags/v%2A" | compact | grep -o '"name":"v\*"'
+glab api "$path" | compact | grep -o '"name":"[^"]*"' | head -n 1
 echo 'note: an Owner or Maintainer can still delete a protected tag through the UI or API'

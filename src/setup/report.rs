@@ -122,6 +122,8 @@ pub enum Observed {
     Unsatisfied,
     /// The observation could not decide.
     Unknown,
+    /// The bot private key is not readable by the current process.
+    Unreadable,
 }
 
 impl Observed {
@@ -135,6 +137,7 @@ impl Observed {
             StepState::Inapplicable { .. } => Self::Skipped,
             StepState::Unsatisfied { .. } => Self::Unsatisfied,
             StepState::Unknown { .. } => Self::Unknown,
+            StepState::Unreadable { .. } => Self::Unreadable,
         }
     }
 
@@ -146,6 +149,7 @@ impl Observed {
             Self::Skipped => "skipped",
             Self::Unsatisfied => "unsatisfied",
             Self::Unknown => "unknown",
+            Self::Unreadable => "unreadable",
         }
     }
 
@@ -160,6 +164,7 @@ impl Observed {
             Self::Skipped => "skipped",
             Self::Unsatisfied => "unsatisfied",
             Self::Unknown => "unknown",
+            Self::Unreadable => "unreadable",
         }
     }
 }
@@ -262,6 +267,13 @@ impl Report {
         self.count(&Observed::Unknown)
     }
 
+    /// The applicable steps that need a key the current process cannot
+    /// read.
+    #[must_use]
+    pub fn unreadable(&self) -> usize {
+        self.count(&Observed::Unreadable)
+    }
+
     /// The steps the run acted on.
     #[must_use]
     pub fn judged(&self) -> usize {
@@ -270,11 +282,21 @@ impl Report {
 
     /// Whether this observation may become a setup proof: every
     /// applicable step holds or was skipped by its own condition, and
-    /// nothing is unknown.
+    /// nothing is unknown or unreadable.
     ///
     /// SATISFIES setup-proof:a-checkpoint-records-only-a-complete-observation
     #[must_use]
     pub fn checkpointable(&self) -> bool {
+        self.unsatisfied() == 0 && self.unknown() == 0 && self.unreadable() == 0
+    }
+
+    /// Whether a check finds no setup defect and no observation gap: every
+    /// gap left is a key the current process cannot read, which the check
+    /// reports as an unmet requirement and does not fail on.
+    ///
+    /// SATISFIES bot-key:an-unreadable-key-is-an-unmet-requirement
+    #[must_use]
+    pub fn passes_check(&self) -> bool {
         self.unsatisfied() == 0 && self.unknown() == 0
     }
 }
@@ -313,7 +335,11 @@ mod tests {
             ],
         };
         assert!(accepted.checkpointable());
-        for refused in [Observed::Unknown, Observed::Unsatisfied] {
+        for refused in [
+            Observed::Unknown,
+            Observed::Unsatisfied,
+            Observed::Unreadable,
+        ] {
             let mut report = accepted.clone();
             report.rows.push(row(Some(refused.clone())));
             assert!(!report.checkpointable(), "{refused:?} was accepted");
@@ -342,6 +368,10 @@ mod tests {
             detail: "unreadable".into(),
         };
         assert_eq!(Observed::of(&unknown).wire(), "unknown");
+        let unreadable = StepState::Unreadable {
+            detail: "not readable".into(),
+        };
+        assert_eq!(Observed::of(&unreadable).wire(), "unreadable");
         let not = StepState::Unsatisfied {
             detail: "absent".into(),
         };

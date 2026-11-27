@@ -394,6 +394,7 @@ mod tests {
                 security_contact: String::new(),
                 required_check: String::new(),
                 dev_environment: None,
+                release_environment: String::new(),
                 security_response: "best-effort".into(),
                 security_scope: String::new(),
             },

@@ -14,6 +14,7 @@ pub mod before_state;
 pub mod branch_reminder;
 pub mod context;
 pub mod journal;
+pub mod key_path;
 pub mod milestones;
 pub mod observe;
 pub mod process;

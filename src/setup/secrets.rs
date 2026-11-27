@@ -1,5 +1,5 @@
-//! The bot credentials a setup step consumes, and what the operator's
-//! environment is allowed to carry.
+//! The bot credentials a setup step consumes, and what the environment is
+//! allowed to carry.
 //!
 //! An identifier and a short-lived token are values: the forge CLIs' own
 //! convention carries them in the environment, and rotating one is a
@@ -9,7 +9,8 @@
 //! child of that shell inherits it. So the
 //! operator names the key's path to `rk`, and `rk` reads the file and
 //! writes the bytes to the step's standard input. The path goes no further
-//! than `rk`: no child is told it, so no child can open it.
+//! than `rk`: no child is told it, so no child can open it. Where the
+//! path comes from is [`key_path`]'s answer.
 //!
 //! `rk` reads the file exactly once: to refuse a wrong one before anything
 //! is written to the forge, to hold the redaction needle that keeps the
@@ -25,6 +26,7 @@ use std::io::Read as _;
 use camino::{Utf8Path, Utf8PathBuf};
 use zeroize::Zeroizing;
 
+use super::key_path::{self, Source};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 
@@ -55,6 +57,8 @@ pub struct KeyFile {
     pub path: Utf8PathBuf,
     /// The file's bytes, scrubbed when this is dropped.
     pub bytes: Zeroizing<Vec<u8>>,
+    /// Which source named the path.
+    pub source: Source,
 }
 
 impl std::fmt::Debug for KeyFile {
@@ -96,7 +100,7 @@ pub fn refuse_legacy_key() -> Result<(), RkError> {
     ))
 }
 
-/// The validated private key file, where the operator named one.
+/// The validated private key file, where a source names one.
 ///
 /// Every refusal happens before the step spawns, so a wrong path, a wrong
 /// mode, or a wrong encoding never reaches the forge. What the encoding
@@ -108,68 +112,143 @@ pub fn refuse_legacy_key() -> Result<(), RkError> {
 /// Refuses a stale contents variable, and a named file that is missing,
 /// unreadable, not a regular file, readable beyond its owner, empty,
 /// oversized, inside the target, or not a PEM private key.
-pub fn resolve_key_file(target: &Utf8Path) -> Result<Option<KeyFile>, RkError> {
-    match look_up_key_file(target)? {
-        KeyLookup::Absent => Ok(None),
+pub fn resolve_key_file(
+    target: &Utf8Path,
+    app_id: Option<&str>,
+) -> Result<Option<KeyFile>, RkError> {
+    match look_up_key_file(target, app_id)? {
+        KeyLookup::Absent(_) => Ok(None),
         KeyLookup::Found(key) => Ok(Some(key)),
         KeyLookup::Unavailable(unavailable) => Err(unavailable.refusal()),
     }
 }
 
-/// What the named key file turned out to be.
+/// What the key lookup turned out to be.
 pub enum KeyLookup {
-    /// No file is named.
-    Absent,
-    /// A named file this runtime cannot reach: a path that does not exist
-    /// here, or a file it may not open or read. Under a read-only check
-    /// that is an observation boundary, not a defect: the file can exist
-    /// on the host that named it and be absent from a container.
+    /// No key is there to read: no source names a file, or nothing sits
+    /// at the default path yet. The text names what to do.
+    Absent(String),
+    /// A named file the current process cannot read: a path a source
+    /// named that does not exist, or a file it may not open or read.
+    /// Under a read-only check that is an unmet requirement with a
+    /// remedy, not a defect.
     Unavailable(Unavailable),
     /// A readable, owner-only PEM private key.
     Found(KeyFile),
 }
 
-/// A named key file this runtime cannot reach, with the refusal a
+/// A named key file the current process cannot read, with the refusal a
 /// mutating run gives for it.
 pub struct Unavailable {
-    /// What was found, one line.
-    pub message: String,
+    /// The path, as resolved as far as it could be.
+    pub path: String,
+    /// Why it cannot be read, one line.
+    pub reason: String,
+    /// Which source named the path.
+    pub source: Source,
     action: &'static str,
 }
 
 impl Unavailable {
+    /// What was found, one line.
+    #[must_use]
+    pub fn message(&self) -> String {
+        format!("{} is unreadable: {}", self.path, self.reason)
+    }
+
+    /// The unmet requirement and its remedy, as a check reports it.
+    ///
+    /// SATISFIES bot-key:an-unreadable-key-is-an-unmet-requirement
+    #[must_use]
+    pub fn requirement(&self) -> String {
+        format!(
+            "bot private key not readable at {} ({}): import it with `rk setup import-key <file>`, or point {PRIVATE_KEY_FILE} at it",
+            self.path, self.reason
+        )
+    }
+
     /// The refusal a run that needs the key gives.
     #[must_use]
     pub fn refusal(self) -> RkError {
-        refuse(self.message, self.action)
+        refuse(self.message(), self.action)
     }
 }
 
-/// Look the named key file up, and tell a file this runtime cannot reach
-/// from a file that is wrong.
+/// What a missing default key says to do.
+#[must_use]
+pub fn import_remedy(path: &Utf8Path) -> String {
+    format!(
+        "no bot private key at {path}: import the App's .pem with `rk setup import-key <file>`, or point {PRIVATE_KEY_FILE} at it"
+    )
+}
+
+/// What a missing App ID says to do.
+pub const NO_APP_ID: &str = "no bot App ID is resolved, so no key path can be named: set setup.bot.app_id in .release-kit/config.toml, or export RK_BOT_APP_ID";
+
+/// Look the key file up by the fixed order of its sources, and tell a
+/// file the current process cannot read from a file that is wrong.
 ///
 /// A wrong file is refused in every mode: an unsafe mode, a directory or
 /// a pipe, an oversized or empty file, a file inside the target, or bytes
-/// that are not a PEM private key. A file that cannot be reached is
+/// that are not a PEM private key. A file that cannot be read is
 /// [`KeyLookup::Unavailable`], and the caller decides what that means.
+/// Nothing at the default path is [`KeyLookup::Absent`]: no source named
+/// that file, so a missing one means no key was imported yet.
 ///
 /// SATISFIES setup-proof:an-unavailable-credential-is-an-observation-boundary
+/// SATISFIES bot-key:three-sources-name-the-key-in-a-fixed-order
 ///
 /// # Errors
 ///
-/// Refuses a stale contents variable and every wrong file, as
-/// [`resolve_key_file`] names them.
-pub fn look_up_key_file(target: &Utf8Path) -> Result<KeyLookup, RkError> {
+/// Refuses a stale contents variable, a wrong user configuration file,
+/// and every wrong key file, as [`resolve_key_file`] names them.
+pub fn look_up_key_file(target: &Utf8Path, app_id: Option<&str>) -> Result<KeyLookup, RkError> {
     refuse_legacy_key()?;
-    let Some(raw) = value_of(PRIVATE_KEY_FILE) else {
-        return Ok(KeyLookup::Absent);
+    let named = match key_path::resolve(app_id)? {
+        key_path::Resolution::NoAppId => return Ok(KeyLookup::Absent(NO_APP_ID.to_owned())),
+        key_path::Resolution::Named(named) => named,
     };
-    let unavailable = |message: String, action: &'static str| {
-        Ok(KeyLookup::Unavailable(Unavailable { message, action }))
-    };
-    let path = match resolve_path(&raw, target)? {
+    let source = named.source;
+    let path = match resolve_path(&named.raw, target)? {
         Resolved::Path(path) => path,
-        Resolved::Unreachable(message) => return unavailable(message, "name an existing .pem"),
+        Resolved::Missing(path) if source == Source::Default => {
+            return Ok(KeyLookup::Absent(import_remedy(&path)));
+        }
+        Resolved::Missing(path) => {
+            return Ok(KeyLookup::Unavailable(Unavailable {
+                path: path.into_string(),
+                reason: "no such file".to_owned(),
+                source,
+                action: "name an existing .pem",
+            }));
+        }
+        Resolved::Unreachable { path, reason } => {
+            return Ok(KeyLookup::Unavailable(Unavailable {
+                path: path.into_string(),
+                reason,
+                source,
+                action: "name an existing .pem",
+            }));
+        }
+    };
+    read_key(path, source, true)
+}
+
+/// Read and judge the key at a resolved path. `owner_only` asks for the
+/// mode check, which every lookup makes and an import of a fresh download
+/// skips.
+pub(crate) fn read_key(
+    path: Utf8PathBuf,
+    source: Source,
+    owner_only: bool,
+) -> Result<KeyLookup, RkError> {
+    let unavailable = |path: &Utf8PathBuf, reason: String, action: &'static str| {
+        Ok(KeyLookup::Unavailable(Unavailable {
+            path: path.to_string(),
+            reason,
+            source,
+            action,
+        }))
     };
 
     // One handle answers every question that follows. Asking the path twice
@@ -191,21 +270,11 @@ pub fn look_up_key_file(target: &Utf8Path) -> Result<KeyLookup, RkError> {
     }
     let file = match options.open(&path) {
         Ok(file) => file,
-        Err(err) => {
-            return unavailable(
-                format!("{path} is unreadable: {err}"),
-                "name an existing .pem",
-            );
-        }
+        Err(err) => return unavailable(&path, err.to_string(), "name an existing .pem"),
     };
     let meta = match file.metadata() {
         Ok(meta) => meta,
-        Err(err) => {
-            return unavailable(
-                format!("{path} is unreadable: {err}"),
-                "name an existing .pem",
-            );
-        }
+        Err(err) => return unavailable(&path, err.to_string(), "name an existing .pem"),
     };
 
     // rk reads this handle and hands its bytes on, so a source that yields
@@ -218,7 +287,7 @@ pub fn look_up_key_file(target: &Utf8Path) -> Result<KeyLookup, RkError> {
     }
 
     #[cfg(unix)]
-    {
+    if owner_only {
         use std::os::unix::fs::PermissionsExt;
         let mode = meta.permissions().mode();
         if mode & 0o077 != 0 {
@@ -231,16 +300,15 @@ pub fn look_up_key_file(target: &Utf8Path) -> Result<KeyLookup, RkError> {
             ));
         }
     }
+    #[cfg(not(unix))]
+    let _ = owner_only;
 
     // Bounded by the read itself rather than by the length the metadata
     // reported: one byte past the cap is enough to know, and the cap holds
     // even where a handle's reported length and its contents disagree.
     let mut bytes = Zeroizing::new(Vec::new());
     if let Err(err) = file.take(MAX_KEY_BYTES + 1).read_to_end(&mut bytes) {
-        return unavailable(
-            format!("{path} is unreadable: {err}"),
-            "name a readable .pem",
-        );
+        return unavailable(&path, err.to_string(), "name a readable .pem");
     }
     if bytes.len() as u64 > MAX_KEY_BYTES {
         return Err(refuse(
@@ -261,19 +329,29 @@ pub fn look_up_key_file(target: &Utf8Path) -> Result<KeyLookup, RkError> {
         ));
     }
 
-    Ok(KeyLookup::Found(KeyFile { path, bytes }))
+    Ok(KeyLookup::Found(KeyFile {
+        path,
+        bytes,
+        source,
+    }))
 }
 
-/// The canonical path the operator named, refused where the name itself is
+/// A named path, resolved, or a name the current process cannot reach.
+pub(crate) enum Resolved {
+    Path(Utf8PathBuf),
+    /// Nothing exists at the path.
+    Missing(Utf8PathBuf),
+    /// The path cannot be resolved for another reason.
+    Unreachable {
+        path: Utf8PathBuf,
+        reason: String,
+    },
+}
+
+/// The canonical path a source named, refused where the name itself is
 /// wrong: before anything is opened, and before a diagnostic could leak
 /// what the file holds.
-/// A named path, resolved, or a name this runtime cannot reach.
-enum Resolved {
-    Path(Utf8PathBuf),
-    Unreachable(String),
-}
-
-fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Resolved, RkError> {
+pub(crate) fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Resolved, RkError> {
     let Ok(named) = Utf8PathBuf::from_path_buf(raw.clone().into()) else {
         return Err(refuse(
             format!("{PRIVATE_KEY_FILE} is not valid UTF-8"),
@@ -292,10 +370,14 @@ fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Resolved, RkError> 
 
     let path = match std::fs::canonicalize(&named) {
         Ok(path) => path,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Resolved::Missing(named));
+        }
         Err(err) => {
-            return Ok(Resolved::Unreachable(format!(
-                "{named} is unreadable: {err}"
-            )));
+            return Ok(Resolved::Unreachable {
+                path: named,
+                reason: err.to_string(),
+            });
         }
     };
     let Ok(path) = Utf8PathBuf::from_path_buf(path) else {
@@ -381,9 +463,7 @@ fn boundary_label<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
 fn refuse(message: impl Into<String>, action: impl Into<String>) -> RkError {
     RkError::refusal(
         Diagnostic::new(Reason::PrerequisiteUnmet, message)
-            .expected(format!(
-                "{PRIVATE_KEY_FILE} naming a readable, owner-only PEM private key"
-            ))
+            .expected("a readable, owner-only PEM private key at the bot key path")
             .action(action)
             .step("bot-secrets"),
     )
@@ -468,6 +548,7 @@ mod tests {
         let key = KeyFile {
             path: Utf8PathBuf::from("/keys/bot.pem"),
             bytes: Zeroizing::new(armored("PRIVATE KEY")),
+            source: Source::Default,
         };
         let rendered = format!("{key:?}");
         assert!(rendered.contains("/keys/bot.pem"));

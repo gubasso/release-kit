@@ -26,12 +26,14 @@ use super::secrets;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 
-/// What exporting the credentials would enable, named wherever they are
-/// absent.
-pub const REMEDIATION: &str = "export RK_BOT_APP_ID and RK_BOT_PRIVATE_KEY_FILE, the second naming the App's .pem, or verify the installation by eye at github.com/settings/installations";
+/// What providing the credentials takes, named wherever they are absent:
+/// the App ID and a key at its default path.
+pub const REMEDIATION: &str = "set setup.bot.app_id, and import the App's .pem with `rk setup import-key <file>`, which writes it to ${XDG_CONFIG_HOME:-$HOME/.config}/release-kit/bot/github/<app-id>.pem; or verify the installation by eye at github.com/settings/installations";
 
-/// The two halves of the App identity. The caller resolves both — the id
-/// from the environment, the key from the run's one read of the named
+/// The two halves of the App identity.
+///
+/// The caller resolves both — the id from the environment or the
+/// committed configuration, the key from the run's one read of the key
 /// file — so this module never opens anything itself.
 pub struct AppCredentials {
     /// The numeric App id, which becomes the token's `iss`.
@@ -40,7 +42,9 @@ pub struct AppCredentials {
     pub key_bytes: Zeroizing<Vec<u8>>,
 }
 
-/// The App id from the environment, absent when unset.
+/// The App id: `RK_BOT_APP_ID` first, then the committed
+/// `setup.bot.app_id`, absent when neither is set. Every reader of the
+/// App ID takes it from here.
 ///
 /// # Errors
 ///
@@ -190,7 +194,7 @@ pub fn api_get(_ctx: &Ctx, jwt: &str, path: &str) -> AppApi {
         ),
         404 => AppApi::Missing,
         status @ (401 | 403) => AppApi::Refused(format!(
-            "the forge refused the App credentials ({status}); RK_BOT_APP_ID and the key file must name the same App"
+            "the forge refused the App credentials ({status}); the App ID and the key file must name the same App"
         )),
         other => AppApi::Failed(format!("the forge answered {other}")),
     }

@@ -65,6 +65,13 @@ pub enum StepState {
         /// Why not.
         detail: String,
     },
+    /// The bot private key file is not readable by the current process:
+    /// an unmet requirement with a remedy, which proves nothing wrong on
+    /// the forge.
+    Unreadable {
+        /// The requirement, the path, the reason, and the remedy.
+        detail: String,
+    },
 }
 
 impl StepState {
@@ -75,7 +82,8 @@ impl StepState {
             Self::Satisfied { detail, .. }
             | Self::Unsatisfied { detail }
             | Self::Inapplicable { detail }
-            | Self::Unknown { detail } => detail,
+            | Self::Unknown { detail }
+            | Self::Unreadable { detail } => detail,
         }
     }
 
@@ -606,6 +614,17 @@ fn version_refusal(found: &str, prerelease: Option<&str>, on_gitlab_com: bool) -
     said.join("; ")
 }
 
+/// The major and minor pair of a GitLab version string, such as `19.7.0-pre`,
+/// or `None` where the string names no such pair.
+fn gitlab_version_pair(found: &str) -> Option<(u64, u64)> {
+    let number = found.split_once('-').map_or(found, |(n, _)| n);
+    let mut parts = number.split('.');
+    parts
+        .next()
+        .and_then(|major| major.parse::<u64>().ok())
+        .zip(parts.next().and_then(|minor| minor.parse::<u64>().ok()))
+}
+
 /// §3: the forge's own version against the convention's floor.
 ///
 /// GitHub is a rolling service and is answered without a call. GitLab is one
@@ -635,15 +654,8 @@ fn forge_version(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
             "the forge answer carries no version field; the floor cannot be read. Check that glab is authenticated against this instance: glab auth login",
         ));
     };
-    let (number, suffix) = found
-        .split_once('-')
-        .map_or((found, None), |(n, s)| (n, Some(s)));
-    let mut parts = number.split('.');
-    let parsed = parts
-        .next()
-        .and_then(|major| major.parse::<u64>().ok())
-        .zip(parts.next().and_then(|minor| minor.parse::<u64>().ok()));
-    let Some(pair) = parsed else {
+    let suffix = found.split_once('-').map(|(_, s)| s);
+    let Some(pair) = gitlab_version_pair(found) else {
         return Ok(StepState::unknown(format!(
             "the forge reports the version as '{found}', which names no major and minor pair; the floor cannot be read"
         )));
@@ -952,39 +964,9 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 Api::Failed(err) => StepState::unknown(err),
             },
         ),
-        "bot-secrets" => Ok(
-            match api_get(ctx, run, &format!("repos/{repo}/actions/secrets"))? {
-                Api::Ok(body) => {
-                    let names: Vec<&str> = body["secrets"]
-                        .as_array()
-                        .map(|list| {
-                            list.iter()
-                                .filter_map(|secret| secret["name"].as_str())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let wanted = ["RELEASE_BOT_APP_ID", "RELEASE_BOT_APP_PRIVATE_KEY"];
-                    if wanted.iter().all(|name| names.contains(name)) {
-                        StepState::ok("both bot secrets are stored")
-                    } else if names.is_empty() {
-                        StepState::not("no bot secrets are stored")
-                    } else {
-                        StepState::not(format!("stored secrets: {}", names.join(", ")))
-                    }
-                }
-                Api::Missing => StepState::not("no secrets are readable"),
-                Api::Failed(err) => StepState::unknown(err),
-            },
-        ),
+        "bot-secrets" => github_bot_secrets(ctx, run),
         "protect-trunk" => github_trunk_ruleset(ctx, run),
-        "protect-tags" => github_ruleset(
-            ctx,
-            run,
-            ctx.tag_ruleset(),
-            "tag",
-            "refs/tags/v*",
-            &["deletion", "update"],
-        ),
+        "protect-tags" => github_tag_rulesets(ctx, run),
         "protect-release-lines" => {
             match github_ruleset_body(ctx, run, ctx.lines_ruleset())? {
                 RulesetLookup::Absent => {
@@ -1004,6 +986,7 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 &["deletion", "non_fast_forward"],
             )
         }
+        "protect-release-branches" => github_release_branch_ruleset(ctx, run),
         "protections-check" => {
             // Confirmed drift and unreadable answers stay apart: a proven
             // mismatch is drift even beside an outage, and an outage with
@@ -1021,9 +1004,41 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                     StepState::Unsatisfied { detail } => {
                         failures.push(format!("{owned}: {detail}"));
                     }
-                    StepState::Unknown { detail } => {
+                    StepState::Unknown { detail } | StepState::Unreadable { detail } => {
                         unknowns.push(format!("{owned}: {detail}"));
                     }
+                }
+            }
+            // The bot secrets, where an automatic release stores them: in
+            // the release environments alone. A project that stores them
+            // nowhere yet is the gap of bot-secrets, not of a protection.
+            if ctx.automatic_release() && !ctx.release_environments().is_empty() {
+                match github_environment_support(ctx, run)? {
+                    EnvironmentSupport::Unsupported(limitation) => {
+                        limitations.push(format!("bot-secrets: {limitation}"));
+                    }
+                    EnvironmentSupport::Unknown(detail) => {
+                        unknowns.push(format!("bot-secrets: {detail}"));
+                    }
+                    EnvironmentSupport::Supported => match github_bot_secret_faults(ctx, run)? {
+                        Err(state) => unknowns.push(format!("bot-secrets: {}", state.detail())),
+                        Ok(faults) => {
+                            if let Some((remaining, stale)) = &faults.repository {
+                                failures.push(format!(
+                                    "bot-secrets: {}",
+                                    repository_secret_fault(remaining, stale)
+                                ));
+                            }
+                            if !(faults.absent && faults.repository.is_none()) {
+                                failures.extend(
+                                    faults
+                                        .environments
+                                        .iter()
+                                        .map(|fault| format!("bot-secrets: {fault}")),
+                                );
+                            }
+                        }
+                    },
                 }
             }
             match api_get(ctx, run, &format!("repos/{repo}/rulesets"))? {
@@ -1031,7 +1046,10 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                     let owned = [
                         ctx.trunk_ruleset().to_owned(),
                         ctx.safety_ruleset().to_owned(),
+                        ctx.updates_ruleset().to_owned(),
                         ctx.tag_ruleset().to_owned(),
+                        ctx.tag_creation_ruleset().to_owned(),
+                        ctx.release_branch_ruleset().to_owned(),
                         ctx.lines_ruleset().to_owned(),
                     ];
                     for ruleset in body.as_array().into_iter().flatten() {
@@ -1065,15 +1083,426 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
 }
 
 /// The protection steps `protections-check` aggregates for one target: the
-/// trunk, the release tags wherever the release mode is not `none`, and
-/// the optional release lines.
+/// trunk, the release tags and the release branches wherever the release
+/// mode is not `none`, and the optional release lines.
 fn owned_protections(ctx: &Ctx) -> Vec<&'static str> {
     let mut owned = vec!["protect-trunk"];
     if ctx.tag_protection() {
         owned.push("protect-tags");
+        owned.push("protect-release-branches");
     }
     owned.push("protect-release-lines");
     owned
+}
+
+/// The names of the two bot secrets every App-token job reads.
+pub const BOT_SECRET_NAMES: [&str; 2] = ["RELEASE_BOT_APP_ID", "RELEASE_BOT_APP_PRIVATE_KEY"];
+
+/// Whether a GitHub repository can hold environment secrets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvironmentSupport {
+    /// A public repository, or a private one on a plan that holds them.
+    Supported,
+    /// A private repository on a plan that holds no environment secrets,
+    /// with the limitation to report.
+    Unsupported(String),
+    /// The visibility or the plan could not be read.
+    Unknown(String),
+}
+
+/// The limitation of a private repository on the Free plan.
+pub const FREE_PRIVATE_LIMITATION: &str = "on the Free plan a private repository holds no environment secrets, so the bot secrets stay repository secrets that a workflow on any branch reads";
+
+/// Whether this repository can hold environment secrets: every public
+/// repository can, and a private one only on a paid plan of its owner.
+///
+/// # Errors
+/// A runner failure.
+pub fn github_environment_support(
+    ctx: &Ctx,
+    run: &mut Runner,
+) -> Result<EnvironmentSupport, RkError> {
+    let path = format!("repos/{}", ctx.repo);
+    let body = match api_get(ctx, run, &path)? {
+        Api::Ok(body) => body,
+        Api::Missing => return Ok(EnvironmentSupport::Unknown(format!("{path}: not found"))),
+        Api::Failed(err) => return Ok(EnvironmentSupport::Unknown(format!("{path}: {err}"))),
+    };
+    match body["private"].as_bool() {
+        Some(false) => return Ok(EnvironmentSupport::Supported),
+        Some(true) => {}
+        None => {
+            return Ok(EnvironmentSupport::Unknown(format!(
+                "{path}: repository visibility is unreadable"
+            )));
+        }
+    }
+    let owner = body["owner"]["login"].as_str().unwrap_or_default();
+    let plan_path = if body["owner"]["type"] == "Organization" {
+        format!("orgs/{owner}")
+    } else {
+        "user".to_owned()
+    };
+    let plan = match api_get(ctx, run, &plan_path)? {
+        Api::Ok(account) if plan_path != "user" || account["login"] == owner => {
+            account["plan"]["name"].as_str().map(str::to_owned)
+        }
+        _ => None,
+    };
+    Ok(match plan.as_deref() {
+        Some("free") => EnvironmentSupport::Unsupported(FREE_PRIVATE_LIMITATION.to_owned()),
+        Some(_) => EnvironmentSupport::Supported,
+        None => EnvironmentSupport::Unknown(format!(
+            "the plan of {owner} is unreadable, so whether this private repository holds environment secrets is unknown"
+        )),
+    })
+}
+
+/// The secret names of one listing answer.
+fn secret_names(body: &Value) -> Vec<String> {
+    body["secrets"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|secret| secret["name"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What the GitHub bot secrets lack, split in two.
+///
+/// The first half is the faults of the release environments. The second
+/// is the bot secrets that remain at the repository level, which the apply
+/// removes only once every release ref runs a workflow that names the
+/// environment.
+pub struct BotSecretFaults {
+    /// What an environment lacks: its existence, its policy, its secrets.
+    pub environments: Vec<String>,
+    /// The repository-level bot secrets that remain, with the refs whose
+    /// release workflow still names no environment.
+    pub repository: Option<(Vec<String>, Vec<String>)>,
+    /// Whether no release environment exists yet.
+    pub absent: bool,
+}
+
+/// The faults of the GitHub bot secrets where environments are supported,
+/// or the state that stops the judgment.
+///
+/// # Errors
+/// A runner failure.
+pub fn github_bot_secret_faults(
+    ctx: &Ctx,
+    run: &mut Runner,
+) -> Result<Result<BotSecretFaults, StepState>, RkError> {
+    let repo = &ctx.repo;
+    let branches = ctx.environment_branch_patterns();
+    let tags = ctx.environment_tag_patterns();
+    let mut wanted: Vec<(String, String)> = branches
+        .iter()
+        .map(|name| ("branch".to_owned(), name.clone()))
+        .chain(tags.iter().map(|name| ("tag".to_owned(), name.clone())))
+        .collect();
+    wanted.sort();
+    let mut environments = Vec::new();
+    let mut missing = 0;
+    for environment in ctx.release_environments() {
+        match github_environment_faults(ctx, run, environment, &wanted)? {
+            Err(state) => return Ok(Err(state)),
+            Ok(None) => {
+                environments.push(format!("the environment {environment} does not exist"));
+                missing += 1;
+            }
+            Ok(Some(faults)) => environments.extend(faults),
+        }
+    }
+    let remaining: Vec<String> = match api_get(ctx, run, &format!("repos/{repo}/actions/secrets"))?
+    {
+        Api::Ok(body) => secret_names(&body)
+            .into_iter()
+            .filter(|name| BOT_SECRET_NAMES.contains(&name.as_str()))
+            .collect(),
+        Api::Missing => Vec::new(),
+        Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+    };
+    let repository = if remaining.is_empty() {
+        None
+    } else {
+        match github_stale_workflow_refs(ctx, run)? {
+            Ok(stale) => Some((remaining, stale)),
+            Err(detail) => return Ok(Err(StepState::unknown(detail))),
+        }
+    };
+    Ok(Ok(BotSecretFaults {
+        environments,
+        repository,
+        absent: missing == ctx.release_environments().len(),
+    }))
+}
+
+/// What one release environment lacks: its policy, its patterns, and its
+/// secrets. `None` where the environment does not exist.
+fn github_environment_faults(
+    ctx: &Ctx,
+    run: &mut Runner,
+    environment: &str,
+    wanted: &[(String, String)],
+) -> Result<Result<Option<Vec<String>>, StepState>, RkError> {
+    let base = format!("repos/{}/environments/{environment}", ctx.repo);
+    let mut faults = Vec::new();
+    match api_get(ctx, run, &base)? {
+        Api::Ok(body) => {
+            let policy = &body["deployment_branch_policy"];
+            if policy["custom_branch_policies"] != true || policy["protected_branches"] != false {
+                faults.push(format!(
+                    "the environment {environment} admits more than the release refs"
+                ));
+            }
+        }
+        Api::Missing => return Ok(Ok(None)),
+        Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+    }
+    match api_get(
+        ctx,
+        run,
+        &format!("{base}/deployment-branch-policies?per_page=100"),
+    )? {
+        Api::Ok(body) => {
+            let mut found: Vec<(String, String)> = body["branch_policies"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .map(|policy| {
+                            (
+                                policy["type"].as_str().unwrap_or("branch").to_owned(),
+                                policy["name"].as_str().unwrap_or_default().to_owned(),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            found.sort();
+            if found != wanted {
+                let named = |from: &[(String, String)], against: &[(String, String)]| {
+                    from.iter()
+                        .filter(|policy| !against.contains(policy))
+                        .map(|(kind, name)| format!("{kind} {name}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                faults.push(format!(
+                    "the policy of {environment} misses [{}] and adds [{}]",
+                    named(wanted, &found),
+                    named(&found, wanted)
+                ));
+            }
+        }
+        Api::Missing => {
+            faults.push(format!("the policy of {environment} is not readable"));
+        }
+        Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+    }
+    match api_get(ctx, run, &format!("{base}/secrets"))? {
+        Api::Ok(body) => {
+            let names = secret_names(&body);
+            let absent: Vec<&str> = BOT_SECRET_NAMES
+                .iter()
+                .copied()
+                .filter(|name| !names.iter().any(|found| found == name))
+                .collect();
+            if !absent.is_empty() {
+                faults.push(format!(
+                    "the environment {environment} lacks {}",
+                    absent.join(" and ")
+                ));
+            }
+        }
+        Api::Missing => {
+            faults.push(format!("the secrets of {environment} are not readable"));
+        }
+        Api::Failed(err) => return Ok(Err(StepState::unknown(err))),
+    }
+    Ok(Ok(Some(faults)))
+}
+
+/// The detail of bot secrets that remain at the repository level.
+#[must_use]
+pub fn repository_secret_fault(remaining: &[String], stale: &[String]) -> String {
+    if stale.is_empty() {
+        format!(
+            "{} remain repository secrets, which a workflow on any branch reads; rk setup --apply removes them",
+            remaining.join(" and ")
+        )
+    } else {
+        format!(
+            "{} remain repository secrets until the release workflow names the environment on {}; push the upgraded workflow there, then rk setup --apply",
+            remaining.join(" and "),
+            stale.join(", ")
+        )
+    }
+}
+
+/// The release refs that still run a workflow from before the environment.
+///
+/// Each is the trunk, or a release line that the clone knows at its
+/// remote, whose landed release workflow, read at the forge, still has a
+/// job that mints the App token and names none of the release
+/// environments. A ref with no release workflow runs no App-token job.
+///
+/// # Errors
+/// A runner failure.
+pub fn github_stale_workflow_refs(
+    ctx: &Ctx,
+    run: &mut Runner,
+) -> Result<Result<Vec<String>, String>, RkError> {
+    let Some(destination) = crate::projection::release_workflow_destination(ctx.driver()) else {
+        return Ok(Ok(Vec::new()));
+    };
+    let mut refs = vec![ctx.trunk().to_owned()];
+    if let Ok(rows) = crate::commands::lines::rows(&ctx.target) {
+        refs.extend(
+            rows.into_iter()
+                .filter(|row| row.presence != "local")
+                .map(|row| row.branch),
+        );
+    }
+    let mut stale = Vec::new();
+    for branch in refs {
+        let path = format!("repos/{}/contents/{destination}?ref={branch}", ctx.repo);
+        let exec = Exec {
+            program: ctx.cli.clone().into_os_string(),
+            args: vec![
+                "api".into(),
+                "-H".into(),
+                "Accept: application/vnd.github.raw+json".into(),
+                path.clone().into(),
+            ],
+            env: ctx.child_env("observe"),
+            cwd: ctx.target.as_std_path().to_path_buf(),
+            stdin: None,
+        };
+        let outcome = run(&exec)?;
+        if !outcome.success() {
+            if String::from_utf8_lossy(&outcome.stderr).contains("404") {
+                continue;
+            }
+            return Ok(Err(format!("{path}: {}", last_line(&outcome.stderr))));
+        }
+        let text = String::from_utf8_lossy(&outcome.stdout);
+        let named = crate::projection::app_token_jobs(&text)
+            .iter()
+            .all(|(_, environment)| {
+                environment
+                    .as_ref()
+                    .is_some_and(|name| ctx.release_environments().contains(name))
+            });
+        if !named {
+            stale.push(branch);
+        }
+    }
+    Ok(Ok(stale))
+}
+
+/// The GitHub bot secrets: in the release environments behind their
+/// policy, and gone from the repository level, or at the repository level
+/// alone where the plan holds no environment secrets.
+fn github_bot_secrets(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    let repository_names = |run: &mut Runner| -> Result<Result<Vec<String>, String>, RkError> {
+        Ok(
+            match api_get(ctx, run, &format!("repos/{}/actions/secrets", ctx.repo))? {
+                Api::Ok(body) => Ok(secret_names(&body)),
+                Api::Missing => Ok(Vec::new()),
+                Api::Failed(err) => Err(err),
+            },
+        )
+    };
+    let support = if ctx.release_environments().is_empty() {
+        EnvironmentSupport::Unsupported(String::new())
+    } else {
+        github_environment_support(ctx, run)?
+    };
+    match support {
+        EnvironmentSupport::Unknown(detail) => Ok(StepState::unknown(detail)),
+        EnvironmentSupport::Unsupported(limitation) => {
+            let names = match repository_names(run)? {
+                Ok(names) => names,
+                Err(err) => return Ok(StepState::unknown(err)),
+            };
+            Ok(
+                if BOT_SECRET_NAMES
+                    .iter()
+                    .all(|name| names.iter().any(|found| found == name))
+                {
+                    StepState::Satisfied {
+                        detail: "both bot secrets are stored in the repository".into(),
+                        limitation: (!limitation.is_empty()).then_some(limitation),
+                    }
+                } else if names.is_empty() {
+                    StepState::not("no bot secrets are stored")
+                } else {
+                    StepState::not(format!("stored secrets: {}", names.join(", ")))
+                },
+            )
+        }
+        EnvironmentSupport::Supported => Ok(match github_bot_secret_faults(ctx, run)? {
+            Err(state) => state,
+            Ok(faults) => {
+                let mut all = faults.environments;
+                if let Some((remaining, stale)) = &faults.repository {
+                    all.push(repository_secret_fault(remaining, stale));
+                }
+                if all.is_empty() {
+                    StepState::ok(format!(
+                        "both bot secrets live in {}, whose policy admits the release refs alone",
+                        ctx.release_environments().join(" and ")
+                    ))
+                } else {
+                    StepState::not(all.join("; "))
+                }
+            }
+        }),
+    }
+}
+
+/// The two release tag rulesets on GitHub. The immutable one covers
+/// `protection.tag_pattern` alone, carries exactly `deletion` and `update`,
+/// and names no bypass actor, so no actor moves or deletes a published tag.
+/// The creation one lets only the release bypass actors create a tag that
+/// starts a release.
+fn github_tag_rulesets(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    let name = ctx.tag_ruleset();
+    let pattern = ctx.protection().tag_pattern.clone();
+    let mut faults = Vec::new();
+    match github_ruleset(ctx, run, name, "tag", &pattern, &["deletion", "update"])? {
+        StepState::Satisfied { .. } => {}
+        StepState::Unsatisfied { detail } => faults.push(detail),
+        other => return Ok(other),
+    }
+    if let RulesetLookup::Found(detail) = github_ruleset_body(ctx, run, name)?
+        && !detail["bypass_actors"].as_array().is_none_or(Vec::is_empty)
+    {
+        faults.push(format!(
+            "{name} names a bypass actor, so a published tag can move or vanish"
+        ));
+    }
+    let creation = ctx.tag_creation_ruleset();
+    let patterns = ctx.tag_creation_patterns();
+    match release_ruleset_faults(ctx, run, creation, "tag", &patterns, &["creation"])? {
+        Ok(proven) => faults.extend(proven),
+        Err(err) => {
+            if faults.is_empty() {
+                return Ok(StepState::unknown(err));
+            }
+        }
+    }
+    Ok(if faults.is_empty() {
+        StepState::ok(format!(
+            "{name} keeps {pattern} immutable, and {creation} lets only the release actors create {}",
+            patterns.join(", ")
+        ))
+    } else {
+        StepState::not(faults.join("; "))
+    })
 }
 
 /// The installation, observed as the App itself.
@@ -1318,6 +1747,11 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             }
         }
     }
+    match github_updates_ruleset(ctx, run)? {
+        Ok(proven) => faults.extend(proven),
+        Err(err) if faults.is_empty() => return Ok(StepState::unknown(err)),
+        Err(_) => {}
+    }
     if let Some(shape) = gate_faults(ctx) {
         faults.push(shape);
     }
@@ -1325,9 +1759,27 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         return Ok(StepState::not(faults.join("; ")));
     }
     Ok(StepState::ok(format!(
-        "{name} holds the release-merge shape beside {}",
-        ctx.safety_ruleset()
+        "{name} holds the release-merge shape beside {} and {}",
+        ctx.safety_ruleset(),
+        ctx.updates_ruleset()
     )))
+}
+
+/// The faults of the trunk updates ruleset: the `update` rule alone over
+/// the trunk alone, passed by exactly the release bypass actors.
+fn github_updates_ruleset(
+    ctx: &Ctx,
+    run: &mut Runner,
+) -> Result<Result<Vec<String>, String>, RkError> {
+    let trunk = [format!("refs/heads/{}", ctx.trunk())];
+    release_ruleset_faults(
+        ctx,
+        run,
+        ctx.updates_ruleset(),
+        "branch",
+        &trunk,
+        &["update"],
+    )
 }
 
 /// The fault of a request rule allowing any merge method but the one the
@@ -1537,6 +1989,216 @@ fn rebase_switch_fault(allowed: Option<bool>) -> Option<String> {
     }
 }
 
+/// The bypass actors of a ruleset body as `(type, id, mode)`, sorted, the
+/// order the release bypass is built in.
+fn bypass_key(actors: &Value) -> Vec<(String, i64, String)> {
+    let mut held: Vec<(String, i64, String)> = actors
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|actor| {
+            (
+                actor["actor_type"].as_str().unwrap_or_default().to_owned(),
+                actor["actor_id"].as_i64().unwrap_or_default(),
+                actor["bypass_mode"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    held.sort();
+    held
+}
+
+/// The release branch ruleset: active, on branches, covering exactly the
+/// release branch patterns, carrying exactly `creation` and `update`, and
+/// passed by exactly the release bypass actors.
+fn github_release_branch_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    let name = ctx.release_branch_ruleset();
+    let patterns = ctx.release_branch_patterns();
+    Ok(
+        match release_ruleset_faults(ctx, run, name, "branch", &patterns, &["creation", "update"])?
+        {
+            Ok(faults) if faults.is_empty() => StepState::ok(format!(
+                "{name} lets only the release actors create or update {}",
+                patterns.join(", ")
+            )),
+            Ok(faults) => StepState::not(faults.join("; ")),
+            Err(err) => StepState::unknown(err),
+        },
+    )
+}
+
+/// The faults of a ruleset that only the release bypass actors pass:
+/// active, on `target` refs, covering exactly `patterns` with no
+/// exclusion, carrying exactly `rules`, and naming exactly the release
+/// bypass actors. A missing ruleset is one fault. `Err` carries an
+/// unreadable answer, which proves nothing either way.
+fn release_ruleset_faults(
+    ctx: &Ctx,
+    run: &mut Runner,
+    name: &str,
+    target: &str,
+    patterns: &[String],
+    rules: &[&str],
+) -> Result<Result<Vec<String>, String>, RkError> {
+    let detail = match github_ruleset_body(ctx, run, name)? {
+        RulesetLookup::Found(detail) => detail,
+        RulesetLookup::Absent => return Ok(Ok(vec![format!("no ruleset named {name}")])),
+        RulesetLookup::Unreadable(err) => return Ok(Err(err)),
+    };
+    let mut faults = Vec::new();
+    if detail["enforcement"] != "active" {
+        faults.push(format!("{name} is not active"));
+    }
+    if detail["target"] != target {
+        faults.push(format!("{name} does not target {target} refs"));
+    }
+    let include: Vec<&str> = detail["conditions"]["ref_name"]["include"]
+        .as_array()
+        .map(|list| list.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    for pattern in patterns {
+        if !include.contains(&pattern.as_str()) {
+            faults.push(format!("{name} does not cover {pattern}"));
+        }
+    }
+    for extra in include
+        .iter()
+        .filter(|held| !patterns.iter().any(|pattern| pattern == *held))
+    {
+        faults.push(format!(
+            "{name} covers {extra}, which the setup does not own"
+        ));
+    }
+    if detail["conditions"]["ref_name"]["exclude"] != serde_json::json!([]) {
+        faults.push(format!("{name} excludes refs from its own coverage"));
+    }
+    let mut held: Vec<&str> = detail["rules"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|rule| rule["type"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    held.sort_unstable();
+    let mut expected = rules.to_vec();
+    expected.sort_unstable();
+    if held != expected {
+        faults.push(format!(
+            "{name} carries the rules [{}] where the setup owns [{}]",
+            held.join(", "),
+            expected.join(", ")
+        ));
+    }
+    if bypass_key(&detail["bypass_actors"]) != bypass_key(&ctx.release_bypass_actors()) {
+        faults.push(format!(
+            "{name} names other bypass actors than the repository administrator and the release App"
+        ));
+    }
+    Ok(Ok(faults))
+}
+
+/// Each release branch pattern on GitLab: protected with exactly one push
+/// grant and one merge grant at Maintainer, and force pushes off.
+fn gitlab_release_branches(
+    ctx: &Ctx,
+    run: &mut Runner,
+    project: &str,
+) -> Result<StepState, RkError> {
+    let level_ok = |levels: &Value| {
+        levels
+            .as_array()
+            .is_some_and(|list| list.len() == 1 && list[0]["access_level"] == 40)
+    };
+    let patterns = ctx.release_branch_patterns();
+    let mut faults = Vec::new();
+    for pattern in &patterns {
+        let encoded = pattern.replace('/', "%2F").replace('*', "%2A");
+        match api_get(
+            ctx,
+            run,
+            &format!("projects/{project}/protected_branches/{encoded}"),
+        )? {
+            Api::Ok(body) => {
+                if body["allow_force_push"] != false {
+                    faults.push(format!("{pattern} allows force pushes"));
+                }
+                if !level_ok(&body["push_access_levels"]) || !level_ok(&body["merge_access_levels"])
+                {
+                    faults.push(format!(
+                        "{pattern} grants are not exactly one push and one merge at Maintainer"
+                    ));
+                }
+            }
+            Api::Missing => faults.push(format!("{pattern} is not protected")),
+            Api::Failed(err) => return Ok(StepState::unknown(err)),
+        }
+    }
+    Ok(if faults.is_empty() {
+        StepState::ok(format!(
+            "{} take a push or a merge at Maintainer alone",
+            patterns.join(", ")
+        ))
+    } else {
+        StepState::not(faults.join("; "))
+    })
+}
+
+/// The value of `protect_merge_request_pipelines` that keeps merge request
+/// pipelines away from the protected variables and runners.
+pub const GITLAB_MERGE_REQUEST_PIPELINE_ACCESS_OFF: bool = false;
+
+/// The GitLab release that added the merge request pipeline access to
+/// protected variables and runners. Below it, a merge request pipeline never
+/// reads a protected variable.
+pub const GITLAB_MERGE_REQUEST_PIPELINE_SETTING_SINCE: (u64, u64) = (18, 1);
+
+/// What an answer with no merge request pipeline setting reads from 18.1.
+///
+/// The projects API returns the attribute from GitLab 18.10, and only to a
+/// reader at Maintainer or above, while from 18.1 a new project has the
+/// access on, so the access is unproved.
+pub const GITLAB_MERGE_REQUEST_PIPELINE_UNEXPOSED: &str = "this GitLab does not show protect_merge_request_pipelines to this reader: the projects API returns it from GitLab 18.10, and only to a Maintainer or above. From 18.1 a new project lets its merge request pipelines reach the protected variables and runners, so that access is unproved. Read the project as a Maintainer on GitLab 18.10 or later, or clear \"Allow merge request pipelines to access protected variables and runners\" under Settings > CI/CD > Variables by hand";
+
+/// The state of a GitLab project answer that carries no merge request
+/// pipeline setting, judged by the instance version: below 18.1 the
+/// setting does not exist, at or above it the setting is not exposed to
+/// this reader, and a version that cannot be read leaves it unknown.
+///
+/// SATISFIES release-ref-rules:merge-request-pipelines-cannot-read-protected-variables
+fn unexposed_merge_request_pipeline_state(
+    ctx: &Ctx,
+    run: &mut Runner,
+) -> Result<StepState, RkError> {
+    let version = match api_get(ctx, run, "version")? {
+        Api::Ok(body) => body["version"].as_str().and_then(gitlab_version_pair),
+        Api::Missing | Api::Failed(_) => None,
+    };
+    Ok(match version {
+        Some(pair) if pair < GITLAB_MERGE_REQUEST_PIPELINE_SETTING_SINCE => StepState::ok(
+            "pipelines are enabled; this GitLab predates 18.1, where a merge request pipeline never reads a protected variable",
+        ),
+        Some(_) => StepState::not(GITLAB_MERGE_REQUEST_PIPELINE_UNEXPOSED),
+        None => StepState::unknown(
+            "the project answer carries no protect_merge_request_pipelines, and the GitLab version cannot be read to tell an instance older than 18.1 from a reader the setting is not shown to",
+        ),
+    })
+}
+
+/// What is wrong with the merge request pipeline setting of a GitLab
+/// project answer that carries it, if anything. An answer with no such
+/// attribute is judged by [`unexposed_merge_request_pipeline_state`].
+fn merge_request_pipeline_fault(project: &Value) -> Option<String> {
+    match project.get("protect_merge_request_pipelines") {
+        None => None,
+        Some(value) if *value == GITLAB_MERGE_REQUEST_PIPELINE_ACCESS_OFF => None,
+        Some(Value::Bool(_)) => {
+            Some("merge request pipelines can reach the protected variables and runners".to_owned())
+        }
+        Some(_) => Some("the merge request pipeline setting is unreadable".to_owned()),
+    }
+}
+
 /// One ruleset lookup by name: found, provably absent, or unreadable —
 /// an unreadable inventory must never read as an absent ruleset.
 enum RulesetLookup {
@@ -1741,6 +2403,52 @@ pub fn gitlab_bot_is_a_service_account(
         Err(state) => Err(state.detail().to_owned()),
     })
 }
+
+/// What the GitLab project holds for the release bot's token variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BotVariable {
+    /// The forge answered 404: no variable is stored.
+    Missing,
+    /// Stored, but a pipeline on any branch reads it.
+    Unprotected,
+    /// Stored, and only a pipeline on a protected branch or a protected
+    /// tag reads it.
+    Protected,
+    /// The read failed, with the CLI's own words.
+    Unreadable(String),
+}
+
+/// The state of `RELEASE_BOT_TOKEN` on the target's GitLab project.
+///
+/// It reads whether the token is stored, and whether it is protected. One
+/// reader serves the observation of `bot-secrets`, `protections-check`,
+/// and the apply that protects it.
+///
+/// # Errors
+/// A runner failure.
+pub fn gitlab_bot_variable_state(ctx: &Ctx, run: &mut Runner) -> Result<BotVariable, RkError> {
+    let project = ctx.repo.replace('/', "%2F");
+    Ok(
+        match api_get(
+            ctx,
+            run,
+            &format!("projects/{project}/variables/RELEASE_BOT_TOKEN"),
+        )? {
+            Api::Ok(body) => match body.get("protected") {
+                Some(Value::Bool(true)) => BotVariable::Protected,
+                Some(Value::Bool(false)) => BotVariable::Unprotected,
+                _ => BotVariable::Unreadable(
+                    "the protected flag of RELEASE_BOT_TOKEN is unreadable".to_owned(),
+                ),
+            },
+            Api::Missing => BotVariable::Missing,
+            Api::Failed(err) => BotVariable::Unreadable(err),
+        },
+    )
+}
+
+/// The remedy for a bot token that a pipeline on any branch reads.
+pub const GITLAB_UNPROTECTED_BOT_VARIABLE: &str = "RELEASE_BOT_TOKEN is not protected, so a pipeline on any branch reads it; rk setup --apply protects it";
 
 /// Whether the bot's variable is stored, as the last half of either form.
 fn gitlab_bot_variable(
@@ -2138,27 +2846,30 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         }
         "ci-permissions" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
             Api::Ok(body) => {
-                if body["jobs_enabled"] == true {
-                    StepState::ok("pipelines are enabled")
-                } else {
+                if body["jobs_enabled"] != true {
                     StepState::not("pipelines are disabled")
+                } else if let Some(fault) = merge_request_pipeline_fault(&body) {
+                    StepState::not(fault)
+                } else if body.get("protect_merge_request_pipelines").is_none() {
+                    unexposed_merge_request_pipeline_state(ctx, run)?
+                } else {
+                    StepState::ok(
+                        "pipelines are enabled, and merge request pipelines cannot reach the protected variables and runners",
+                    )
                 }
             }
             Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),
             Api::Failed(err) => StepState::unknown(err),
         }),
         "install-bot" => gitlab_install_bot(ctx, run, &project),
-        "bot-secrets" => Ok(
-            match api_get(
-                ctx,
-                run,
-                &format!("projects/{project}/variables/RELEASE_BOT_TOKEN"),
-            )? {
-                Api::Ok(_) => StepState::ok("RELEASE_BOT_TOKEN is stored"),
-                Api::Missing => StepState::not("RELEASE_BOT_TOKEN is not stored"),
-                Api::Failed(err) => StepState::unknown(err),
-            },
-        ),
+        "bot-secrets" => Ok(match gitlab_bot_variable_state(ctx, run)? {
+            BotVariable::Protected => StepState::ok(
+                "RELEASE_BOT_TOKEN is stored and protected, so only a pipeline on a protected branch or tag reads it",
+            ),
+            BotVariable::Unprotected => StepState::not(GITLAB_UNPROTECTED_BOT_VARIABLE),
+            BotVariable::Missing => StepState::not("RELEASE_BOT_TOKEN is not stored"),
+            BotVariable::Unreadable(err) => StepState::unknown(err),
+        }),
         "protect-trunk" => {
             let protection = match api_get(
                 ctx,
@@ -2257,15 +2968,33 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 StepState::not(faults.join("; "))
             })
         }
-        "protect-tags" => Ok(
-            match api_get(ctx, run, &format!("projects/{project}/protected_tags/v%2A"))? {
-                Api::Ok(_) => {
-                    StepState::ok_with_limitation("v* is protected", GITLAB_TAG_LIMITATION)
-                }
-                Api::Missing => StepState::not("v* is not protected"),
-                Api::Failed(err) => StepState::unknown(err),
-            },
-        ),
+        "protect-tags" => {
+            let pattern = ctx.tag_pattern();
+            let encoded = pattern.replace('/', "%2F").replace('*', "%2A");
+            Ok(
+                match api_get(
+                    ctx,
+                    run,
+                    &format!("projects/{project}/protected_tags/{encoded}"),
+                )? {
+                    Api::Ok(body) => {
+                        let grants = body["create_access_levels"].as_array().map_or(0, Vec::len);
+                        if grants == 1 && body["create_access_levels"][0]["access_level"] == 40 {
+                            StepState::ok_with_limitation(
+                                format!("{pattern} is created at Maintainer alone"),
+                                GITLAB_TAG_LIMITATION,
+                            )
+                        } else {
+                            StepState::not(format!(
+                                "{pattern} create grants are not exactly one at Maintainer: the forge honors the most permissive of {grants}"
+                            ))
+                        }
+                    }
+                    Api::Missing => StepState::not(format!("{pattern} is not protected")),
+                    Api::Failed(err) => StepState::unknown(err),
+                },
+            )
+        }
         "protect-release-lines" => Ok(
             match api_get(
                 ctx,
@@ -2299,6 +3028,7 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 Api::Failed(err) => StepState::unknown(err),
             },
         ),
+        "protect-release-branches" => gitlab_release_branches(ctx, run, &project),
         "protections-check" => {
             // Same separation as the sibling forge: proven drift wins,
             // an outage with nothing proven wrong stays unknown.
@@ -2316,9 +3046,54 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                     StepState::Unsatisfied { detail } => {
                         failures.push(format!("{owned}: {detail}"));
                     }
-                    StepState::Unknown { detail } => {
+                    StepState::Unknown { detail } | StepState::Unreadable { detail } => {
                         unknowns.push(format!("{owned}: {detail}"));
                     }
+                }
+            }
+            // The merge request pipeline setting, which the script judges
+            // beside the protections wherever ci-permissions applies and
+            // writes it: on an automatic release.
+            match if ctx.automatic_release() {
+                api_get(ctx, run, &format!("projects/{project}"))?
+            } else {
+                Api::Ok(Value::Null)
+            } {
+                Api::Ok(body) => {
+                    if let Some(fault) = merge_request_pipeline_fault(&body) {
+                        failures.push(format!(
+                            "ci-permissions: {fault}; rk setup step ci-permissions --apply"
+                        ));
+                    } else if body.is_object()
+                        && body.get("protect_merge_request_pipelines").is_none()
+                    {
+                        match unexposed_merge_request_pipeline_state(ctx, run)? {
+                            StepState::Unsatisfied { detail } => {
+                                failures.push(format!("ci-permissions: {detail}"));
+                            }
+                            StepState::Unknown { detail } | StepState::Unreadable { detail } => {
+                                unknowns.push(format!("ci-permissions: {detail}"));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Api::Missing | Api::Failed(_) => {
+                    unknowns.push("the merge request pipeline setting is not readable".to_owned());
+                }
+            }
+            // The bot token, where an automatic release stores one: only a
+            // pipeline on a protected ref reads it. A missing variable is
+            // the bot-secrets step's own gap, not a protection's.
+            if ctx.automatic_release() {
+                match gitlab_bot_variable_state(ctx, run)? {
+                    BotVariable::Unprotected => {
+                        failures.push(format!("bot-secrets: {GITLAB_UNPROTECTED_BOT_VARIABLE}"));
+                    }
+                    BotVariable::Unreadable(err) => {
+                        unknowns.push(format!("bot-secrets: {err}"));
+                    }
+                    BotVariable::Protected | BotVariable::Missing => {}
                 }
             }
             Ok(if !failures.is_empty() {
@@ -2342,6 +3117,78 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
 
 #[cfg(test)]
 mod tests {
+    /// The ci-permissions observation of one GitLab project answer, with
+    /// the instance version that a second read answers.
+    fn ci_permissions_with(project: &str, version: Option<&str>) -> super::StepState {
+        let ctx = crate::setup::context::Ctx::for_tests(
+            camino::Utf8PathBuf::from("/tmp/target"),
+            "acme/widget".to_owned(),
+            crate::detect::Forge::Gitlab,
+            std::path::PathBuf::from("glab"),
+            Some("bash"),
+        );
+        let mut answers = vec![
+            Some(project.to_owned()),
+            version.map(|v| format!(r#"{{"version":"{v}"}}"#)),
+        ]
+        .into_iter();
+        super::observe(&ctx, "ci-permissions", &mut |_exec| {
+            Ok(answers.next().flatten().map_or_else(
+                || crate::setup::process::Outcome {
+                    exit_code: 1,
+                    stdout: Vec::new(),
+                    stderr: b"glab: dial tcp: connection refused".to_vec(),
+                },
+                |body| crate::setup::process::Outcome {
+                    exit_code: 0,
+                    stdout: body.into_bytes(),
+                    stderr: Vec::new(),
+                },
+            ))
+        })
+        .expect("the observation runs")
+    }
+
+    /// The merge request pipeline setting in all four of its branches: a
+    /// present attribute is judged by its value, and an absent one by the
+    /// instance version, where an unreadable version never passes.
+    ///
+    /// SATISFIES release-ref-rules:merge-request-pipelines-cannot-read-protected-variables
+    #[test]
+    fn the_merge_request_pipeline_setting_is_judged_in_four_branches() {
+        use super::StepState;
+        let present = |value: &str| {
+            ci_permissions_with(
+                &format!(r#"{{"jobs_enabled":true,"protect_merge_request_pipelines":{value}}}"#),
+                None,
+            )
+        };
+        assert!(matches!(present("false"), StepState::Satisfied { .. }));
+        assert!(matches!(present("true"), StepState::Unsatisfied { .. }));
+        let absent = r#"{"jobs_enabled":true}"#;
+        match ci_permissions_with(absent, Some("18.0.3-ee")) {
+            StepState::Satisfied { detail, .. } => {
+                assert!(detail.contains("predates 18.1"), "{detail}");
+            }
+            other => panic!("below 18.1: {other:?}"),
+        }
+        match ci_permissions_with(absent, Some("19.7.0-pre")) {
+            StepState::Unsatisfied { detail } => assert!(
+                detail.contains("18.10")
+                    && detail.contains("Maintainer")
+                    && detail.contains(
+                        "Allow merge request pipelines to access protected variables and runners"
+                    ),
+                "{detail}"
+            ),
+            other => panic!("from 18.1: {other:?}"),
+        }
+        assert!(
+            matches!(ci_permissions_with(absent, None), StepState::Unknown { .. }),
+            "an unreadable version never reads satisfied"
+        );
+    }
+
     /// The repository's rebase switch passes only where it reads on.
     #[test]
     fn merge_form_rebase_switch_is_judged() {

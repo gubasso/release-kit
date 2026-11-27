@@ -367,6 +367,7 @@ fn manifest_requesting(
             security_scope: String::new(),
             required_check: String::new(),
             dev_environment: None,
+            release_environment: String::new(),
         },
         files: Vec::new(),
         pins: std::collections::BTreeMap::new(),
@@ -3492,7 +3493,8 @@ fn the_setup_skill_restates_no_procedure() {
 
 /// Every situation the phase names, by file stem. The array's own length
 /// is the count.
-const SETUP_EVALS: [&str; 19] = [
+const SETUP_EVALS: [&str; 20] = [
+    "a-bot-key-the-process-cannot-read",
     "a-gitlab-project-that-releases-nothing",
     "a-knowledge-base-with-no-forge",
     "a-second-technology-without-a-release",
@@ -3655,6 +3657,48 @@ fn every_eval_reads_its_tasks_from_the_gate_table() {
             );
         }
     }
+}
+
+/// The unreadable-key case runs every other step, reports the two key
+/// steps with the requirement and its remedy, and asks for no secret, per
+/// `bot-key:an-unreadable-key-is-an-unmet-requirement`.
+#[test]
+fn the_rk_setup_evals_cover_a_bot_key_the_process_cannot_read() {
+    let evals = setup_evals();
+    let (_, text) = evals
+        .iter()
+        .find(|(stem, _)| stem == "a-bot-key-the-process-cannot-read")
+        .expect("the unreadable-key case exists");
+    let route = eval_section(text, "Route");
+    for step in ["`install-bot`", "`bot-secrets`"] {
+        assert!(route.contains(step), "the route names {step}");
+    }
+    assert!(route.contains("`unreadable`"), "the route reads the state");
+    assert!(
+        route.contains("Still the operator's") && route.contains("the remedy"),
+        "the report states the requirement and its remedy"
+    );
+    assert!(
+        !route.contains("rk setup step install-bot")
+            && !route.contains("rk setup step bot-secrets"),
+        "the route runs neither key step"
+    );
+    assert!(
+        eval_section(text, "Situation").contains("rk setup import-key"),
+        "the remedy names the import"
+    );
+    assert!(
+        eval_section(text, "Authority").contains("Never ask for the key"),
+        "the case asks for no secret"
+    );
+    // The skill carries the same stop, so the fixture and the manual route
+    // the case one way.
+    let skill = setup_skill();
+    assert!(skill.contains("`unreadable`"), "the skill names the state");
+    assert!(
+        setup_reference("forge-settings.md").contains("rk setup import-key"),
+        "the forge settings task names the import"
+    );
 }
 
 /// No file of the setup package and no fixture asks `rk` to select or
@@ -4363,7 +4407,7 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
 
 /// The forge-mutating step names: every one exists in both trees under the
 /// same name, per `forge-setup:every-supported-forge-runs-every-step`.
-const FORGE_STEPS: [&str; 12] = [
+const FORGE_STEPS: [&str; 13] = [
     "bot-secrets",
     "ci-permissions",
     "default-branch",
@@ -4371,6 +4415,7 @@ const FORGE_STEPS: [&str; 12] = [
     "merge-cleanup",
     "merge-on-order",
     "private-vulnerability-reporting",
+    "protect-release-branches",
     "protect-release-lines",
     "protect-tags",
     "protect-trunk",
@@ -4426,7 +4471,7 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
             Some(rest.split_whitespace().next()?.to_owned())
         })
         .collect();
-    assert_eq!(listed.len(), 15, "fifteen steps list: {text}");
+    assert_eq!(listed.len(), 16, "sixteen steps list: {text}");
     listed.retain(|name| {
         !["package-check", "branch-reminder", "forge-version"].contains(&name.as_str())
     });
@@ -4442,6 +4487,12 @@ fn every_setup_script_passes_the_static_battery() {
     let allowed = [
         "RK_REPO",
         "RK_BOT_NAME",
+        "RK_BOT_PROTECT",
+        "RK_BOT_SECRETS_SCOPE",
+        "RK_BOT_SECRETS_ENVIRONMENT",
+        "RK_ENVIRONMENT_BRANCH_PATTERNS",
+        "RK_ENVIRONMENT_TAG_PATTERNS",
+        "RK_RELEASE_ENVIRONMENTS",
         "RK_GITLAB_COM",
         "RK_FORGE",
         "RK_TRUNK_BRANCH",
@@ -4456,11 +4507,18 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_SAFETY_RULESET",
         "RK_TAG_RULESET",
         "RK_LINES_RULESET",
+        "RK_UPDATES_RULESET",
+        "RK_TAG_CREATION_RULESET",
+        "RK_TAG_CREATION_PATTERNS",
+        "RK_RELEASE_BRANCH_RULESET",
+        "RK_RELEASE_BRANCH_PATTERNS",
+        "RK_RELEASE_BYPASS_ACTORS",
         "RK_TITLE_CHECK",
         "RK_TRUNK_RULES",
         "RK_SAFETY_RULES",
         "RK_BYPASS_ACTORS",
         "RK_TAG_PATTERN",
+        "RK_AUTOMATIC_RELEASE",
         "RK_REVIEW_COUNT",
         "RK_DISMISS_STALE_REVIEWS",
         "RK_CODE_OWNER_REVIEW",
@@ -5229,14 +5287,28 @@ pr)
   fi
   exit 0;;
 secret)
+  # A secret lives at the repository level, or in the environment that
+  # --env names, each scope with an index of its own names.
   sub="$1"; shift
-  if [[ "$sub" == set ]]; then
-    value="$(cat)"
-    printf '%s\n' "$value" >> "$STATE/stdin-log"
-    echo "$1" >> "$STATE/secrets.index"
-    exit 0
-  fi
-  sort -u "$STATE/secrets.index" 2>/dev/null || true
+  name=""; index="$STATE/secrets.index"
+  while (($#)); do
+    case "$1" in
+      --env) index="$STATE/envsecrets_$2.index"; shift;;
+      --repo) shift;;
+      -*) ;;
+      *) [[ -z "$name" ]] && name="$1";;
+    esac
+    shift
+  done
+  case "$sub" in
+    set)
+      value="$(cat)"
+      printf '%s\n' "$value" >> "$STATE/stdin-log"
+      echo "$name" >> "$index";;
+    delete)
+      if [[ -f "$index" ]]; then grep -vxF "$name" "$index" > "$index.tmp"; mv -f "$index.tmp" "$index"; fi;;
+    *) sort -u "$index" 2>/dev/null || true;;
+  esac
   exit 0;;
 repo)
   sub="$1"; shift
@@ -5252,6 +5324,7 @@ api)
       -X) method="$2"; shift;;
       -f|-F) fields+=("$2"); shift;;
       -q|--jq) query="$2"; shift;;
+      -H) accept="$2"; shift;;
       --input) shift;;
       --paginate) ;;
       -*) ;;
@@ -5260,6 +5333,7 @@ api)
     shift
   done
   page=1; [[ "$path" =~ [?\&]page=([0-9]+) ]] && page="${BASH_REMATCH[1]}"
+  ref=""; [[ "$path" =~ [?\&]ref=([^\&]+) ]] && ref="${BASH_REMATCH[1]}"
   path="${path#/}"; path="${path%%\?*}"
   calls="$(cat "$STATE/api_calls" 2>/dev/null || echo 0)"; calls=$((calls + 1)); put_state api_calls "$calls"
   if [[ -f "$STATE/fail_call_$calls" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
@@ -5305,7 +5379,11 @@ api)
     elif [[ "$query" == ".allow_auto_merge" ]]; then echo "$self_merging"
     elif [[ "$query" == ".squash_merge_commit_title" ]]; then echo "${squash_title//\"/}"
     elif [[ "$query" == ".squash_merge_commit_message" ]]; then echo "${squash_message//\"/}"
-    else echo "{\"private\":$private,\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"allow_auto_merge\":$self_merging,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message$rebase_field}"; fi;;
+    else
+      visibility=public; [[ "$private" == true ]] && visibility=private
+      json="{\"private\":$private,\"visibility\":\"$visibility\",\"owner\":{\"login\":\"acme\",\"type\":\"$(cat "$STATE/owner_type" 2>/dev/null || echo Organization)\"},\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"allow_auto_merge\":$self_merging,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message$rebase_field}"
+      if [[ "$query" == .owner* || "$query" == .visibility ]]; then jq -r "$query" <<<"$json"; else echo "$json"; fi
+    fi;;
   "PATCH repos/acme/widget")
     for f in "${fields[@]}"; do
       case "$f" in
@@ -5339,6 +5417,58 @@ api)
     perms="none false"; [[ -f "$STATE/perms" ]] && perms="$(cat "$STATE/perms")"
     if [[ -n "$query" ]]; then echo "$perms"; else
       echo "{\"default_workflow_permissions\":\"${perms%% *}\",\"can_approve_pull_request_reviews\":${perms##* }}"
+    fi;;
+  # The owner's plan, which decides whether a private repository holds
+  # environment secrets.
+  "GET orgs/acme")
+    json="{\"login\":\"acme\",\"plan\":{\"name\":\"$(cat "$STATE/plan" 2>/dev/null || echo free)\"}}"
+    if [[ -n "$query" ]]; then jq -r "$query" <<<"$json"; else echo "$json"; fi;;
+  "GET user")
+    json="{\"login\":\"acme\",\"plan\":{\"name\":\"$(cat "$STATE/plan" 2>/dev/null || echo free)\"}}"
+    if [[ -n "$query" ]]; then jq -r "$query" <<<"$json"; else echo "$json"; fi;;
+  # A workflow file at one ref, seeded per test as contents_<ref with / as
+  # _>, raw where the caller asks for it.
+  "GET repos/acme/widget/contents/"*)
+    file="$STATE/contents_${ref//\//_}"
+    if [[ -f "$file" ]]; then cat "$file"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi;;
+  # An environment, its deployment policies, and its secrets.
+  "PUT repos/acme/widget/environments/"*)
+    env="${path##*/environments/}"
+    put_state "env_$env" "$stdin"
+    echo '{}';;
+  "GET repos/acme/widget/environments/"*"/deployment-branch-policies")
+    env="${path##*/environments/}"; env="${env%%/*}"
+    body='{"branch_policies":[]}'
+    if [[ -f "$STATE/envpol_$env" ]]; then
+      body="$(awk 'BEGIN { printf "{\"branch_policies\":[" } NF { if (n++) printf ","; printf "{\"id\":%s,\"type\":\"%s\",\"name\":\"%s\"}", $1, $2, $3 } END { printf "]}" }' "$STATE/envpol_$env")"
+    fi
+    if [[ -z "$query" ]]; then echo "$body"; else jq -r "$query" <<<"$body"; fi;;
+  "POST repos/acme/widget/environments/"*"/deployment-branch-policies")
+    env="${path##*/environments/}"; env="${env%%/*}"
+    name=""; type=branch
+    for f in "${fields[@]}"; do case "$f" in name=*) name="${f#name=}";; type=*) type="${f#type=}";; esac; done
+    id="$(( $(cat "$STATE/envpol_next" 2>/dev/null || echo 0) + 1 ))"; put_state envpol_next "$id"
+    echo "$id $type $name" >> "$STATE/envpol_$env"
+    echo '{}';;
+  "DELETE repos/acme/widget/environments/"*"/deployment-branch-policies/"*)
+    env="${path##*/environments/}"; env="${env%%/*}"; id="${path##*/}"
+    awk -v id="$id" '$1 != id' "$STATE/envpol_$env" > "$STATE/envpol_$env.tmp"; mv -f "$STATE/envpol_$env.tmp" "$STATE/envpol_$env"
+    echo '{}';;
+  "GET repos/acme/widget/environments/"*"/secrets")
+    env="${path##*/environments/}"; env="${env%%/*}"
+    names=""
+    if [[ -f "$STATE/envsecrets_$env.index" ]]; then
+      while read -r n; do names+="{\"name\":\"$n\"},"; done < <(sort -u "$STATE/envsecrets_$env.index")
+    fi
+    echo "{\"secrets\":[${names%,}]}";;
+  "GET repos/acme/widget/environments/"*)
+    env="${path##*/environments/}"
+    if [[ -f "$STATE/env_$env" ]]; then
+      policy="$(jq -c '.deployment_branch_policy' "$STATE/env_$env" 2>/dev/null || echo null)"
+      body="{\"name\":\"$env\",\"deployment_branch_policy\":${policy:-null}}"
+      if [[ -z "$query" ]]; then echo "$body"; else jq -r "$query" <<<"$body"; fi
+    else
+      echo "gh: Not Found (HTTP 404)" >&2; exit 1
     fi;;
   "GET repos/"*"/actions/secrets")
     names=""
@@ -5407,10 +5537,18 @@ cmd="$1"; shift
 case "$cmd" in
 auth) exit 0;;
 variable)
+  # The stored flag as the forge keeps it: an empty file is a protected
+  # variable, and "unprotected" is the shape before the flag. The value
+  # sits beside it, which a read answers back.
   sub="$1"; shift
+  key="$1"; shift
   value="$(cat)"
   printf '%s\n' "$value" >> "$STATE/stdin-log"
-  touch "$STATE/var_$1"
+  case " $* " in
+    *" --protected "*) : > "$STATE/var_$key";;
+    *) echo unprotected > "$STATE/var_$key";;
+  esac
+  printf '%s' "$value" > "$STATE/varvalue_$key"
   exit 0;;
 api)
   method=GET; path=""; fields=()
@@ -5426,7 +5564,10 @@ api)
   case "$method $path" in
   "GET "*"/variables/RELEASE_BOT_TOKEN")
     if [[ -f "$STATE/var_RELEASE_BOT_TOKEN" ]]; then
-      echo '{"key":"RELEASE_BOT_TOKEN","masked":true}'
+      protected=true
+      [[ "$(cat "$STATE/var_RELEASE_BOT_TOKEN")" == unprotected ]] && protected=false
+      value="$(cat "$STATE/varvalue_RELEASE_BOT_TOKEN" 2>/dev/null || echo glpat-stored)"
+      echo "{\"key\":\"RELEASE_BOT_TOKEN\",\"masked\":true,\"protected\":$protected,\"value\":\"$value\"}"
     else
       echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1
     fi;;
@@ -5490,10 +5631,38 @@ api)
       __fieldless__) echo '{"revision":"abc1234"}';;
       *) echo "{\"version\":\"$v\",\"revision\":\"abc1234\"}";;
     esac;;
-  "GET "*"/protected_tags/v%2A")
-    if [[ -f "$STATE/tag_protected" ]]; then echo '{"name":"v*"}'; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
+  # Every tag protection is kept by its encoded name, with the create
+  # level its creation asked for. The seed tag_protected stands for v* at
+  # Maintainer, and tag_protect_fail refuses the next protect call once.
+  "GET "*"/protected_tags/"*)
+    enc="${path##*/protected_tags/}"
+    if [[ -f "$STATE/pt_$enc" ]]; then cat "$STATE/pt_$enc"
+    elif [[ "$enc" == v%2A && -f "$STATE/tag_protected" ]]; then echo '{"name":"v*","create_access_levels":[{"access_level":40}]}'
+    else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
+  "GET "*"/protected_tags")
+    out=""
+    for f in "$STATE"/pt_*; do [[ -f "$f" ]] && out="$out$(cat "$f"),"; done
+    echo "[${out%,}]";;
+  "DELETE "*"/protected_tags/"*)
+    enc="${path##*/protected_tags/}"
+    rm -f "$STATE/pt_$enc"; [[ "$enc" == v%2A ]] && rm -f "$STATE/tag_protected"; echo '{}';;
   "POST "*"/protected_tags")
-    touch "$STATE/tag_protected"; echo '{}';;
+    if [[ -f "$STATE/tag_protect_fail" ]]; then rm -f "$STATE/tag_protect_fail"; echo "glab: 500 Internal Server Error (HTTP 500)" >&2; exit 1; fi
+    pt=""; create=""
+    for f in "${fields[@]}"; do
+      case "$f" in name=*) pt="${f#name=}";; create_access_level=*) create="${f#create_access_level=}";; esac
+    done
+    enc="$(printf '%s' "$pt" | sed 's|/|%2F|g; s|\*|%2A|g')"
+    if [[ -f "$STATE/pt_$enc" ]] || [[ "$enc" == v%2A && -f "$STATE/tag_protected" ]]; then echo "glab: 409 Conflict (HTTP 409)" >&2; exit 1; fi
+    echo "{\"name\":\"$pt\",\"create_access_levels\":[{\"access_level\":$create}]}" > "$STATE/pt_$enc"
+    [[ "$enc" == v%2A ]] && touch "$STATE/tag_protected"
+    echo '{}';;
+  # A long-lived branch beside the trunk stands only where a test seeds
+  # it, so a full apply meets a project that carries none.
+  "GET "*"/repository/branches/master") echo '{"name":"master"}';;
+  "GET "*"/repository/branches/"*)
+    name="${path##*/repository/branches/}"
+    if [[ -f "$STATE/glbranch_$name" ]]; then echo "{\"name\":\"$name\"}"; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
   "GET "*"/protected_branches/master")
     if [[ -f "$STATE/protected_master" ]]; then
       push="$(cat "$STATE/push_level" 2>/dev/null || echo 0)"
@@ -5502,9 +5671,30 @@ api)
     else
       echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1
     fi;;
+  # Every other protected branch is kept by its encoded name, with the
+  # levels its creation asked for, so a wildcard pattern reads back as
+  # the setup left it and never touches the trunk's own state.
   "GET "*"/protected_branches/"*)
-    echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1;;
+    enc="${path##*/protected_branches/}"
+    if [[ -f "$STATE/pb_$enc" ]]; then cat "$STATE/pb_$enc"; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
+  "DELETE "*"/protected_branches/master")
+    rm -f "$STATE/protected_master" "$STATE/push_level" "$STATE/merge_level"; echo '{}';;
+  "DELETE "*"/protected_branches/"*)
+    rm -f "$STATE/pb_${path##*/protected_branches/}"; echo '{}';;
   "POST "*"/protected_branches")
+    pb=""; push=""; merge=""
+    for f in "${fields[@]}"; do
+      case "$f" in
+        name=*) pb="${f#name=}";;
+        push_access_level=*) push="${f#push_access_level=}";;
+        merge_access_level=*) merge="${f#merge_access_level=}";;
+      esac
+    done
+    if [[ -n "$pb" && "$pb" != master ]]; then
+      enc="$(printf '%s' "$pb" | sed 's|/|%2F|g; s|\*|%2A|g')"
+      echo "{\"name\":\"$pb\",\"push_access_levels\":[{\"access_level\":$push}],\"merge_access_levels\":[{\"access_level\":$merge}],\"allow_force_push\":false}" > "$STATE/pb_$enc"
+      echo '{}'; exit 0
+    fi
     # The levels the creation asked for are the levels a read returns,
     # so a trunk protected for local integration reads back as such.
     for f in "${fields[@]}"; do
@@ -5515,6 +5705,8 @@ api)
     done
     touch "$STATE/protected_master"; echo '{}';;
   "PATCH "*"/protected_branches/master")
+    echo '{}';;
+  "PATCH "*"/protected_branches/"*)
     echo '{}';;
   # The open merge requests, seeded per test, and the cancel that
   # disarms one of them.
@@ -5537,6 +5729,8 @@ api)
         merge_method=*) echo "${f#merge_method=}" > "$STATE/merge_method";;
         squash_option=*) echo "${f#squash_option=}" > "$STATE/squash_option";;
         squash_commit_template=*) echo "${f#squash_commit_template=}" > "$STATE/squash_commit_template";;
+        protect_merge_request_pipelines=*) echo "${f#protect_merge_request_pipelines=}" > "$STATE/mr_pipelines";;
+        builds_access_level=enabled) echo true > "$STATE/jobs_enabled";;
       esac
     done
     echo '{}';;
@@ -5550,7 +5744,12 @@ api)
     merging="$(cat "$STATE/merge_method" 2>/dev/null || echo merge)"
     squashing="$(cat "$STATE/squash_option" 2>/dev/null || echo never)"
     template="$(cat "$STATE/squash_commit_template" 2>/dev/null || echo)"
-    echo "{\"issues_access_level\":\"$access\",\"issues_enabled\":$legacy,\"id\":$(cat "$STATE/project_id" 2>/dev/null || echo 1),\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":$piped,\"merge_method\":\"$merging\",\"squash_option\":\"$squashing\",\"remove_source_branch_after_merge\":$removing,\"squash_commit_template\":\"$template\"}";;
+    # The merge request pipeline setting: off unless a test seeds it, and
+    # absent where a test seeds an instance older than the setting.
+    mrp="$(cat "$STATE/mr_pipelines" 2>/dev/null || echo false)"
+    jobs="$(cat "$STATE/jobs_enabled" 2>/dev/null || echo true)"
+    if [[ "$mrp" == absent ]]; then mrp_field=""; else mrp_field=",\"protect_merge_request_pipelines\":$mrp"; fi
+    echo "{\"issues_access_level\":\"$access\",\"issues_enabled\":$legacy,\"id\":$(cat "$STATE/project_id" 2>/dev/null || echo 1),\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":$jobs,\"only_allow_merge_if_pipeline_succeeds\":$piped,\"merge_method\":\"$merging\",\"squash_option\":\"$squashing\",\"remove_source_branch_after_merge\":$removing,\"squash_commit_template\":\"$template\"$mrp_field}";;
   *) echo '{}';;
   esac
   exit 0;;
@@ -5854,6 +6053,8 @@ impl ForgeFixture {
         command
             .env("HOME", self.home.path())
             .env("XDG_STATE_HOME", self.home.path())
+            // The default bot key path roots here, never in the caller's.
+            .env_remove("XDG_CONFIG_HOME")
             .env("RK_GH_BIN", self.mock.path().join("gh"))
             .env("RK_GLAB_BIN", self.mock.path().join("glab"))
             .env("RK_HTTP_ORIGIN", self.http.origin())
@@ -5957,8 +6158,8 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
     assert_eq!(
         rulesets.lines().count(),
-        3,
-        "exactly three protections: {rulesets}"
+        6,
+        "exactly six protections: {rulesets}"
     );
     let body = std::fs::read_to_string(fixture.state("ruleset_master-protection")).expect("reads");
     // Read as JSON rather than as text: the rules are composed from the
@@ -6117,7 +6318,7 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
     assert_eq!(
         rulesets.lines().count(),
-        4,
+        7,
         "the optional protection joins the owned set: {rulesets}"
     );
 
@@ -6135,8 +6336,8 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
 }
 
 /// Without the App credentials the installation is unreadable: the check
-/// reports the step unknown by name, with the exports that answer it, and
-/// spends no forge call finding out.
+/// reports the step unknown by name, with the App ID as the missing fact,
+/// and spends no forge call finding out.
 #[test]
 fn check_reports_install_bot_unknown_without_app_credentials() {
     let fixture = ForgeFixture::new();
@@ -6150,8 +6351,8 @@ fn check_reports_install_bot_unknown_without_app_credentials() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("unknown install-bot"), "{text}");
     assert!(
-        text.contains("RK_BOT_APP_ID and RK_BOT_PRIVATE_KEY_FILE"),
-        "the remediation names the exports: {text}"
+        text.contains("set setup.bot.app_id") && text.contains("RK_BOT_APP_ID"),
+        "the remediation names the App ID: {text}"
     );
     assert!(
         !fixture.state("curl-log").exists(),
@@ -6338,68 +6539,469 @@ fn the_status_names_what_moved_since_the_proof() {
     assert_eq!(status(&[])["state"], "absent");
 }
 
-/// A key the check cannot reach leaves install-bot unknown and every
-/// other step observed. The verdict names an incomplete observation, not
-/// drift, and prescribes no apply; beside a compatible proof it says the
-/// proof still matches and that no defect was inferred.
+/// A key file the check cannot read leaves both key steps `unreadable`,
+/// with the path and the remedy, and every other step observed. That is
+/// an unmet requirement, not a setup defect, so the check exits 0 and
+/// names it once in a summary line, whichever source named the path.
 ///
 /// SATISFIES setup-proof:an-unavailable-credential-is-an-observation-boundary
+/// SATISFIES bot-key:an-unreadable-key-is-an-unmet-requirement
 #[test]
-fn a_check_reads_an_unreachable_key_as_an_observation_boundary() {
-    let (fixture, key) = a_proven_setup();
+fn a_check_reports_an_unreadable_key_as_an_unmet_requirement() {
+    let (fixture, _) = a_proven_setup();
     let unreachable = fixture.home.path().join("mounted-elsewhere/bot.pem");
-    let check = |fixture: &ForgeFixture, key_path: &Path| {
-        let assert = with_app(fixture, key_path, &["setup", "check"])
-            .assert()
-            .code(1);
-        let out = assert.get_output();
-        (
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
+    let check = |command: &mut Rk| {
+        let out = command.assert().success().get_output().clone();
+        String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let (stdout, stderr) = check(&fixture, &unreachable);
-    assert!(stdout.contains("unknown install-bot"), "{stdout}");
+    let stdout = check(&mut with_app(&fixture, &unreachable, &["setup", "check"]));
+    for step in ["install-bot", "bot-secrets"] {
+        assert!(stdout.contains(&format!("unreadable {step}")), "{stdout}");
+    }
+    assert!(
+        stdout.contains(&unreachable.display().to_string()),
+        "{stdout}"
+    );
+    assert!(stdout.contains("rk setup import-key <file>"), "{stdout}");
     assert!(
         stdout.contains("ok protections-check"),
         "the check stopped early: {stdout}"
     );
+    assert!(stdout.contains("unmet requirement"), "{stdout}");
     assert!(
-        stderr.contains("could not be verified from this runtime"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("no compatible .release-kit/setup-proof.json"),
-        "{stderr}"
-    );
-    assert!(
-        !stderr.contains("--apply"),
-        "an unknown step prescribed an apply: {stderr}"
+        !stdout.contains("--apply re-asserts"),
+        "an unreadable key prescribed an apply: {stdout}"
     );
 
-    with_app(&fixture, &key, &["setup", "checkpoint"])
+    // An unreadable file is the same requirement.
+    let locked = fixture.key_file_with("locked.pem", "", 0o000);
+    let stdout = check(&mut with_app(&fixture, &locked, &["setup", "check"]));
+    assert!(stdout.contains("unreadable install-bot"), "{stdout}");
+
+    // So is a default path the process cannot read, with no export of
+    // the path at all.
+    let default = default_key_path(&fixture);
+    write_key_at(&default, test_app_key(), 0o600);
+    std::fs::set_permissions(
+        default.parent().expect("a folder"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o000),
+    )
+    .expect("the folder locks");
+    let mut command = fixture.rk(&["setup", "check"]);
+    command
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_BOT_APP_ID", "314159");
+    let stdout = check(&mut command);
+    std::fs::set_permissions(
+        default.parent().expect("a folder"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .expect("the folder unlocks");
+    for step in ["install-bot", "bot-secrets"] {
+        assert!(stdout.contains(&format!("unreadable {step}")), "{stdout}");
+    }
+
+    // The machine form carries the state, beside every other step's.
+    let events = check_events(&fixture, &unreachable);
+    for step in ["install-bot", "bot-secrets"] {
+        assert_eq!(events[step]["status"], "unreadable", "{step}");
+    }
+    assert_eq!(events["protections-check"]["status"], "satisfied");
+}
+
+/// The `unreadable` detail names the requirement, the path, and the two
+/// remedies, and nothing about who or what runs the check.
+///
+/// SATISFIES bot-key:an-unreadable-key-is-an-unmet-requirement
+#[test]
+fn the_unreadable_detail_names_only_the_requirement_and_its_remedy() {
+    let (fixture, _) = a_proven_setup();
+    let unreachable = fixture.home.path().join("mounted-elsewhere/bot.pem");
+    let events = check_events(&fixture, &unreachable);
+    let detail = events["install-bot"]["detail"]
+        .as_str()
+        .expect("a detail")
+        .to_owned();
+    let path = unreachable.display().to_string();
+    assert!(detail.contains(&path), "{detail}");
+    assert!(detail.contains("rk setup import-key"), "{detail}");
+    assert!(detail.contains("RK_BOT_PRIVATE_KEY_FILE"), "{detail}");
+    let words = detail.replace(&path, "").to_lowercase();
+    for word in ["operator", "sandbox", "container", "host"] {
+        assert!(!words.contains(word), "{word}: {detail}");
+    }
+}
+
+/// The check's events by step name, run with `key` as the key file.
+fn check_events(
+    fixture: &ForgeFixture,
+    key: &Path,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let out = with_app(fixture, key, &["setup", "check", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|event| {
+            let step = event["step"].as_str()?.to_owned();
+            event["status"].is_string().then_some((step, event))
+        })
+        .collect()
+}
+
+/// The default key path of the test App under a fixture's home.
+fn default_key_path(fixture: &ForgeFixture) -> PathBuf {
+    fixture
+        .home
+        .path()
+        .join(".config/release-kit/bot/github/314159.pem")
+}
+
+/// A key file at `path`, with its folder owner-only.
+fn write_key_at(path: &Path, body: &str, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = path.parent().expect("a folder");
+    std::fs::create_dir_all(dir).expect("the folder creates");
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).expect("0700");
+    std::fs::write(path, body).expect("the key writes");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("the mode");
+}
+
+/// The fixture target commits the test App's ID.
+fn commit_app_id(fixture: &ForgeFixture) {
+    let dir = fixture.target.path().join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the config dir creates");
+    std::fs::write(
+        dir.join("config.toml"),
+        "schema_version = 2\n[setup.bot]\napp_id = \"314159\"\n",
+    )
+    .expect("the config writes");
+}
+
+/// A public key in PEM armor, assembled so the repository's private-key
+/// scan keeps firing on real keys only.
+fn public_pem() -> String {
+    let label = "PUBLIC KEY";
+    format!("-----BEGIN {label}-----\nc2VrcmV0LXBlbS1ieXRlcyE=\n-----END {label}-----\n")
+}
+
+/// An import of `download` with the test App's ID exported.
+fn import(fixture: &ForgeFixture, download: &Path, extra: &[&str]) -> Rk {
+    let mut command = fixture.rk(&["setup", "import-key"]);
+    command
+        .arg(download)
+        .args(extra)
+        .env("RK_BOT_APP_ID", "314159");
+    command
+}
+
+/// The mode bits of a path.
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path)
+        .expect("the path exists")
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+/// The configuration root is an absolute `XDG_CONFIG_HOME`, and
+/// `$HOME/.config` where the variable is relative or unset.
+///
+/// SATISFIES bot-key:the-key-has-one-default-path
+#[test]
+fn the_default_key_path_follows_xdg_config_home() {
+    let fixture = ForgeFixture::new();
+    let xdg = fixture.home.path().join("xdg");
+    let download = fixture.key_file_with("download.pem", test_app_key(), 0o644);
+    import(&fixture, &download, &[])
+        .env("XDG_CONFIG_HOME", &xdg)
         .assert()
         .success();
-    let (_, stderr) = check(&fixture, &unreachable);
-    assert!(
-        stderr.contains("still matches this target's setup contract"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("no setup defect was inferred"), "{stderr}");
+    assert!(xdg.join("release-kit/bot/github/314159.pem").is_file());
 
-    // An unreadable file is the same boundary.
-    let locked = fixture.key_file_with("locked.pem", "", 0o000);
-    let (stdout, _) = check(&fixture, &locked);
-    assert!(stdout.contains("unknown install-bot"), "{stdout}");
+    let download = fixture.key_file_with("download.pem", test_app_key(), 0o644);
+    import(&fixture, &download, &[])
+        .env("XDG_CONFIG_HOME", "relative/config")
+        .assert()
+        .success();
+    assert!(default_key_path(&fixture).is_file());
+}
 
-    // The machine form names the reason.
-    let out = with_app(&fixture, &unreachable, &["setup", "check", "--json"])
+/// The variable wins over the user configuration, which wins over the
+/// default path. Each candidate is group-readable, so the refusal names
+/// the one file the lookup chose.
+///
+/// SATISFIES bot-key:three-sources-name-the-key-in-a-fixed-order
+#[test]
+fn the_key_path_resolves_variable_then_user_config_then_default() {
+    let fixture = ForgeFixture::new();
+    let default = default_key_path(&fixture);
+    write_key_at(&default, test_app_key(), 0o644);
+    let configured = fixture.key_file_with("configured.pem", test_app_key(), 0o644);
+    let variable = fixture.key_file_with("variable.pem", test_app_key(), 0o644);
+    let config = fixture.home.path().join(".config/release-kit/config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[bot.github.private_key_files]\n\"314159\" = \"{}\"\n",
+            configured.display()
+        ),
+    )
+    .expect("the user configuration writes");
+    let refused = |variable: Option<&Path>| {
+        let mut command = fixture.rk(&["setup", "check"]);
+        command
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .env("RK_BOT_APP_ID", "314159");
+        if let Some(path) = variable {
+            command.env("RK_BOT_PRIVATE_KEY_FILE", path);
+        }
+        let out = command.assert().code(73).get_output().clone();
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let canonical = |path: &Path| {
+        std::fs::canonicalize(path)
+            .expect("canonical")
+            .display()
+            .to_string()
+    };
+    let stderr = refused(Some(&variable));
+    assert!(stderr.contains(&canonical(&variable)), "{stderr}");
+    let stderr = refused(None);
+    assert!(stderr.contains(&canonical(&configured)), "{stderr}");
+    std::fs::remove_file(&config).expect("the user configuration goes");
+    let stderr = refused(None);
+    assert!(stderr.contains(&canonical(&default)), "{stderr}");
+}
+
+/// Nothing at the default path means no key was imported yet: the check
+/// reads the App's installation as unknown and names the import, and an
+/// apply of bot-secrets refuses with the same remedy.
+///
+/// SATISFIES bot-key:three-sources-name-the-key-in-a-fixed-order
+#[test]
+fn a_missing_default_key_is_absent_and_names_the_import() {
+    let fixture = ForgeFixture::new();
+    let default = default_key_path(&fixture).display().to_string();
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_BOT_APP_ID", "314159")
         .assert()
         .code(1)
         .get_output()
         .clone();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("observation-incomplete"), "{stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("unknown install-bot"), "{stdout}");
+    assert!(!stdout.contains("unreadable install-bot"), "{stdout}");
+    assert!(stdout.contains("rk setup import-key"), "{stdout}");
+    assert!(stdout.contains(&default), "{stdout}");
+    fixture
+        .rk(&["setup", "step", "bot-secrets", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_BOT_APP_ID", "314159")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("rk setup import-key"))
+        .stderr(predicate::str::contains(default));
+}
+
+/// The import writes an owner-only file in an owner-only folder, deletes
+/// the download, and names the next command, without one key byte.
+///
+/// SATISFIES bot-key:the-import-checks-and-writes-the-key-atomically
+#[test]
+fn import_key_moves_the_download_to_the_default_path_owner_only() {
+    let fixture = ForgeFixture::new();
+    let download = fixture.key_file_with("download.pem", test_app_key(), 0o644);
+    let out = import(&fixture, &download, &[])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let default = default_key_path(&fixture);
+    assert_eq!(
+        std::fs::read_to_string(&default).expect("the key reads"),
+        test_app_key()
+    );
+    assert_eq!(mode_of(&default), 0o600);
+    assert_eq!(mode_of(default.parent().expect("a folder")), 0o700);
+    assert!(!download.exists(), "the download stayed");
+    assert!(stdout.contains("rk setup step bot-secrets"), "{stdout}");
+    assert!(!stdout.contains(&app_key_needle()), "{stdout}");
+    let left: Vec<_> = std::fs::read_dir(default.parent().expect("a folder"))
+        .expect("the folder lists")
+        .collect();
+    assert_eq!(left.len(), 1, "a temporary file stayed");
+}
+
+/// A download that fails a check stays where it is, and no file is left
+/// at the default path or beside it.
+///
+/// SATISFIES bot-key:the-import-checks-and-writes-the-key-atomically
+#[test]
+fn import_key_keeps_the_download_when_a_check_fails() {
+    let fixture = ForgeFixture::new();
+    let public = fixture.key_file_with("public.pem", &public_pem(), 0o644);
+    let empty = fixture.key_file_with("empty.pem", "", 0o644);
+    let in_tree = fixture.target.path().join("bot.pem");
+    std::fs::write(&in_tree, test_app_key()).expect("the in-tree key writes");
+    for (download, expected) in [
+        (public, "is not a PEM-encoded private key"),
+        (empty, "is empty"),
+        (in_tree, "inside the repository being set up"),
+    ] {
+        import(&fixture, &download, &[])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected));
+        assert!(download.exists(), "{expected}: the download went");
+        let default = default_key_path(&fixture);
+        assert!(!default.exists(), "{expected}: a key was written");
+        if let Ok(entries) = std::fs::read_dir(default.parent().expect("a folder")) {
+            assert_eq!(entries.count(), 0, "{expected}: a temporary file stayed");
+        }
+    }
+}
+
+/// A key already at the default path stays unless `--replace` names the
+/// rotation.
+///
+/// SATISFIES bot-key:the-import-checks-and-writes-the-key-atomically
+#[test]
+fn import_key_refuses_an_existing_key_without_replace() {
+    let fixture = ForgeFixture::new();
+    let first = fixture.key_file_with("first.pem", test_app_key(), 0o644);
+    import(&fixture, &first, &[]).assert().success();
+    let second = fixture.key_file_with("second.pem", FAKE_PEM, 0o644);
+    import(&fixture, &second, &[])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--replace"));
+    assert!(second.exists(), "the refused download went");
+    assert_eq!(
+        std::fs::read_to_string(default_key_path(&fixture)).expect("reads"),
+        test_app_key()
+    );
+    import(&fixture, &second, &["--replace"]).assert().success();
+    assert_eq!(
+        std::fs::read_to_string(default_key_path(&fixture)).expect("reads"),
+        FAKE_PEM
+    );
+}
+
+/// A link at the default path, or a linked folder on it, means the key is
+/// managed elsewhere: the import refuses with or without `--replace`, and
+/// the link stays as it was.
+///
+/// SATISFIES bot-key:the-import-checks-and-writes-the-key-atomically
+#[test]
+fn import_key_refuses_a_symlinked_default_path_even_with_replace() {
+    let fixture = ForgeFixture::new();
+    let managed = fixture.key_file_with("managed.pem", test_app_key(), 0o600);
+    let default = default_key_path(&fixture);
+    let dir = default.parent().expect("a folder");
+    std::fs::create_dir_all(dir).expect("the folder creates");
+    std::os::unix::fs::symlink(&managed, &default).expect("the link creates");
+    let download = fixture.key_file_with("download.pem", FAKE_PEM, 0o644);
+    for extra in [&[][..], &["--replace"][..]] {
+        import(&fixture, &download, extra)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("managed elsewhere"))
+            .stderr(predicate::str::contains(
+                "rk setup step bot-secrets --apply",
+            ));
+        assert_eq!(std::fs::read_link(&default).expect("still a link"), managed);
+        assert!(download.exists());
+    }
+
+    std::fs::remove_file(&default).expect("the link goes");
+    std::fs::remove_dir(dir).expect("the folder goes");
+    let elsewhere = fixture.home.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("the target folder creates");
+    std::os::unix::fs::symlink(&elsewhere, dir).expect("the folder link creates");
+    import(&fixture, &download, &["--replace"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("managed elsewhere"));
+    assert_eq!(std::fs::read_link(dir).expect("still a link"), elsewhere);
+    assert_eq!(std::fs::read_dir(&elsewhere).expect("lists").count(), 0);
+}
+
+/// Where the variable or the user configuration names another path, the
+/// key the import would write is not the key rk reads, so it refuses and
+/// names the source.
+///
+/// SATISFIES bot-key:the-import-checks-and-writes-the-key-atomically
+#[test]
+fn import_key_refuses_where_another_source_names_the_key() {
+    let fixture = ForgeFixture::new();
+    let download = fixture.key_file_with("download.pem", test_app_key(), 0o644);
+    let other = fixture.key_file_with("other.pem", test_app_key(), 0o600);
+    import(&fixture, &download, &[])
+        .env("RK_BOT_PRIVATE_KEY_FILE", &other)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("RK_BOT_PRIVATE_KEY_FILE names"));
+    let config = fixture.home.path().join(".config/release-kit/config.toml");
+    std::fs::create_dir_all(config.parent().expect("a folder")).expect("the folder creates");
+    std::fs::write(
+        &config,
+        format!(
+            "[bot.github.private_key_files]\n\"314159\" = \"{}\"\n",
+            other.display()
+        ),
+    )
+    .expect("the user configuration writes");
+    import(&fixture, &download, &[])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("config.toml names"));
+    assert!(download.exists());
+    assert!(!default_key_path(&fixture).exists());
+}
+
+/// A target that commits its App ID and holds an imported key runs both
+/// key steps with no `RK_BOT_*` export: the step stores the App ID from
+/// the configuration and the key from the default path.
+///
+/// SATISFIES bot-key:three-sources-name-the-key-in-a-fixed-order
+#[test]
+fn bot_secrets_takes_the_app_id_from_the_committed_config() {
+    let fixture = ForgeFixture::new();
+    commit_app_id(&fixture);
+    let download = fixture.key_file_with("download.pem", test_app_key(), 0o644);
+    fixture
+        .rk(&["setup", "import-key"])
+        .arg(&download)
+        .assert()
+        .success();
+    fixture
+        .rk(&["setup", "step", "bot-secrets", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success();
+    let stdin = fixture.stdin_log();
+    assert!(stdin.contains("314159"), "{stdin}");
+    assert!(stdin.contains(&app_key_needle()), "{stdin}");
+    assert!(
+        std::fs::read_to_string(fixture.state("envsecrets_release.index"))
+            .unwrap_or_default()
+            .contains("RELEASE_BOT_APP_ID"),
+        "the App ID secret was not stored in the release environment"
+    );
+    std::fs::write(fixture.state("installed"), "").expect("the installation exists");
+    fixture
+        .rk(&["setup", "step", "install-bot", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success();
 }
 
 /// A run that would mutate the forge, or record a proof, needs the key:
@@ -6423,6 +7025,27 @@ fn apply_and_checkpoint_refuse_an_unreachable_key_and_every_mode_refuses_a_wrong
     )
     .assert()
     .code(73);
+    // The default path is the same requirement where the process cannot
+    // read it.
+    let default = default_key_path(&fixture);
+    write_key_at(&default, test_app_key(), 0o600);
+    let folder = default.parent().expect("a folder").to_owned();
+    std::fs::set_permissions(&folder, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+        .expect("the folder locks");
+    for action in [
+        &["setup", "checkpoint"][..],
+        &["setup", "step", "bot-secrets", "--apply"][..],
+    ] {
+        fixture
+            .rk(action)
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .env("RK_BOT_APP_ID", "314159")
+            .assert()
+            .code(73);
+    }
+    std::fs::set_permissions(&folder, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+        .expect("the folder unlocks");
+    assert!(!proof_path(&fixture).exists());
     let new_calls = &fixture.log()[calls.len()..];
     assert!(
         !new_calls.contains("-X POST") && !new_calls.contains("-X PUT"),
@@ -7696,6 +8319,69 @@ fn owned_safety_ruleset() -> String {
     .to_owned()
 }
 
+/// The trunk updates ruleset the setup owns where no release App ID
+/// resolves: the update rule alone, passed by the administrator role.
+fn owned_updates_ruleset() -> String {
+    r#"{
+  "name": "master-updates",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
+  },
+  "rules": [{ "type": "update" }]
+}"#
+    .to_owned()
+}
+
+/// A release ruleset the setup owns where no release App ID resolves:
+/// `rules` alone over `include`, passed by the administrator role.
+fn owned_release_ruleset(name: &str, target: &str, include: &[&str], rules: &[&str]) -> String {
+    serde_json::json!({
+        "name": name,
+        "target": target,
+        "enforcement": "active",
+        "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
+        "conditions": {"ref_name": {"include": include, "exclude": []}},
+        "rules": rules.iter().map(|kind| serde_json::json!({"type": kind})).collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+/// The patterns of the release branch ruleset at the default line prefix.
+const RELEASE_BRANCH_PATTERNS: [&str; 4] = [
+    "refs/heads/release/**/*",
+    "refs/heads/release-plz-*",
+    "refs/heads/release-plz-*/**/*",
+    "refs/heads/rk-release/**/*",
+];
+
+/// Seed the updates ruleset, the tag creation ruleset over
+/// `tag_patterns`, and the release branch ruleset, each as the setup owns
+/// it, and list them after the rulesets the index already names.
+fn seed_release_rulesets(fixture: &ForgeFixture, tag_patterns: &[&str]) {
+    let index = std::fs::read_to_string(fixture.state("rulesets.index")).unwrap_or_default();
+    fixture.seed(
+        "rulesets.index",
+        &format!("{index}master-updates\nrelease-tag-creation\nrelease-branches\n"),
+    );
+    fixture.seed("ruleset_master-updates", &owned_updates_ruleset());
+    fixture.seed(
+        "ruleset_release-tag-creation",
+        &owned_release_ruleset("release-tag-creation", "tag", tag_patterns, &["creation"]),
+    );
+    fixture.seed(
+        "ruleset_release-branches",
+        &owned_release_ruleset(
+            "release-branches",
+            "branch",
+            &RELEASE_BRANCH_PATTERNS,
+            &["creation", "update"],
+        ),
+    );
+}
+
 /// A trunk ruleset the setup owns, plus whatever extra rules a case adds.
 fn owned_trunk_ruleset(extra: &str, strict: Option<bool>) -> String {
     let policy = strict.map_or_else(String::new, |value| {
@@ -7730,7 +8416,11 @@ fn check_owned_trunk(fixture: &ForgeFixture, extra: &str, strict: Option<bool>) 
     fixture.seed("squash_merge_commit_title", "PR_TITLE");
     fixture.seed("squash_merge_commit_message", "PR_BODY");
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nmaster-updates\n",
+    );
+    fixture.seed("ruleset_master-updates", &owned_updates_ruleset());
     fixture.seed(
         "ruleset_master-protection",
         &owned_trunk_ruleset(extra, strict),
@@ -7963,7 +8653,11 @@ fn a_safety_rule_on_the_bypassed_ruleset_reads_as_drift() {
     fixture.seed("squash_merge_commit_title", "PR_TITLE");
     fixture.seed("squash_merge_commit_message", "PR_BODY");
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nmaster-updates\n",
+    );
+    fixture.seed("ruleset_master-updates", &owned_updates_ruleset());
     fixture.seed("ruleset_master-protection", &body.to_string());
     fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     let line = protect_trunk_line(&fixture, Some("test-check"));
@@ -8037,7 +8731,11 @@ fn the_applied_trunk_ruleset_requires_a_fresh_branch() {
 fn check_reports_a_ruleset_covering_the_wrong_ref() {
     let fixture = ForgeFixture::new();
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nmaster-updates\n",
+    );
+    fixture.seed("ruleset_master-updates", &owned_updates_ruleset());
     fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
@@ -8120,7 +8818,11 @@ fn check_reports_a_ruleset_covering_the_wrong_ref() {
 fn check_keeps_proven_trunk_drift_over_a_settings_outage() {
     let fixture = ForgeFixture::new();
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nmaster-updates\n",
+    );
+    fixture.seed("ruleset_master-updates", &owned_updates_ruleset());
     fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
@@ -8209,6 +8911,7 @@ fn protections_check_apply_reads_back_through_the_observation() {
   ]
 }"#,
     );
+    seed_release_rulesets(&fixture, &["refs/tags/v*"]);
     fixture
         .rk(&["setup", "step", "protections-check", "--apply"])
         .args(["--repo", "acme/widget", "--forge", "github"])
@@ -18977,7 +19680,11 @@ fn a_nested_draft_reference_is_reported_once() {
 fn check_reports_a_drifted_squash_message_source() {
     let fixture = ForgeFixture::new();
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nmaster-updates\n",
+    );
+    fixture.seed("ruleset_master-updates", &owned_updates_ruleset());
     fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
@@ -23018,7 +23725,11 @@ fn assess_discovers_the_repository_under_a_foreign_git_dir_and_locale() {
 /// title check, and both squash sources owned.
 fn seed_owned_trunk(fixture: &ForgeFixture) {
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nmaster-updates\n",
+    );
+    fixture.seed("ruleset_master-updates", &owned_updates_ruleset());
     fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
@@ -25317,6 +26028,7 @@ fn reporting_observation(
         StepState::Unsatisfied { .. } => "unsatisfied",
         StepState::Inapplicable { .. } => "skipped",
         StepState::Unknown { .. } => "unknown",
+        StepState::Unreadable { .. } => "unreadable",
     };
     assert_eq!(actual, expected, "{responses:?}");
     let root = if forge == release_kit::detect::Forge::Github {
@@ -27987,7 +28699,7 @@ fn a_stricter_policy_still_installs_the_protection() {
 
 /// Every step the unconfigured fixture cannot satisfy, as the exclusion
 /// table a target that runs none of them commits.
-const EVERY_UNRUN_STEP: [(&str, &str); 13] = [
+const EVERY_UNRUN_STEP: [(&str, &str); 14] = [
     (
         "default-branch",
         "the forge default is this project's trunk already",
@@ -28009,6 +28721,10 @@ const EVERY_UNRUN_STEP: [(&str, &str); 13] = [
         "changes merge locally; there is no request per change",
     ),
     ("protect-tags", "this project cuts no tags"),
+    (
+        "protect-release-branches",
+        "no release branch exists to protect",
+    ),
     (
         "merge-on-order",
         "no request merges itself without a release decision",
@@ -28173,15 +28889,16 @@ fn a_full_apply_skips_an_excluded_step_and_demands_nothing_for_it() {
         text.contains("  excluded protect-trunk"),
         "the run's summary keeps the exclusion:\n{text}"
     );
-    // protect-tags is the one protection this target runs, so exactly one
-    // ruleset is created: the excluded step materialized no script and
-    // wrote nothing.
+    // protect-tags and protect-release-branches are the protections this
+    // target runs, so exactly three rulesets are created: the two tag
+    // rulesets and the release branch ruleset. The excluded step
+    // materialized no script and wrote nothing.
     assert_eq!(
         fixture
             .log()
             .matches("api -X POST repos/acme/widget/rulesets")
             .count(),
-        1,
+        3,
         "an excluded step writes nothing to the forge:\n{}",
         fixture.log()
     );
@@ -29715,6 +30432,7 @@ fn record_signature_line(
             security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
             dev_environment: None,
+            release_environment: String::new(),
         },
         files: vec![
             FileRecord {
@@ -29814,6 +30532,243 @@ fn run_step(script: &str, dir: &Path, env: &[(&str, &str)]) -> std::process::Out
         command.env(key, value);
     }
     command.output().expect("sh runs")
+}
+
+/// The environments of one landed target, read from its record.
+fn landed_release_environments(target: &Path) -> Vec<String> {
+    let root = camino::Utf8Path::from_path(target).expect("utf-8");
+    let record = release_kit::landing::manifest::load(root)
+        .expect("the record reads")
+        .expect("the record exists");
+    release_kit::projection::release_environments(&release_kit::landing::Params::from_record(
+        &record,
+    ))
+}
+
+/// SATISFIES release-ref-rules:the-github-bot-secrets-live-in-the-release-environment
+/// Every job of a rendered GitHub release workflow that mints the release
+/// App token names the release environment. The python release job keeps
+/// the registry's own environment where it publishes, because the
+/// registry's trusted publisher names it.
+#[test]
+fn every_github_app_token_job_names_the_release_environment() {
+    use release_kit::landing::Integration;
+    for driver in ["rust", "python", "bash"] {
+        for integration in [Integration::Local, Integration::Forge] {
+            let workflow = release_workflow(driver, integration);
+            let jobs = release_kit::projection::app_token_jobs(&workflow);
+            assert!(jobs.len() >= 3, "{driver}: {jobs:?}");
+            for (job, environment) in &jobs {
+                let wanted = if driver == "python" && job == "release" {
+                    "pypi"
+                } else {
+                    "release"
+                };
+                assert_eq!(environment.as_deref(), Some(wanted), "{driver} {job}");
+            }
+            assert!(
+                workflow.contains("    environment: \"release\"\n"),
+                "{driver}: {workflow}"
+            );
+            assert!(!workflow.contains("RK_RELEASE_ENVIRONMENT"), "{driver}");
+        }
+    }
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    seed_uv_project(target.path(), "0.1.0");
+    write_release_config(target.path(), "registry = \"none\"\n");
+    rk().args(["init", "--tech", "python", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release.yml"))
+        .expect("the workflow landed");
+    for (job, environment) in release_kit::projection::app_token_jobs(&workflow) {
+        assert_eq!(environment.as_deref(), Some("release"), "{job}");
+    }
+    assert_eq!(landed_release_environments(target.path()), ["release"]);
+}
+
+/// SATISFIES release-ref-rules:the-github-bot-secrets-live-in-the-release-environment
+/// The environments that hold the bot secrets come from the rendered jobs:
+/// the release environment everywhere, and the registry's beside it on a
+/// python target that publishes. A configured name renders on every job
+/// and reaches the record.
+#[test]
+fn the_release_environments_come_from_the_rendered_jobs() {
+    use release_kit::landing::{CheckoutMode, Integration, Style};
+    for (driver, wanted) in [
+        ("rust", vec!["release"]),
+        ("python", vec!["release", "pypi"]),
+        ("bash", vec!["release"]),
+    ] {
+        let params = projection_params(
+            driver,
+            "github",
+            CheckoutMode::LinkedWorktree,
+            Integration::Forge,
+            Style::Trunk,
+            false,
+        );
+        assert_eq!(
+            release_kit::projection::release_environments(&params),
+            wanted
+        );
+        let params = projection_params(
+            driver,
+            "gitlab",
+            CheckoutMode::LinkedWorktree,
+            Integration::Forge,
+            Style::Trunk,
+            false,
+        );
+        assert!(release_kit::projection::release_environments(&params).is_empty());
+    }
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".release-kit")).expect("the config dir creates");
+    std::fs::write(
+        target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[protection]\nrelease_environment = \"ship-it\"\n",
+    )
+    .expect("the config writes");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--required-check",
+            "gate",
+            "--target",
+        ])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow landed");
+    assert!(
+        workflow.contains("    environment: \"ship-it\"\n"),
+        "{workflow}"
+    );
+    for (job, environment) in release_kit::projection::app_token_jobs(&workflow) {
+        assert_eq!(environment.as_deref(), Some("ship-it"), "{job}");
+    }
+    assert_eq!(landed_release_environments(target.path()), ["ship-it"]);
+    std::fs::write(
+        target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[protection]\nrelease_environment = \"ship it\"\n",
+    )
+    .expect("the config writes");
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("protection.release_environment"));
+}
+
+/// The name of the administrator proof step that both GitHub dispatch jobs
+/// take from one block.
+const CALLER_PROOF_STEP: &str = "refuse a caller who is not an administrator";
+
+/// Each GitHub dispatch job that mints the release App token runs only on
+/// its own ref: a candidate on the line its input names, and the merge on
+/// the trunk. Any write identity can name another ref.
+#[test]
+fn each_github_dispatch_job_runs_only_on_its_own_ref() {
+    use release_kit::landing::Integration;
+    for driver in ["rust", "python", "bash"] {
+        for integration in [Integration::Local, Integration::Forge] {
+            let workflow = release_workflow(driver, integration);
+            assert!(
+                workflow_job(&workflow, "release-candidate").contains(
+                    "      && inputs.action == 'candidate'\n      && github.ref == format('refs/heads/release/{0}', inputs.line)\n"
+                ),
+                "{driver}: {workflow}"
+            );
+            assert!(
+                workflow_job(&workflow, "release-merge").contains(
+                    "      && inputs.action == 'merge'\n      && github.ref == 'refs/heads/master'\n"
+                ),
+                "{driver}: {workflow}"
+            );
+        }
+    }
+}
+
+/// Both GitHub dispatch jobs take the administrator proof from the one
+/// block, right after the mint and before any other step, and the proof
+/// refuses every role below the administrator.
+#[test]
+fn each_github_dispatch_job_proves_an_administrator_caller() {
+    use release_kit::landing::Integration;
+    use std::os::unix::fs::PermissionsExt as _;
+    let block = release_kit::embedded::BLOCKS
+        .get_file("release-caller-proof.github.yaml.in")
+        .and_then(|file| file.contents_utf8())
+        .expect("the binary embeds the caller proof");
+    for driver in ["rust", "python", "bash"] {
+        let workflow = release_workflow(driver, Integration::Forge);
+        assert!(!workflow.contains("RK_CALLER_PROOF"), "{workflow}");
+        for job in ["release-candidate", "release-merge"] {
+            let text = workflow_job(&workflow, job);
+            assert_eq!(text.matches(block).count(), 1, "{driver} {job}: {text}");
+            let at = |needle: &str| {
+                text.find(needle)
+                    .unwrap_or_else(|| panic!("{driver} {job}: {needle}: {text}"))
+            };
+            let proof = at(CALLER_PROOF_STEP);
+            assert!(at("create-github-app-token@") < proof, "{driver} {job}");
+            let next = text[proof..]
+                .find("      - ")
+                .map(|offset| proof + offset)
+                .expect("a step follows the proof");
+            assert!(
+                text[next..].starts_with("      - uses: actions/checkout@")
+                    || text[next..].starts_with("      - name: merge the release request"),
+                "{driver} {job}: {}",
+                &text[next..]
+            );
+        }
+    }
+    let workflow = release_workflow("rust", Integration::Forge);
+    let script = step_script(
+        workflow_job(&workflow, "release-candidate"),
+        CALLER_PROOF_STEP,
+    );
+    for (role, passes) in [("admin", true), ("maintain", false), ("write", false)] {
+        let scratch = tempfile::tempdir().expect("a fixture exists");
+        let bin = scratch.path().join("bin");
+        std::fs::create_dir(&bin).expect("the fake bin creates");
+        let gh = format!(
+            "#!/bin/sh\ncase \"$2\" in\n  repos/{{owner}}/{{repo}}/collaborators/agent/permission) echo {role} ;;\n  *) echo \"unexpected gh call: $*\" >&2; exit 1 ;;\nesac\n"
+        );
+        std::fs::write(bin.join("gh"), gh).expect("the fake gh writes");
+        std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .expect("PATH joins");
+        let path = path.to_str().expect("utf-8");
+        let out = run_step(
+            &script,
+            scratch.path(),
+            &[
+                ("PATH", path),
+                ("CALLER", "agent"),
+                ("GH_REPO", "acme/widget"),
+            ],
+        );
+        assert_eq!(out.status.success(), passes, "{role}: {out:?}");
+        if !passes {
+            assert!(
+                String::from_utf8_lossy(&out.stdout).contains(&format!(
+                    "agent holds the {role} role, and only an administrator dispatches this job"
+                )),
+                "{role}: {out:?}"
+            );
+        }
+    }
 }
 
 /// The release-candidate job runs on a dispatch alone, and both push jobs
@@ -43260,7 +44215,12 @@ fn merge_form_github_apply_observes_as_correct_under_each_form_and_authority() {
             let fixture = ForgeFixture::new();
             land_merge_form(&fixture, "github", integration, form);
             write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
-            for step in ["protect-trunk", "protect-tags", "protections-check"] {
+            for step in [
+                "protect-trunk",
+                "protect-tags",
+                "protect-release-branches",
+                "protections-check",
+            ] {
                 fixture
                     .rk(&["setup", "step", step])
                     .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
@@ -43348,7 +44308,11 @@ fn merge_form_gitlab_apply_observes_as_correct_under_each_form_and_authority() {
             let fixture = ForgeFixture::new();
             land_merge_form(&fixture, "gitlab", integration, form);
             fixture.seed("tag_protected", "");
-            for step in ["protect-trunk", "protections-check"] {
+            for step in [
+                "protect-trunk",
+                "protect-release-branches",
+                "protections-check",
+            ] {
                 fixture
                     .rk(&["setup", "step", step])
                     .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
@@ -45741,6 +46705,7 @@ fn release_less_gitlab_gated_apply_requires_the_pipeline() {
     fixture.seed("tag_protected", "");
     gitlab_step(&fixture, "protect-trunk").success();
     assert_eq!(gitlab_pipeline_state(&fixture), "true");
+    gitlab_step(&fixture, "protect-release-branches").success();
     gitlab_step(&fixture, "protections-check").success();
     let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
     assert!(line.starts_with("ok protect-trunk"), "{line}");
@@ -45833,6 +46798,7 @@ fn merge_form_github_rebase_apply_enables_a_disabled_rebase_switch() {
     github_step(&fixture, "protect-trunk").success();
     assert_eq!(github_rebase_switch(&fixture), "true");
     github_step(&fixture, "protect-tags").success();
+    github_step(&fixture, "protect-release-branches").success();
     github_step(&fixture, "protections-check").success();
     let line = merge_form_check_line(&fixture, "github", "protect-trunk");
     assert!(line.starts_with("ok protect-trunk"), "{line}");
@@ -45875,6 +46841,8 @@ fn merge_form_github_rebase_checks_fault_a_disabled_rebase_switch() {
         write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
         github_step(&fixture, "protect-trunk").success();
         github_step(&fixture, "protect-tags").success();
+        github_step(&fixture, "protect-release-branches").success();
+        github_step(&fixture, "protect-release-branches").success();
         match seed {
             "allow_rebase_merge" => fixture.seed("allow_rebase_merge", "false"),
             "absent" => fixture.seed("allow_rebase_merge", "absent"),
@@ -47192,19 +48160,20 @@ fn the_bash_pipelines_carry_no_release_shell() {
         }
     }
     // The GitHub candidate job reads the App's account once, to commit
-    // under it. The GitLab candidate job reads none: rk reads it.
+    // under it, and the caller's role once, to serve the administrator
+    // alone. The GitLab candidate job reads neither: rk reads the account,
+    // and the forge's own grant decides who plays the job.
     for (name, body) in &mut bodies {
         if name.starts_with("github") && name.ends_with("release-candidate") {
-            let reads = body
-                .lines()
-                .filter(|line| line.contains("gh api \"/users/"))
-                .count();
-            assert_eq!(reads, 1, "{name}: {body}");
-            *body = body
-                .lines()
-                .filter(|line| !line.contains("gh api \"/users/"))
-                .collect::<Vec<_>>()
-                .join("\n");
+            for read in ["gh api \"/users/", "/collaborators/$CALLER/permission"] {
+                let reads = body.lines().filter(|line| line.contains(read)).count();
+                assert_eq!(reads, 1, "{name}: {read}: {body}");
+                *body = body
+                    .lines()
+                    .filter(|line| !line.contains(read))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
         }
     }
     assert_eq!(
@@ -54815,7 +55784,7 @@ fn the_python_candidate_job_publishes_nothing() {
         );
         for absent in [
             "id-token",
-            "environment:",
+            "environment: pypi",
             "attestations:",
             "pypi-publish",
             "actions/attest",
@@ -56922,9 +57891,13 @@ fn merge_job_script(driver: &str, forge: &str) -> String {
     use release_kit::landing::{Integration, Style};
     let whole = release_automation(driver, forge, Integration::Local, Style::Trunk);
     if forge == "github" {
-        step_script(
-            workflow_job(&whole, "release-merge"),
-            "merge the release request the operator ordered",
+        // The caller proof is a step of its own, which the merge step
+        // follows, so the job's script is both in their order.
+        let job = workflow_job(&whole, "release-merge");
+        format!(
+            "{}\n{}",
+            step_script(job, CALLER_PROOF_STEP),
+            step_script(job, "merge the release request the operator ordered"),
         )
     } else {
         gitlab_blocks(gitlab_job(&whole, "release-merge"))
@@ -57183,7 +58156,12 @@ fn assert_merge_refused(fault: MergeFault, why: &[(&str, &str)]) {
         let log = run.log();
         assert!(!run.output.status.success(), "{driver} {forge}: {log}");
         assert_eq!(run.merged(), None, "{driver} {forge}: {log}");
-        assert!(log.contains("nothing merged"), "{driver} {forge}: {log}");
+        // The shared caller proof refuses before the merge step, in the
+        // words of every dispatch job.
+        assert!(
+            log.contains("nothing merged") || log.contains("nothing changed"),
+            "{driver} {forge}: {log}"
+        );
         let needle = why
             .iter()
             .find(|(on, _)| *on == forge)
@@ -57211,6 +58189,9 @@ fn an_administrator_caller_merges_only_through_the_job() {
                 "{merged}"
             );
             assert!(merged.contains("--delete-branch"), "{merged}");
+            // The app bypasses the update rule of the updates ruleset, and
+            // GitHub merges past a rule only where the bypass is chosen.
+            assert!(merged.contains("--admin"), "{merged}");
         } else {
             assert!(
                 merged.contains(&format!("/merge_requests/7/merge?sha={MERGE_HEAD}&")),
@@ -57922,4 +58903,1522 @@ fn the_merge_outcome_is_read_from_the_request() {
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
     assert_eq!(report["merge_commit"], MERGE_HEAD, "{report}");
+}
+
+/// On GitHub the release branch protection applies wherever the release
+/// mode is not `none`: a named apply installs the release branch ruleset.
+///
+/// SATISFIES forge-setup:applicability-follows-the-target-configuration
+#[test]
+fn protect_release_branches_applies_on_github_with_a_release() {
+    let fixture = ForgeFixture::new();
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    let line = text
+        .lines()
+        .find(|line| line.contains("protect-release-branches"))
+        .unwrap_or_else(|| panic!("the step reports: {text}"));
+    assert!(
+        line.starts_with("unsatisfied protect-release-branches"),
+        "{line}"
+    );
+    github_step(&fixture, "protect-release-branches").success();
+    assert!(
+        fixture.state("ruleset_release-branches").is_file(),
+        "{}",
+        fixture.log()
+    );
+}
+
+/// The protected branch the GitLab mock holds for `encoded`, as JSON.
+fn gitlab_protected_branch(fixture: &ForgeFixture, encoded: &str) -> serde_json::Value {
+    let text = std::fs::read_to_string(fixture.state(&format!("pb_{encoded}")))
+        .unwrap_or_else(|_| panic!("{encoded} is protected: {}", fixture.log()));
+    serde_json::from_str(&text).expect("the protected branch parses")
+}
+
+/// Assert one GitLab protected branch at push 40 and merge 40 with force
+/// pushes off.
+fn assert_gitlab_maintainer_only(fixture: &ForgeFixture, encoded: &str, name: &str) {
+    let branch = gitlab_protected_branch(fixture, encoded);
+    assert_eq!(branch["name"], name, "{branch}");
+    assert_eq!(
+        branch["push_access_levels"],
+        serde_json::json!([{"access_level": 40}]),
+        "{name}"
+    );
+    assert_eq!(
+        branch["merge_access_levels"],
+        serde_json::json!([{"access_level": 40}]),
+        "{name}"
+    );
+    assert_eq!(branch["allow_force_push"], false, "{name}");
+}
+
+/// The GitLab step protects the release lines under the line prefix at
+/// Maintainer, and the check then reads it satisfied.
+#[test]
+fn gitlab_protect_release_branches_protects_the_line_prefix_at_maintainer() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "protect-release-branches"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success();
+    assert_gitlab_maintainer_only(&fixture, "release%2F%2A", "release/*");
+    assert!(
+        !fixture.state("protected_master").exists(),
+        "the release branches leave the trunk alone: {}",
+        fixture.log()
+    );
+    fixture
+        .rk(&["setup", "step", "protect-release-branches"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("release/*"));
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("ok protect-release-branches"), "{text}");
+}
+
+/// Both release request prefixes are protected at Maintainer whatever the
+/// driver, and a rerun re-asserts them without a delete.
+#[test]
+fn gitlab_protect_release_branches_protects_both_request_prefixes_at_maintainer() {
+    let fixture = ForgeFixture::new();
+    let apply = || {
+        fixture
+            .rk(&["setup", "step", "protect-release-branches"])
+            .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+            .assert()
+            .success();
+    };
+    apply();
+    assert_gitlab_maintainer_only(&fixture, "release-plz-%2A", "release-plz-*");
+    assert_gitlab_maintainer_only(&fixture, "rk-release%2F%2A", "rk-release/*");
+    let before = fixture.log();
+    apply();
+    let rerun = &fixture.log()[before.len()..];
+    assert!(
+        !rerun.contains("-X DELETE") && !rerun.contains("-X POST"),
+        "a rerun over the owned grants deletes and creates nothing: {rerun}"
+    );
+}
+
+/// Write a target configuration that holds one `[protection]` line, and
+/// one `[protection.gitlab]` line where `gitlab` names one.
+fn gitlab_protection_config(fixture: &ForgeFixture, protection: &str, gitlab: &str) {
+    let dir = fixture.target.path().join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the record directory");
+    let mut text = format!("schema_version = 1\n\n[protection]\n{protection}\n");
+    if !gitlab.is_empty() {
+        text = format!("{text}\n[protection.gitlab]\n{gitlab}\n");
+    }
+    std::fs::write(dir.join("config.toml"), text).expect("the config writes");
+}
+
+/// One GitLab tag protection as the fake keeps it, by its encoded name.
+fn gitlab_protected_tag(fixture: &ForgeFixture, encoded: &str) -> serde_json::Value {
+    let text = std::fs::read_to_string(fixture.state(&format!("pt_{encoded}")))
+        .unwrap_or_else(|_| panic!("{encoded} is protected: {}", fixture.log()));
+    serde_json::from_str(&text).expect("the tag protection parses")
+}
+
+/// The position of `needle` in `log` at or after `from`, or a panic that
+/// names the call the order misses.
+fn log_position(log: &str, from: usize, needle: &str) -> usize {
+    log[from..]
+        .find(needle)
+        .map_or_else(|| panic!("no {needle} after {from}: {log}"), |at| from + at)
+}
+
+/// The GitLab step protects the recorded tag pattern by its GitLab name,
+/// with one create grant at Maintainer.
+#[test]
+fn gitlab_protect_tags_protects_the_recorded_pattern() {
+    for (pattern, encoded) in [("v*", "v%2A"), ("*", "%2A")] {
+        let fixture = ForgeFixture::new();
+        gitlab_protection_config(
+            &fixture,
+            &format!("tag_pattern = \"refs/tags/{pattern}\""),
+            "",
+        );
+        gitlab_step(&fixture, "protect-tags").success();
+        let tag = gitlab_protected_tag(&fixture, encoded);
+        assert_eq!(tag["name"], pattern, "{tag}");
+        assert_eq!(
+            tag["create_access_levels"],
+            serde_json::json!([{"access_level": 40}]),
+            "{pattern}"
+        );
+        let line = merge_form_check_line(&fixture, "gitlab", "protect-tags");
+        assert!(line.starts_with("ok protect-tags"), "{pattern}: {line}");
+    }
+}
+
+/// SATISFIES release-ref-rules:the-gitlab-trunk-merges-at-maintainer
+/// A Developer merge grant on the GitLab trunk refuses by the floor when
+/// rk reads the configuration, before any forge call.
+#[test]
+fn a_developer_merge_grant_on_the_gitlab_trunk_refuses_before_any_forge_call() {
+    let fixture = ForgeFixture::new();
+    gitlab_protection_config(&fixture, "", "merge_access_level = 30");
+    gitlab_step(&fixture, "protect-trunk")
+        .failure()
+        .stderr(predicate::str::contains(
+            "protection.gitlab.merge_access_level",
+        ));
+    assert!(
+        !fixture.log().contains("api "),
+        "the floor refuses before any forge call: {}",
+        fixture.log()
+    );
+}
+
+/// SATISFIES release-ref-rules:the-gitlab-release-tags-are-created-at-maintainer
+/// A widening protects the recorded pattern, reads it back, and only then
+/// removes the stale one, so no tag the old pattern covered stands
+/// unprotected.
+#[test]
+fn gitlab_protect_tags_widens_before_it_removes_the_stale_pattern() {
+    let fixture = ForgeFixture::new();
+    gitlab_protection_config(&fixture, "tag_pattern = \"refs/tags/*\"", "");
+    fixture.seed("tag_protected", "");
+    gitlab_step(&fixture, "protect-tags").success();
+    let log = fixture.log();
+    let post = log_position(
+        &log,
+        0,
+        "api -X POST projects/acme%2Fwidget/protected_tags -f name=*",
+    );
+    let read = log_position(&log, post, "api projects/acme%2Fwidget/protected_tags/%2A");
+    log_position(
+        &log,
+        read,
+        "api -X DELETE projects/acme%2Fwidget/protected_tags/v%2A",
+    );
+    assert!(!fixture.state("tag_protected").exists(), "{log}");
+    assert_eq!(gitlab_protected_tag(&fixture, "%2A")["name"], "*");
+}
+
+/// A same-name protection with a wrong create grant is unprotected and
+/// protected again, and the final read requires one grant at Maintainer.
+#[test]
+fn gitlab_protect_tags_repairs_a_same_name_grant_by_unprotect_then_protect() {
+    for grants in [
+        r#"[{"access_level":30}]"#,
+        r#"[{"access_level":40},{"access_level":30}]"#,
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed(
+            "pt_v%2A",
+            &format!(r#"{{"name":"v*","create_access_levels":{grants}}}"#),
+        );
+        gitlab_step(&fixture, "protect-tags").success();
+        let log = fixture.log();
+        let delete = log_position(
+            &log,
+            0,
+            "api -X DELETE projects/acme%2Fwidget/protected_tags/v%2A",
+        );
+        let post = log_position(
+            &log,
+            delete,
+            "api -X POST projects/acme%2Fwidget/protected_tags -f name=v*",
+        );
+        log_position(&log, post, "api projects/acme%2Fwidget/protected_tags/v%2A");
+        assert_eq!(
+            gitlab_protected_tag(&fixture, "v%2A")["create_access_levels"],
+            serde_json::json!([{"access_level": 40}]),
+            "{grants}"
+        );
+    }
+}
+
+/// A protect call that fails is made once more, and the step still fails,
+/// naming the pattern and the state that stands.
+#[test]
+fn gitlab_protect_tags_protects_again_and_fails_when_the_repair_does_not_stand() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("tag_protect_fail", "");
+    let out = gitlab_step(&fixture, "protect-tags")
+        .failure()
+        .get_output()
+        .clone();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(said.contains("FAIL v*"), "{said}");
+    assert!(said.contains("now stands protected"), "{said}");
+    assert_eq!(
+        fixture
+            .log()
+            .matches("api -X POST projects/acme%2Fwidget/protected_tags")
+            .count(),
+        2,
+        "{}",
+        fixture.log()
+    );
+}
+
+/// SATISFIES release-ref-rules:merge-request-pipelines-cannot-read-protected-variables
+#[test]
+fn gitlab_ci_permissions_turns_off_protected_variables_in_merge_request_pipelines() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("mr_pipelines", "true");
+    gitlab_step(&fixture, "ci-permissions")
+        .success()
+        .stdout(predicate::str::contains(
+            "merge request pipelines cannot reach the protected variables",
+        ));
+    assert!(
+        fixture
+            .log()
+            .contains("-F protect_merge_request_pipelines=false"),
+        "{}",
+        fixture.log()
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("mr_pipelines"))
+            .expect("the setting is written")
+            .trim(),
+        "false"
+    );
+}
+
+/// The apply repairs the setting on a project with CI enabled, and the
+/// check reads it satisfied, then detects the access turned on again.
+#[test]
+fn gitlab_ci_permissions_repairs_and_check_detects_protected_variable_access() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("mr_pipelines", "true");
+    let line = merge_form_check_line(&fixture, "gitlab", "ci-permissions");
+    assert!(line.starts_with("unsatisfied ci-permissions"), "{line}");
+    gitlab_step(&fixture, "ci-permissions").success();
+    let line = merge_form_check_line(&fixture, "gitlab", "ci-permissions");
+    assert!(line.starts_with("ok ci-permissions"), "{line}");
+    fixture.seed("mr_pipelines", "true");
+    let line = merge_form_check_line(&fixture, "gitlab", "ci-permissions");
+    assert!(
+        line.starts_with("unsatisfied ci-permissions")
+            && line.contains("merge request pipelines can reach the protected variables"),
+        "{line}"
+    );
+    let line = merge_form_check_line(&fixture, "gitlab", "protections-check");
+    assert!(
+        line.contains("ci-permissions:") && line.contains("rk setup step ci-permissions --apply"),
+        "{line}"
+    );
+}
+
+/// An instance older than the setting answers with no such attribute,
+/// and the step notes it and reports satisfied.
+#[test]
+fn gitlab_ci_permissions_notes_an_instance_without_the_setting() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("gitlab_version", "18.0.3-ee");
+    fixture.seed("mr_pipelines", "absent");
+    fixture.seed("jobs_enabled", "false");
+    gitlab_step(&fixture, "ci-permissions")
+        .success()
+        .stdout(predicate::str::contains("note: this GitLab predates 18.1"));
+    assert!(
+        !fixture.log().contains("protect_merge_request_pipelines="),
+        "nothing writes a setting the instance lacks: {}",
+        fixture.log()
+    );
+    let line = merge_form_check_line(&fixture, "gitlab", "ci-permissions");
+    assert!(
+        line.starts_with("ok ci-permissions") && line.contains("18.1"),
+        "{line}"
+    );
+}
+
+/// From GitLab 18.1 the setting exists, and the projects API returns it
+/// only from 18.10 and only to a Maintainer, so an answer without it
+/// leaves the access unproved: the step writes nothing and fails, and
+/// both judges name 18.10, the Maintainer role, and the setting's label.
+///
+/// SATISFIES release-ref-rules:merge-request-pipelines-cannot-read-protected-variables
+#[test]
+fn gitlab_ci_permissions_fails_a_setting_the_reader_is_not_shown() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("gitlab_version", "18.5.2-ee");
+    fixture.seed("mr_pipelines", "absent");
+    let out = gitlab_step(&fixture, "ci-permissions")
+        .failure()
+        .get_output()
+        .clone();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for needle in [
+        "18.10",
+        "Maintainer",
+        "Allow merge request pipelines to access protected variables and runners",
+    ] {
+        assert!(said.contains(needle), "the apply names {needle}: {said}");
+    }
+    assert!(
+        !fixture.log().contains("protect_merge_request_pipelines="),
+        "nothing writes a setting the reader is not shown: {}",
+        fixture.log()
+    );
+    for step in ["ci-permissions", "protections-check"] {
+        let line = merge_form_check_line(&fixture, "gitlab", step);
+        assert!(
+            line.starts_with(&format!("unsatisfied {step}"))
+                && line.contains("18.10")
+                && line.contains("Maintainer")
+                && !line.contains("predates"),
+            "{line}"
+        );
+    }
+}
+
+/// An answer without the setting from an instance whose version cannot be
+/// read is no pass: the observation cannot tell an old instance from a
+/// reader the setting is not shown to.
+#[test]
+fn gitlab_ci_permissions_leaves_an_unexposed_setting_unknown_without_a_version() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("gitlab_version", "__failed__");
+    fixture.seed("mr_pipelines", "absent");
+    let line = merge_form_check_line(&fixture, "gitlab", "ci-permissions");
+    assert!(
+        line.starts_with("unknown ci-permissions") && line.contains("version"),
+        "{line}"
+    );
+    gitlab_step(&fixture, "ci-permissions").failure();
+    assert!(
+        !fixture.log().contains("protect_merge_request_pipelines="),
+        "{}",
+        fixture.log()
+    );
+}
+
+/// A release-less target runs no ci-permissions, so neither judge of
+/// protections-check reads the merge request pipeline setting there.
+#[test]
+fn a_release_less_gitlab_check_leaves_the_pipeline_setting_alone() {
+    let fixture = ForgeFixture::new();
+    land_workflow_only_at(&fixture, "gitlab", "rebase");
+    seed_gitlab_rebase_trunk(&fixture, "false");
+    fixture.seed("mr_pipelines", "true");
+    let line = merge_form_check_line(&fixture, "gitlab", "protections-check");
+    assert!(
+        line.starts_with("ok protections-check") && !line.contains("ci-permissions"),
+        "{line}"
+    );
+    // An unprotected trunk makes the step run its script, which then
+    // judges every protection it owns and fails on the trunk alone.
+    std::fs::remove_file(fixture.state("protected_master")).expect("the trunk was protected");
+    let out = gitlab_step(&fixture, "protections-check")
+        .failure()
+        .get_output()
+        .clone();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains("FAIL master is protected") && !said.contains("merge request pipelines"),
+        "{said}"
+    );
+}
+
+/// SATISFIES release-ref-rules:only-maintainers-write-a-gitlab-release-branch
+/// A request prefix protected with a Developer push grant is re-created at
+/// Maintainer, and the final read holds one grant on each side.
+#[test]
+fn gitlab_protect_release_branches_repairs_a_request_prefix_with_a_developer_grant() {
+    let fixture = ForgeFixture::new();
+    fixture.seed(
+        "pb_rk-release%2F%2A",
+        r#"{"name":"rk-release/*","push_access_levels":[{"access_level":30}],"merge_access_levels":[{"access_level":40}],"allow_force_push":false}"#,
+    );
+    let line = merge_form_check_line(&fixture, "gitlab", "protect-release-branches");
+    assert!(
+        line.starts_with("unsatisfied protect-release-branches") && line.contains("rk-release/*"),
+        "{line}"
+    );
+    gitlab_step(&fixture, "protect-release-branches").success();
+    assert!(
+        fixture
+            .log()
+            .contains("api -X DELETE projects/acme%2Fwidget/protected_branches/rk-release%2F%2A"),
+        "{}",
+        fixture.log()
+    );
+    assert_gitlab_maintainer_only(&fixture, "rk-release%2F%2A", "rk-release/*");
+}
+
+/// SATISFIES release-ref-rules:the-gitlab-trunk-merges-at-maintainer
+/// GitLab protects a new project's trunk by its own default, at push 40
+/// and merge 40. A full apply deletes that protection and creates the
+/// owned one, at push 0 and merge 40 under forge integration.
+#[test]
+fn a_gitlab_apply_replaces_the_default_trunk_protection() {
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "gitlab", "forge", "rebase");
+    fixture.seed("protected_master", "");
+    fixture.seed("push_level", "40");
+    fixture.seed("merge_level", "40");
+    gitlab_step(&fixture, "protect-trunk").success();
+    let log = fixture.log();
+    let delete = log
+        .find("api -X DELETE projects/acme%2Fwidget/protected_branches/master")
+        .unwrap_or_else(|| panic!("the default protection is deleted: {log}"));
+    let create = log[delete..]
+        .find("api -X POST projects/acme%2Fwidget/protected_branches")
+        .unwrap_or_else(|| panic!("the owned protection is created after it: {log}"));
+    assert!(create > 0, "{log}");
+    let level = |name: &str| {
+        std::fs::read_to_string(fixture.state(name))
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(level("push_level"), "0");
+    assert_eq!(level("merge_level"), "40");
+    let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+}
+
+/// SATISFIES release-ref-rules:the-gitlab-bot-token-is-protected
+/// A stored bot token that a pipeline on any branch reads fails the check
+/// with its remedy, on every bot form. An apply of the step protects that
+/// token in place: the stored value goes back with the flag, nothing is
+/// minted, and the check then passes.
+#[test]
+fn gitlab_bot_secrets_protects_a_stored_token_in_place() {
+    for namespace in [Some(FREE_GROUP), Some(PAID_GROUP), None] {
+        let fixture = namespace.map_or_else(ForgeFixture::new, gitlab_com_fixture);
+        land_merge_form(&fixture, "gitlab", "forge", "rebase");
+        fixture.seed("var_RELEASE_BOT_TOKEN", "unprotected");
+        fixture.seed("varvalue_RELEASE_BOT_TOKEN", "glpat-stored-before");
+        let line = merge_form_check_line(&fixture, "gitlab", "bot-secrets");
+        assert!(
+            line.starts_with("unsatisfied bot-secrets")
+                && line.contains("RELEASE_BOT_TOKEN is not protected")
+                && line.contains("rk setup --apply"),
+            "{namespace:?}: {line}"
+        );
+        gitlab_step(&fixture, "bot-secrets")
+            .success()
+            .stdout(predicate::str::contains(
+                "RELEASE_BOT_TOKEN is now protected, with its stored value",
+            ));
+        assert!(
+            fixture
+                .log()
+                .contains("variable update RELEASE_BOT_TOKEN --masked --protected"),
+            "{namespace:?}: {}",
+            fixture.log()
+        );
+        assert_eq!(
+            fixture.stdin_log().trim(),
+            "glpat-stored-before",
+            "{namespace:?}: the stored value goes back, and no other"
+        );
+        let mints: Vec<String> = forge_writes(&fixture)
+            .into_iter()
+            .filter(|line| line.contains("access_tokens"))
+            .collect();
+        assert!(
+            mints.is_empty(),
+            "{namespace:?}: nothing is minted: {mints:?}"
+        );
+        let line = merge_form_check_line(&fixture, "gitlab", "bot-secrets");
+        assert!(line.starts_with("ok bot-secrets"), "{namespace:?}: {line}");
+    }
+}
+
+/// SATISFIES release-ref-rules:the-gitlab-bot-token-is-protected
+/// A stored bot token whose value does not read back cannot be protected
+/// in place. The step writes nothing and mints nothing, and its remedy
+/// names only what works: the token exported, then the step run again.
+#[test]
+fn gitlab_bot_secrets_names_the_remedy_when_the_token_does_not_read_back() {
+    for namespace in [Some(FREE_GROUP), Some(PAID_GROUP), None] {
+        let fixture = namespace.map_or_else(ForgeFixture::new, gitlab_com_fixture);
+        land_merge_form(&fixture, "gitlab", "forge", "rebase");
+        fixture.seed("var_RELEASE_BOT_TOKEN", "unprotected");
+        fixture.seed("varvalue_RELEASE_BOT_TOKEN", "");
+        let out = gitlab_step(&fixture, "bot-secrets")
+            .failure()
+            .get_output()
+            .clone();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            said.contains("the stored RELEASE_BOT_TOKEN cannot be read back to protect it"),
+            "{namespace:?}: {said}"
+        );
+        assert!(
+            said.contains(
+                "export RK_BOT_TOKEN with the bot token, then run rk setup step bot-secrets --target . --apply"
+            ),
+            "{namespace:?}: the remedy: {said}"
+        );
+        assert!(!said.contains("mints one"), "{namespace:?}: {said}");
+        let writes: Vec<String> = forge_writes(&fixture)
+            .into_iter()
+            .filter(|line| line.contains("access_tokens") || line.contains("variable"))
+            .collect();
+        assert!(
+            writes.is_empty(),
+            "{namespace:?}: nothing is written or minted: {writes:?}"
+        );
+    }
+}
+
+/// SATISFIES release-ref-rules:the-gitlab-bot-token-is-protected
+/// Every write of the bot token stores it protected: a supplied value, a
+/// token that install-bot creates, and a rotation.
+#[test]
+fn every_gitlab_bot_token_write_is_protected() {
+    for path in ["setup/gitlab/install-bot", "setup/gitlab/bot-secrets"] {
+        let text = std::fs::read_to_string(repo_path(path)).expect("the script reads");
+        let writes: Vec<&str> = text
+            .lines()
+            .filter(|line| {
+                line.contains("glab variable set") || line.contains("glab variable update")
+            })
+            .collect();
+        assert!(!writes.is_empty(), "{path}");
+        for line in writes {
+            assert!(line.contains("--masked --protected"), "{path}: {line}");
+        }
+    }
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "gitlab", "forge", "rebase");
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .env("RK_BOT_TOKEN", "glpat-supplied")
+        .assert()
+        .success();
+    let line = merge_form_check_line(&fixture, "gitlab", "bot-secrets");
+    assert!(line.starts_with("ok bot-secrets"), "{line}");
+}
+
+/// SATISFIES release-ref-rules:the-gitlab-bot-token-is-protected
+/// A project in the old shape, its bot token stored unprotected and its
+/// trunk under GitLab's default protection, reaches the new shape through
+/// a full apply alone, and the check after it passes the bot token and
+/// every protection.
+#[test]
+fn a_full_gitlab_apply_moves_the_old_shape() {
+    let fixture = gitlab_com_fixture(FREE_GROUP);
+    land_merge_form(&fixture, "gitlab", "forge", "rebase");
+    fixture.seed(
+        "service_accounts",
+        r#"[{"id":99,"username":"release-bot-1","name":"release-bot-1"}]"#,
+    );
+    fixture.seed("member_99", "40");
+    fixture.seed("var_RELEASE_BOT_TOKEN", "unprotected");
+    fixture.seed("varvalue_RELEASE_BOT_TOKEN", "glpat-stored-before");
+    fixture.seed("protected_master", "");
+    fixture.seed("push_level", "40");
+    fixture.seed("merge_level", "40");
+    let out = fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .get_output()
+        .clone();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("RELEASE_BOT_TOKEN is now protected, with its stored value"),
+        "{said}"
+    );
+    for step in ["bot-secrets", "protect-trunk", "protections-check"] {
+        let line = merge_form_check_line(&fixture, "gitlab", step);
+        assert!(line.starts_with(&format!("ok {step}")), "{line}");
+    }
+}
+
+/// A GitHub target landed under forge integration, with the release App
+/// key, whose bot secrets stand in the old shape: both at the repository
+/// level, and no release environment.
+fn github_old_secret_shape() -> (ForgeFixture, PathBuf) {
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "github", "forge", "squash");
+    fixture.seed(
+        "secrets.index",
+        "RELEASE_BOT_APP_ID\nRELEASE_BOT_APP_PRIVATE_KEY\n",
+    );
+    let key = fixture.key_file();
+    (fixture, key)
+}
+
+/// The landed release workflow of a fixture, as the forge serves it at
+/// `branch`.
+fn serve_landed_workflow(fixture: &ForgeFixture, branch: &str) {
+    let landed = std::fs::read_to_string(
+        fixture
+            .target
+            .path()
+            .join(".github/workflows/release-plz.yml"),
+    )
+    .expect("the workflow landed");
+    fixture.seed(&format!("contents_{}", branch.replace('/', "_")), &landed);
+}
+
+/// A release workflow from before the environment: its App-token job
+/// names none.
+const OLD_RELEASE_WORKFLOW: &str = "on: push\njobs:\n  release-plz-release:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/create-github-app-token@v3\n";
+
+/// One `rk setup check` line of a GitHub fixture, by step, with the key.
+fn github_check_line(fixture: &ForgeFixture, key: &Path, step: &str) -> String {
+    let out = with_app(fixture, key, &["setup", "check"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    text.lines()
+        .find(|line| line.split_whitespace().nth(1) == Some(step))
+        .unwrap_or_else(|| panic!("no {step} line: {text}"))
+        .to_owned()
+}
+
+/// SATISFIES release-ref-rules:the-github-bot-secrets-live-in-the-release-environment
+/// The old shape fails the check with its remedy. An apply creates the
+/// release environment behind a policy that admits the release refs alone,
+/// stores both secrets in it, and removes the repository copies, because
+/// the trunk already runs the upgraded workflow. The check then passes.
+#[test]
+fn github_bot_secrets_move_into_the_release_environment() {
+    let (fixture, key) = github_old_secret_shape();
+    serve_landed_workflow(&fixture, "master");
+    let line = github_check_line(&fixture, &key, "bot-secrets");
+    assert!(
+        line.starts_with("unsatisfied bot-secrets")
+            && line.contains("the environment release does not exist")
+            && line.contains("remain repository secrets")
+            && line.contains("rk setup --apply"),
+        "{line}"
+    );
+    with_app(&fixture, &key, &["setup", "step", "bot-secrets", "--apply"])
+        .assert()
+        .success();
+    let index = |name: &str| std::fs::read_to_string(fixture.state(name)).unwrap_or_default();
+    let environment = index("envsecrets_release.index");
+    assert!(
+        environment.contains("RELEASE_BOT_APP_ID")
+            && environment.contains("RELEASE_BOT_APP_PRIVATE_KEY"),
+        "{environment}"
+    );
+    assert!(
+        !index("secrets.index").contains("RELEASE_BOT_"),
+        "{}",
+        index("secrets.index")
+    );
+    let mut policies: Vec<String> = index("envpol_release")
+        .lines()
+        .map(|line| line.split_once(' ').map_or("", |(_, rest)| rest).to_owned())
+        .collect();
+    policies.sort();
+    assert_eq!(
+        policies,
+        [
+            "branch master",
+            "branch release-plz-*",
+            "branch release/*",
+            "branch rk-release/master",
+            "branch rk-release/release/*",
+            "tag v*",
+        ]
+    );
+    let line = github_check_line(&fixture, &key, "bot-secrets");
+    assert!(line.starts_with("ok bot-secrets"), "{line}");
+    assert!(!fixture.stdin_log().is_empty());
+}
+
+/// SATISFIES release-ref-rules:the-github-bot-secrets-live-in-the-release-environment
+/// The repository copies stay while a release ref still runs a workflow
+/// that names no environment, the trunk or a live release line: the apply
+/// stores the environment copies, keeps the repository ones, and reports
+/// the refs, and both checks stay unsatisfied, naming the refs.
+#[test]
+fn github_repository_secrets_wait_for_every_release_ref() {
+    for (old, new) in [("master", "release/1.4"), ("release/1.4", "master")] {
+        let (fixture, key) = github_old_secret_shape();
+        let target = fixture.target.path();
+        git_in(target, &["add", "-A"]);
+        git_in(
+            target,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "chore: land",
+            ],
+        );
+        git_in(
+            target,
+            &["update-ref", "refs/remotes/origin/release/1.4", "HEAD"],
+        );
+        fixture.seed(
+            &format!("contents_{}", old.replace('/', "_")),
+            OLD_RELEASE_WORKFLOW,
+        );
+        serve_landed_workflow(&fixture, new);
+        let out = with_app(&fixture, &key, &["setup", "step", "bot-secrets", "--apply"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            said.contains(&format!(
+                "until the release workflow names the environment on {old}"
+            )),
+            "{old}: {said}"
+        );
+        let index = |name: &str| std::fs::read_to_string(fixture.state(name)).unwrap_or_default();
+        assert!(index("envsecrets_release.index").contains("RELEASE_BOT_APP_ID"));
+        assert!(
+            index("secrets.index").contains("RELEASE_BOT_APP_ID"),
+            "{old}: the repository copies stay"
+        );
+        let line = github_check_line(&fixture, &key, "bot-secrets");
+        assert!(
+            line.starts_with("unsatisfied bot-secrets") && line.contains(old),
+            "{old}: {line}"
+        );
+        let line = github_check_line(&fixture, &key, "protections-check");
+        assert!(
+            line.starts_with("unsatisfied protections-check")
+                && line.contains("bot-secrets:")
+                && line.contains(old),
+            "{old}: {line}"
+        );
+    }
+}
+
+/// SATISFIES release-ref-rules:the-github-bot-secrets-live-in-the-release-environment
+/// A private repository on the Free plan holds no environment secrets, so
+/// the bot secrets stay repository secrets: the apply creates no
+/// environment, and both checks name the limitation and pass on it.
+#[test]
+fn github_free_private_keeps_repository_secrets_with_a_limitation() {
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "github", "forge", "squash");
+    fixture.seed("private", "true");
+    fixture.seed("plan", "free");
+    let key = fixture.key_file();
+    let out = with_app(&fixture, &key, &["setup", "step", "bot-secrets", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(said.contains("Free plan"), "{said}");
+    let index = std::fs::read_to_string(fixture.state("secrets.index")).unwrap_or_default();
+    assert!(index.contains("RELEASE_BOT_APP_PRIVATE_KEY"), "{index}");
+    assert!(!fixture.state("env_release").exists());
+    let line = github_check_line(&fixture, &key, "bot-secrets");
+    assert!(
+        line.starts_with("ok bot-secrets") && line.contains("Free plan"),
+        "{line}"
+    );
+    fixture.seed("plan", "team");
+    let line = github_check_line(&fixture, &key, "bot-secrets");
+    assert!(
+        line.starts_with("unsatisfied bot-secrets")
+            && line.contains("the environment release does not exist"),
+        "{line}"
+    );
+}
+
+/// SATISFIES release-ref-rules:the-github-bot-secrets-live-in-the-release-environment
+/// A GitHub project in the old shape, its bot secrets at the repository
+/// level, reaches the new shape through a full apply alone once its trunk
+/// runs the upgraded workflow, and the check after it passes the bot
+/// secrets and every protection.
+#[test]
+fn a_full_github_apply_moves_the_old_secret_shape() {
+    let (fixture, key) = github_old_secret_shape();
+    fixture.seed_gate();
+    serve_landed_workflow(&fixture, "master");
+    let out = with_app(&fixture, &key, &["setup", "--apply"])
+        .args(["--required-check", "test-check"])
+        .assert()
+        .get_output()
+        .clone();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("ok removed the repository secret RELEASE_BOT_APP_ID"),
+        "{said}"
+    );
+    for step in ["bot-secrets", "protections-check"] {
+        let out = with_app(&fixture, &key, &["setup", "check"])
+            .args(["--required-check", "test-check"])
+            .assert()
+            .get_output()
+            .stdout
+            .clone();
+        let text = String::from_utf8_lossy(&out);
+        let line = text
+            .lines()
+            .find(|line| line.split_whitespace().nth(1) == Some(step))
+            .unwrap_or_else(|| panic!("no {step} line: {text}"));
+        assert!(line.starts_with(&format!("ok {step}")), "{line}");
+    }
+}
+
+/// The release environment admits the trunk and exactly the branches the
+/// release branch protection covers, from one list of prefixes, and the
+/// release tags.
+#[test]
+fn the_environment_policy_follows_the_release_branch_prefixes() {
+    use release_kit::setup::context::Ctx;
+    let ctx = Ctx::for_tests(
+        ".".into(),
+        "acme/widget".into(),
+        release_kit::detect::Forge::Github,
+        "fake-forge".into(),
+        Some("rust"),
+    );
+    let patterns = ctx.environment_branch_patterns();
+    assert_eq!(patterns[0], "master");
+    for protected in ctx.release_branch_patterns() {
+        // The prefix is what precedes the first wildcard, in the flat and
+        // the nested form alike.
+        let prefix = protected
+            .strip_prefix("refs/heads/")
+            .and_then(|rest| rest.split_once('*'))
+            .map(|(prefix, _)| prefix)
+            .expect("a branch prefix pattern");
+        assert!(
+            patterns.iter().any(|pattern| pattern.starts_with(prefix)),
+            "{prefix}: {patterns:?}"
+        );
+    }
+    assert_eq!(patterns.len(), 5, "{patterns:?}");
+    assert_eq!(ctx.environment_tag_patterns(), ["v*"]);
+}
+
+/// SATISFIES release-ref-rules:protections-check-judges-the-gitlab-protections
+/// Each missing or wider protection fails both the script and the Rust
+/// aggregate, each with its remedy.
+#[test]
+fn gitlab_protections_check_fails_on_each_missing_or_wider_protection() {
+    let protected_branch = |name: &str, push: u8| {
+        format!(
+            r#"{{"name":"{name}","push_access_levels":[{{"access_level":{push}}}],"merge_access_levels":[{{"access_level":40}}],"allow_force_push":false}}"#
+        )
+    };
+    let wide_tag =
+        r#"{"name":"v*","create_access_levels":[{"access_level":40},{"access_level":30}]}"#;
+    let cases: [(&str, &str, &str, &str, &str); 7] = [
+        (
+            "tag_missing",
+            "",
+            "v* is not protected",
+            "protect-tags",
+            "rk setup step protect-tags --apply",
+        ),
+        (
+            "pt_v%2A",
+            wide_tag,
+            "v* create grants",
+            "protect-tags",
+            "rk setup step protect-tags --apply",
+        ),
+        (
+            "pb_release%2F%2A",
+            "",
+            "release/* is not protected",
+            "protect-release-branches",
+            "rk setup step protect-release-branches --apply",
+        ),
+        (
+            "pb_release-plz-%2A",
+            "",
+            "release-plz-* is not protected",
+            "protect-release-branches",
+            "rk setup step protect-release-branches --apply",
+        ),
+        (
+            "pb_rk-release%2F%2A",
+            "wide",
+            "rk-release/*",
+            "protect-release-branches",
+            "rk setup step protect-release-branches --apply",
+        ),
+        (
+            "mr_pipelines",
+            "true",
+            "merge request pipelines",
+            "ci-permissions",
+            "rk setup step ci-permissions --apply",
+        ),
+        (
+            "var_RELEASE_BOT_TOKEN",
+            "unprotected",
+            "RELEASE_BOT_TOKEN is not protected",
+            "bot-secrets",
+            "rk setup --apply",
+        ),
+    ];
+    for (state, value, fault, step, remedy) in cases {
+        let fixture = ForgeFixture::new();
+        land_merge_form(&fixture, "gitlab", "forge", "rebase");
+        for owned in ["protect-trunk", "protect-tags", "protect-release-branches"] {
+            gitlab_step(&fixture, owned).success();
+        }
+        let line = merge_form_check_line(&fixture, "gitlab", "protections-check");
+        assert!(line.starts_with("ok protections-check"), "{state}: {line}");
+        match (state, value) {
+            ("tag_missing", _) => {
+                std::fs::remove_file(fixture.state("pt_v%2A")).expect("the tag was protected");
+                let _ = std::fs::remove_file(fixture.state("tag_protected"));
+            }
+            (_, "") => {
+                std::fs::remove_file(fixture.state(state)).expect("the branch was protected");
+            }
+            (_, "wide") => fixture.seed(state, &protected_branch("rk-release/*", 30)),
+            _ => fixture.seed(state, value),
+        }
+        let out = gitlab_step(&fixture, "protections-check")
+            .failure()
+            .get_output()
+            .clone();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            said.contains(fault) && said.contains(remedy),
+            "{state}: {said}"
+        );
+        let line = merge_form_check_line(&fixture, "gitlab", "protections-check");
+        assert!(
+            line.starts_with("unsatisfied protections-check")
+                && line.contains(&format!("{step}:"))
+                && line.contains(fault),
+            "{state}: {line}"
+        );
+    }
+}
+
+/// The GitHub observer of the release branch ruleset judges its rules, its
+/// include, and its bypass, with the hold lifted for the observer alone.
+#[test]
+fn the_release_branch_observer_judges_rules_include_and_bypass() {
+    use release_kit::setup::{
+        context::Ctx,
+        observe::{StepState, observe},
+        process::Outcome,
+    };
+    let ctx = Ctx::for_tests(
+        ".".into(),
+        "acme/widget".into(),
+        release_kit::detect::Forge::Github,
+        "fake-forge".into(),
+        Some("rust"),
+    );
+    let admin =
+        serde_json::json!({"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"});
+    let sound = serde_json::json!({
+        "name": "release-branches",
+        "target": "branch",
+        "enforcement": "active",
+        "bypass_actors": [admin],
+        "conditions": {"ref_name": {
+            "include": RELEASE_BRANCH_PATTERNS,
+            "exclude": [],
+        }},
+        "rules": [{"type": "creation"}, {"type": "update"}],
+    });
+    let judge = |detail: Option<&serde_json::Value>| {
+        let list = if detail.is_some() {
+            r#"[{"id":7,"name":"release-branches"}]"#
+        } else {
+            "[]"
+        };
+        let mut answers = std::iter::once(list.to_owned()).chain(detail.map(ToString::to_string));
+        observe(&ctx, "protect-release-branches", &mut |_exec| {
+            Ok(Outcome {
+                exit_code: 0,
+                stdout: answers.next().expect("no unexpected read").into_bytes(),
+                stderr: Vec::new(),
+            })
+        })
+        .expect("the observation runs")
+    };
+    assert!(
+        matches!(judge(Some(&sound)), StepState::Satisfied { .. }),
+        "{:?}",
+        judge(Some(&sound))
+    );
+    let unsatisfied = |detail: Option<&serde_json::Value>, needle: &str| match judge(detail) {
+        StepState::Unsatisfied { detail } => assert!(detail.contains(needle), "{detail}"),
+        other => panic!("{needle}: {other:?}"),
+    };
+    unsatisfied(None, "no ruleset named release-branches");
+    let mut narrow = sound.clone();
+    narrow["conditions"]["ref_name"]["include"] = serde_json::json!(RELEASE_BRANCH_PATTERNS[..3]);
+    unsatisfied(Some(&narrow), "does not cover refs/heads/rk-release/**/*");
+    let mut rules = sound.clone();
+    rules["rules"] = serde_json::json!([{"type": "creation"}]);
+    unsatisfied(Some(&rules), "carries the rules [creation]");
+    let mut wider = sound;
+    wider["bypass_actors"] = serde_json::json!([
+        admin,
+        {"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"},
+    ]);
+    unsatisfied(Some(&wider), "other bypass actors");
+}
+
+/// The before-state of the release branch protection is the ruleset
+/// inventory on GitHub and the protected branch of each pattern on GitLab.
+#[test]
+fn the_release_branch_snapshot_reads_the_rulesets_and_the_protected_branch() {
+    use release_kit::setup::{before_state, context::Ctx};
+    assert!(before_state::destructive("protect-release-branches"));
+    let at = |forge| {
+        before_state::reads(
+            &Ctx::for_tests(
+                ".".into(),
+                "acme/widget".into(),
+                forge,
+                "fake-forge".into(),
+                Some("rust"),
+            ),
+            "protect-release-branches",
+        )
+    };
+    assert_eq!(
+        at(release_kit::detect::Forge::Github),
+        ["repos/acme/widget/rulesets"]
+    );
+    assert_eq!(
+        at(release_kit::detect::Forge::Gitlab),
+        [
+            "projects/acme%2Fwidget/protected_branches/release%2F%2A",
+            "projects/acme%2Fwidget/protected_branches/release-plz-%2A",
+            "projects/acme%2Fwidget/protected_branches/rk-release%2F%2A",
+        ]
+    );
+}
+
+/// A sent ruleset body that the GitHub mock holds, as JSON.
+fn sent_ruleset(fixture: &ForgeFixture, name: &str) -> serde_json::Value {
+    let text = std::fs::read_to_string(fixture.state(&format!("ruleset_{name}")))
+        .unwrap_or_else(|_| panic!("{name} was sent: {}", fixture.log()));
+    serde_json::from_str(&text).expect("the sent ruleset parses")
+}
+
+/// The rule types of a sent ruleset body, sorted.
+fn rule_types(body: &serde_json::Value) -> Vec<String> {
+    let mut kinds: Vec<String> = body["rules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|rule| rule["type"].as_str().map(str::to_owned))
+        .collect();
+    kinds.sort();
+    kinds
+}
+
+/// The administrator role as the one release bypass actor, where no
+/// release App ID resolves.
+fn admin_bypass() -> serde_json::Value {
+    serde_json::json!([{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}])
+}
+
+/// A GitHub target with every protection that the setup owns, so that a
+/// case breaks one of them.
+fn owned_github_protections() -> ForgeFixture {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nmaster-updates\nrelease-tags\n",
+    );
+    fixture.seed(
+        "ruleset_release-tags",
+        &serde_json::json!({
+            "name": "release-tags",
+            "target": "tag",
+            "enforcement": "active",
+            "bypass_actors": [],
+            "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+            "rules": [{"type": "deletion"}, {"type": "update"}],
+        })
+        .to_string(),
+    );
+    let index = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
+    fixture.seed(
+        "rulesets.index",
+        &format!("{index}release-tag-creation\nrelease-branches\n"),
+    );
+    fixture.seed(
+        "ruleset_release-tag-creation",
+        &owned_release_ruleset(
+            "release-tag-creation",
+            "tag",
+            &["refs/tags/v*"],
+            &["creation"],
+        ),
+    );
+    fixture.seed(
+        "ruleset_release-branches",
+        &owned_release_ruleset(
+            "release-branches",
+            "branch",
+            &RELEASE_BRANCH_PATTERNS,
+            &["creation", "update"],
+        ),
+    );
+    fixture
+}
+
+/// Drop one ruleset from the GitHub mock's inventory.
+fn drop_ruleset(fixture: &ForgeFixture, name: &str) {
+    let index = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
+    let mut kept: Vec<&str> = index.lines().filter(|line| *line != name).collect();
+    kept.push("");
+    fixture.seed("rulesets.index", &kept.join("\n"));
+}
+
+/// The protections-check line of `rk setup check`, and the stderr of the
+/// executable protections-check.
+fn protections_check_reports(fixture: &ForgeFixture) -> (String, String) {
+    let line = merge_form_check_line(fixture, "github", "protections-check");
+    let out = fixture
+        .rk(&["setup", "step", "protections-check", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .get_output()
+        .clone();
+    (line, String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// protect-trunk installs the updates ruleset after the safety ruleset and
+/// before the trunk ruleset: the update rule alone, over the trunk alone,
+/// passed by the release bypass actors.
+///
+/// SATISFIES release-ref-rules:only-the-release-actors-update-the-trunk
+#[test]
+fn protect_trunk_installs_the_updates_ruleset_after_the_safety_ruleset() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_gate();
+    fixture.seed("default_branch", "master");
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .args(["--required-check", "build (matrix, 1)"])
+        .assert()
+        .success();
+    let index = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
+    assert_eq!(
+        index.lines().collect::<Vec<_>>(),
+        ["master-safety", "master-updates", "master-protection"],
+        "{}",
+        fixture.log()
+    );
+    let updates = sent_ruleset(&fixture, "master-updates");
+    assert_eq!(rule_types(&updates), ["update"], "{updates}");
+    assert_eq!(
+        updates["conditions"]["ref_name"]["include"],
+        serde_json::json!(["refs/heads/master"]),
+        "{updates}"
+    );
+    assert_eq!(updates["bypass_actors"], admin_bypass(), "{updates}");
+    // The trunk ruleset keeps its own bypass: none under forge integration.
+    let trunk = sent_ruleset(&fixture, "master-protection");
+    assert_eq!(trunk["bypass_actors"], serde_json::json!([]), "{trunk}");
+}
+
+/// protect-tags installs a creation ruleset beside the immutable one, and
+/// the immutable one still names no bypass actor.
+///
+/// SATISFIES release-ref-rules:only-the-release-actors-create-a-release-tag
+#[test]
+fn protect_tags_installs_a_creation_ruleset_beside_the_immutable_one() {
+    let fixture = ForgeFixture::new();
+    github_step(&fixture, "protect-tags").success();
+    let index = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
+    assert_eq!(
+        index.lines().collect::<Vec<_>>(),
+        ["release-tags", "release-tag-creation"]
+    );
+    let immutable = sent_ruleset(&fixture, "release-tags");
+    assert_eq!(rule_types(&immutable), ["deletion", "update"]);
+    assert_eq!(
+        immutable["bypass_actors"],
+        serde_json::json!([]),
+        "{immutable}"
+    );
+    let creation = sent_ruleset(&fixture, "release-tag-creation");
+    assert_eq!(creation["target"], "tag", "{creation}");
+    assert_eq!(rule_types(&creation), ["creation"]);
+    assert_eq!(creation["bypass_actors"], admin_bypass(), "{creation}");
+    assert_eq!(
+        creation["conditions"]["ref_name"]["include"],
+        serde_json::json!(["refs/tags/v*"]),
+        "{creation}"
+    );
+}
+
+/// The release branch ruleset restricts the creation and the update of
+/// the release lines under the line prefix.
+///
+/// SATISFIES release-ref-rules:only-the-release-actors-write-a-release-branch
+#[test]
+fn protect_release_branches_restricts_creation_and_update_of_the_line_prefix() {
+    let fixture = ForgeFixture::new();
+    github_step(&fixture, "protect-release-branches").success();
+    let body = sent_ruleset(&fixture, "release-branches");
+    assert_eq!(body["target"], "branch", "{body}");
+    assert_eq!(rule_types(&body), ["creation", "update"]);
+    assert_eq!(body["bypass_actors"], admin_bypass(), "{body}");
+    let include = body["conditions"]["ref_name"]["include"].to_string();
+    assert!(include.contains("\"refs/heads/release/**/*\""), "{include}");
+}
+
+/// The release branch ruleset covers the head branches of both release
+/// requests, whatever the driver.
+///
+/// SATISFIES release-ref-rules:only-the-release-actors-write-a-release-branch
+#[test]
+fn protect_release_branches_covers_both_release_request_prefixes() {
+    let fixture = ForgeFixture::new();
+    github_step(&fixture, "protect-release-branches").success();
+    let body = sent_ruleset(&fixture, "release-branches");
+    assert_eq!(
+        body["conditions"]["ref_name"]["include"],
+        serde_json::json!(RELEASE_BRANCH_PATTERNS),
+        "{body}"
+    );
+}
+
+/// A full set of owned protections passes both the Rust aggregate and the
+/// executable protections-check.
+#[test]
+fn protections_check_passes_on_the_owned_release_rulesets() {
+    let fixture = owned_github_protections();
+    let (line, stderr) = protections_check_reports(&fixture);
+    assert!(line.starts_with("ok protections-check"), "{line}");
+    assert!(!stderr.contains("FAIL"), "{stderr}");
+}
+
+/// A release branch ruleset without a request prefix fails, and both the
+/// script and the Rust aggregate name the missing pattern.
+///
+/// SATISFIES release-ref-rules:protections-check-judges-the-release-rulesets
+#[test]
+fn protections_check_fails_on_a_release_branch_ruleset_without_a_request_prefix() {
+    let fixture = owned_github_protections();
+    fixture.seed(
+        "ruleset_release-branches",
+        &owned_release_ruleset(
+            "release-branches",
+            "branch",
+            &RELEASE_BRANCH_PATTERNS[..3],
+            &["creation", "update"],
+        ),
+    );
+    let (line, stderr) = protections_check_reports(&fixture);
+    assert!(line.starts_with("unsatisfied protections-check"), "{line}");
+    assert!(line.contains("refs/heads/rk-release/**/*"), "{line}");
+    assert!(
+        stderr.contains("release-branches misses no pattern")
+            && stderr.contains("refs/heads/rk-release/**/*"),
+        "{stderr}"
+    );
+}
+
+/// Each missing new ruleset fails, with its own step as the remedy.
+///
+/// SATISFIES release-ref-rules:protections-check-judges-the-release-rulesets
+#[test]
+fn protections_check_fails_on_each_missing_new_ruleset() {
+    for (name, step) in [
+        ("master-updates", "protect-trunk"),
+        ("release-tag-creation", "protect-tags"),
+        ("release-branches", "protect-release-branches"),
+    ] {
+        let fixture = owned_github_protections();
+        drop_ruleset(&fixture, name);
+        let (line, stderr) = protections_check_reports(&fixture);
+        assert!(
+            line.starts_with("unsatisfied protections-check"),
+            "{name}: {line}"
+        );
+        assert!(
+            line.contains(&format!("no ruleset named {name}")),
+            "{name}: {line}"
+        );
+        assert!(
+            stderr.contains(&format!("FAIL missing ruleset: {name}"))
+                && stderr.contains(&format!("remediation: rk setup step {step} --apply")),
+            "{name}: {stderr}"
+        );
+    }
+}
+
+/// An extra bypass actor on any of the three release rulesets fails both
+/// checks.
+///
+/// SATISFIES release-ref-rules:protections-check-judges-the-release-rulesets
+/// SATISFIES bot-identity:the-bot-identity-serves-the-release-alone
+#[test]
+fn protections_check_fails_on_a_wider_bypass() {
+    for (name, target, include, rules) in [
+        (
+            "master-updates",
+            "branch",
+            vec!["refs/heads/master"],
+            vec!["update"],
+        ),
+        (
+            "release-tag-creation",
+            "tag",
+            vec!["refs/tags/v*"],
+            vec!["creation"],
+        ),
+        (
+            "release-branches",
+            "branch",
+            RELEASE_BRANCH_PATTERNS.to_vec(),
+            vec!["creation", "update"],
+        ),
+    ] {
+        let fixture = owned_github_protections();
+        let mut body: serde_json::Value =
+            serde_json::from_str(&owned_release_ruleset(name, target, &include, &rules))
+                .expect("parses");
+        body["bypass_actors"]
+            .as_array_mut()
+            .expect("an array")
+            .push(serde_json::json!({"actor_id": 271_828, "actor_type": "Integration", "bypass_mode": "always"}));
+        fixture.seed(&format!("ruleset_{name}"), &body.to_string());
+        let (line, stderr) = protections_check_reports(&fixture);
+        assert!(
+            line.contains(&format!("{name} names other bypass actors")),
+            "{name}: {line}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "FAIL {name} names exactly the release bypass actors"
+            )),
+            "{name}: {stderr}"
+        );
+    }
+}
+
+/// An updates ruleset that carries another rule beside `update` fails.
+///
+/// SATISFIES release-ref-rules:protections-check-judges-the-release-rulesets
+#[test]
+fn protections_check_fails_on_an_update_ruleset_with_another_rule() {
+    let fixture = owned_github_protections();
+    fixture.seed(
+        "ruleset_master-updates",
+        &owned_release_ruleset(
+            "master-updates",
+            "branch",
+            &["refs/heads/master"],
+            &["update", "deletion"],
+        ),
+    );
+    let (line, stderr) = protections_check_reports(&fixture);
+    assert!(
+        line.contains(
+            "master-updates carries the rules [deletion, update] where the setup owns [update]"
+        ),
+        "{line}"
+    );
+    assert!(
+        stderr.contains("FAIL master-updates carries exactly [\"update\"]"),
+        "{stderr}"
+    );
+}
+
+/// `rk setup check` judges the new rulesets through the Rust aggregate: a
+/// missing or a wider ruleset fails it, and no setup script runs.
+///
+/// SATISFIES release-ref-rules:protections-check-judges-the-release-rulesets
+#[test]
+fn setup_check_judges_the_new_rulesets_through_the_rust_aggregate() {
+    for name in ["master-updates", "release-tag-creation", "release-branches"] {
+        let missing = owned_github_protections();
+        drop_ruleset(&missing, name);
+        let line = merge_form_check_line(&missing, "github", "protections-check");
+        assert!(
+            line.contains(&format!("no ruleset named {name}")),
+            "{name}: {line}"
+        );
+        assert!(forge_writes(&missing).is_empty(), "{}", missing.log());
+        // Only a setup script filters an answer with -q.
+        assert!(
+            !missing.log().contains(" -q "),
+            "the check reads through the Rust aggregate, and no script runs: {}",
+            missing.log()
+        );
+    }
+    let wider = owned_github_protections();
+    let mut body = sent_ruleset(&wider, "release-tag-creation");
+    body["bypass_actors"]
+        .as_array_mut()
+        .expect("an array")
+        .push(serde_json::json!({"actor_id": 271_828, "actor_type": "Integration", "bypass_mode": "always"}));
+    wider.seed("ruleset_release-tag-creation", &body.to_string());
+    let line = merge_form_check_line(&wider, "github", "protections-check");
+    assert!(
+        line.contains("release-tag-creation names other bypass actors"),
+        "{line}"
+    );
+    assert!(forge_writes(&wider).is_empty(), "{}", wider.log());
 }
