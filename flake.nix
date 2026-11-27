@@ -19,7 +19,7 @@
     # a spec-driven-docs input of its own, its previous release; the empty
     # string points it at this flake, so flake.lock holds one sdd node.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.20.0";
+      url = "github:gubasso/spec-driven-docs/v0.20.1";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.spec-driven-docs.follows = "";
       # Its rk serves only its own devShell, so it follows this flake's
