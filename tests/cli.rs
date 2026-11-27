@@ -19505,6 +19505,24 @@ fn a_message_naming_an_ignored_path_fails_the_check() {
         ));
 }
 
+/// A path outside the repository is no reference to an ignored file,
+/// even where an ignore rule such as `*~` matches its spelling: a home
+/// path, a `$HOME/` path, and an absolute path give no finding.
+#[test]
+fn a_message_naming_a_path_outside_the_repository_passes_the_check() {
+    let dir = message_fixture();
+    std::fs::write(dir.path().join(".gitignore"), ".draft/\n*~\n").expect("the ignore writes");
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin(
+            "feat(api): add\n\nThe file ~/.config/x/<repo>.env, one file that every\n\
+             worktree shares, also reads as $HOME/.config/x/<repo>.env\n\
+             or /etc/x/<repo>.env.\n",
+        )
+        .assert()
+        .success();
+}
+
 /// The release bot's request is exempt from the attribution class by its
 /// title — the real release-plz body shape passes — while the
 /// ignored-path class still runs.

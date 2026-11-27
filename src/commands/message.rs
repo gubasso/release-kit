@@ -530,12 +530,20 @@ fn fixed_draft_hits(text: &str) -> Vec<(usize, String)> {
 /// and quotes trimmed from both edges, sentence punctuation only from the
 /// end — a leading dot is part of a hidden path — URLs, flags, and
 /// variables skipped, and only a token of two or more segments kept,
-/// because a bare word is prose, not a reference.
+/// because a bare word is prose, not a reference. A path outside the
+/// repository is skipped too: an absolute one, a `$HOME/` one, and a
+/// `~/` or `~user/` one. Git reads every candidate as relative to the
+/// target, so `~` would be a folder name there, and an ignore rule such
+/// as `*~` would match a home path.
 fn path_token(token: &str) -> Option<String> {
     let token = token
         .trim_start_matches(|c: char| "()[]<>`'\"".contains(c))
         .trim_end_matches(|c: char| "()[]<>`'\".,;:".contains(c));
-    if token.contains("://") || token.starts_with('-') || token.contains('$') {
+    if token.contains("://")
+        || token.starts_with('-')
+        || token.starts_with('~')
+        || token.contains('$')
+    {
         return None;
     }
     let (head, tail) = token.split_once('/')?;
@@ -779,6 +787,9 @@ mod tests {
         assert_eq!(path_token("https://a.b/c"), None);
         assert_eq!(path_token("--flag/value"), None);
         assert_eq!(path_token("$HOME/x"), None);
+        assert_eq!(path_token("~/.config/x/<repo>.env"), None);
+        assert_eq!(path_token("`~user/notes/a.md`"), None);
+        assert_eq!(path_token("/etc/x/a.conf"), None);
         assert_eq!(path_token("and/or"), Some("and/or".into()));
         assert_eq!(path_token("word"), None);
         assert_eq!(path_token("trailing/"), None);
